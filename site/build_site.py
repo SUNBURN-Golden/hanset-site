@@ -289,7 +289,7 @@ def build(site, venues, events, today):
                       f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>KINTEX</span><span>·</span><span>가이드 ›</span></a>'
                       f'</div>')
     body = f'''
-<section class="hero home-hero"><h1>운동하고 사우나할 곳, 공식 정보로 골라 가요.</h1>
+<section class="hero home-hero"><h1>운동할 곳, 사우나 할 곳, 공식정보로 확인하세요.</h1>
 <div class="region"><span class="region-label">지역으로 고르기</span><div class="region-choices">{region_links}</div></div>
 <div class="interest"><div class="chips">{interest_links}</div></div></section>
 
