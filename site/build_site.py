@@ -286,7 +286,7 @@ def build(site, venues, events, today):
                       f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>KINTEX</span><span>·</span><span>가이드 ›</span></a>'
                       f'</div>')
     body = f'''
-<section class="hero home-hero"><h1>운동할 곳, 사우나 할 곳, 공식정보로 확인한다.</h1>
+<section class="hero home-hero"><h1>운동할 곳, 사우나 할 곳, 공식정보로 확인하세요.</h1>
 <a class="btn btn-a region-pick" href="/finder/">지역 선택</a></section>
 
 <section class="sec home-results"><div class="sec-h"><h2>확인한 곳</h2><a href="/finder/">{len(venues)}곳 모두 보기 →</a></div>
