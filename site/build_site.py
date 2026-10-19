@@ -287,26 +287,26 @@ def build(site, venues, events, today):
                       f'</div>')
     body = f'''
 <section class="hero home-hero"><h1>운동할 곳, 사우나 할 곳, 공식정보로 확인하세요.</h1>
-<a class="btn btn-a region-pick" href="/finder/">지역 선택</a></section>
+<a class="btn btn-a region-pick" href="/finder/">지역부터 고르세요</a></section>
 
-<section class="sec home-results"><div class="sec-h"><h2>확인한 곳</h2><a href="/finder/">{len(venues)}곳 모두 보기 →</a></div>
+<section class="sec home-results"><div class="sec-h"><h2>확인한 곳만, 골라 담았어요.</h2><a href="/finder/">{len(venues)}곳 모두 보기 →</a></div>
 <div class="grid home-grid">{"".join(home_card(v) for v in preview)}</div>
-<p class="muted trust">공식 페이지 확인일·출처 표시</p></section>
+<p class="muted trust">출처도, 확인일도. 전부 적어 뒀어요.</p></section>
 
 {race_strip}
 <p class="safety-line">{SAFETY}</p>
 
-<section class="sec home-mag"><div class="sec-h"><h2>매거진</h2><a href="/magazine/">전체 보기</a></div>
+<section class="sec home-mag"><div class="sec-h"><h2>읽고 가세요. 근거는 다 있어요.</h2><a href="/magazine/">매거진 전체 ›</a></div>
 <div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title"])}</a></h3><div class="meta">에디터 천한샘 · {dot(dt.date.fromisoformat(a["date"]))}</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>
 
-<section class="sec"><div class="sec-h"><h2>그림으로 보기</h2><a href="/guide/#pictures">크게 보기</a></div>
-<p class="muted">크로스핏 박스·부티크 사우나 · 호텔 사우나, 처음 가는 분을 위한 손그림 안내예요. 일반적인 예시이고 실제 업장과 다를 수 있어요.</p>
+<section class="sec"><div class="sec-h"><h2>처음이어도 괜찮아요.</h2><a href="/guide/#pictures">크게 보기</a></div>
+<p class="muted">크로스핏 박스·부티크 사우나 · 호텔 사우나, 그림 한 장으로 먼저 보세요. 일반적인 예시이고 실제 업장과 다를 수 있어요.</p>
 <div class="illrow">{"".join(f'<a class="illc" href="/guide/#{k}"><picture><source media="(min-width:720px)" srcset="/assets/img/guide/{f}.svg"><img src="/assets/img/guide/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(t)}</b><em>그림 보기 ›</em></span></a>' for k, f, t, d in ILLUSTRATIONS)}</div></section>
 
-<section class="sec"><div class="sec-h"><h2>조감도 아카이브</h2><a href="/archive/">전체 보기</a></div>
-<p class="muted">업장 공식 안내에 글자로 공개된 층·구역 구성을 읽고, 위에서 비스듬히 내려다본 조감도 스타일로 새로 그린 손그림이에요. 구역 배치는 개념도예요. 실제와 다를 수 있어요.</p>
+<section class="sec"><div class="sec-h"><h2>위에서 보면, 더 잘 보여요.</h2><a href="/archive/">아카이브 ›</a></div>
+<p class="muted">공식 안내의 층과 구역, 손으로 다시 그렸어요. 구역 배치는 개념도예요. 실제와 다를 수 있어요.</p>
 <div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>그림 보기 ›</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
-<p><a class="btn btn-d" href="/archive/">조감도 아카이브 전체 보기 ›</a></p></section>'''
+<p><a class="btn btn-d" href="/archive/">조감도 전부 보기 ›</a></p></section>'''
     site.add("/", f"{BRAND_KO} {BRAND_EN} — 크로스핏·HYROX·사우나 웰니스 매거진", "크로스핏·HYROX·호텔/부티크 사우나. 공식 출처와 확인일을 붙인 드롭인·사우나 파인더와 레이스 일정.", body, "home", ("dday.js",))
 
     # ---- finder
@@ -315,7 +315,7 @@ def build(site, venues, events, today):
     seg = lambda g, items: '<div class="seg" data-seg="%s">' % g + "".join(f'<button type="button" data-v="{k}" aria-pressed="false">{E(t)}</button>' for k, t in items) + "</div>"
     fbody = f'''
 <div class="finder-head"><h1>{FINDER_LABEL}</h1>
-<p class="lead">드롭인으로 갈 수 있는 크로스핏·HYROX 박스와 호텔·부티크 사우나, 대형 스파·온천. 지금 {len(venues)}곳(박스 {cnt_box} · 사우나 {cnt_sauna})을 확인했고, 계속 늘려 가요.</p>
+<p class="lead">드롭인 박스부터 호텔·부티크 사우나, 대형 스파·온천까지. 공식으로 확인한 {len(venues)}곳(박스 {cnt_box} · 사우나 {cnt_sauna}), 계속 늘려 갈게요.</p>
 <details class="howto"><summary>필터 쓰는 법</summary><ul>
 <li><strong>도시·유형</strong>: 가고 싶은 지역과 박스/사우나를 먼저 골라요. 사우나는 호텔 사우나·부티크 사우나·대형 스파·온천으로 한 번 더 나눠 뒀어요.</li>
 <li><strong>일요일</strong>: 공식 페이지에 적혀 있는 곳만 '운영/휴무 확인'으로 보여요. 적혀 있지 않으면 '확인 중'이에요.</li>
@@ -332,11 +332,11 @@ def build(site, venues, events, today):
  <div class="fgroup"><span>일요일</span><select id="f-sunday"><option value="">전체</option><option value="yes">운영 확인된 곳</option><option value="no">휴무 확인된 곳</option><option value="unk">확인 중</option></select></div>
  <div class="fgroup"><span>요금</span><label class="chk"><input id="f-price" type="checkbox"> 요금 확인된 곳만</label></div>
  <div class="fgroup"><span>공식 목록</span><label class="chk"><input id="f-hyrox" type="checkbox"> 하이록스 지점(공식 목록 확인)</label> <label class="chk"><input id="f-cf" type="checkbox"> 크로스핏 어필리에이트(공식 확인)</label></div>
- <div class="fgroup"><span>&nbsp;</span><button id="f-reset" data-reset type="button" class="btn btn-d">필터 초기화</button></div>
+ <div class="fgroup"><span>&nbsp;</span><button id="f-reset" data-reset type="button" class="btn btn-d">처음부터 다시</button></div>
 </form>
 <p class="count" id="f-count" aria-live="polite">총 {len(venues)}곳</p>
 <div class="grid" id="finder-list">{"".join(venue_card(v) for v in ordered)}</div>
-<div class="empty" id="f-empty" hidden><p>조건에 맞는 곳이 아직 확인되지 않았어요.</p><p class="muted">필터를 줄이거나 아래 버튼으로 처음부터 다시 골라 보세요. 확인한 곳은 계속 추가돼요.</p><button type="button" class="btn btn-d" data-reset>필터 초기화</button></div>
+<div class="empty" id="f-empty" hidden><p>아직, 꼭 맞는 곳이 없어요.</p><p class="muted">필터를 하나 덜어 보세요. 확인한 곳은 계속 늘어나요.</p><button type="button" class="btn btn-d" data-reset>처음부터 다시</button></div>
 <div class="note">'확인됨'은 업장 공식 페이지에서 해당 정보를 직접 읽었다는 뜻이고, '일부 확인'은 주소 같은 일부만 확인했다는 뜻이에요. 일요일 칸은 공식 페이지에 적혀 있을 때만 채워요. '공식 어필리에이트 확인'과 '하이록스 공식 지점 목록 확인'은 해당 공식 페이지·목록에서 확인일에 직접 본 곳에만 붙여요. 표시가 없는 곳은 아직 확인 중이라는 뜻이에요.</div>
 <noscript><p class="muted">필터는 자바스크립트가 켜져 있어야 작동해요. 목록은 그대로 볼 수 있어요.</p></noscript>'''
     site.add("/finder/", f"{FINDER_LABEL} — 드롭인·사우나 파인더", "도시·유형·일요일 운영·요금 확인 여부로 고르는 크로스핏·HYROX 박스와 호텔·부티크 사우나. 모든 항목에 확인일과 출처를 달았어요.", fbody, "finder", ("finder.js",))
@@ -358,11 +358,11 @@ def build(site, venues, events, today):
             return "".join(out)
         links = []
         if v["website"] and "map.naver.com" not in v["website"]:
-            links.append(f'<a class="btn btn-d" href="{E(v["website"])}" rel="{"sponsored " if v["ad"] else ""}noopener noreferrer">공식 사이트</a>')
+            links.append(f'<a class="btn btn-d" href="{E(v["website"])}" rel="{"sponsored " if v["ad"] else ""}noopener noreferrer">공식 사이트 가기</a>')
         if v["booking"] and v["booking"] != v["website"]:
-            links.append(f'<a class="btn btn-d" href="{E(v["booking"])}" rel="noopener noreferrer">예약 페이지</a>')
+            links.append(f'<a class="btn btn-d" href="{E(v["booking"])}" rel="noopener noreferrer">예약하러 가기</a>')
         q = quote(v["title"] + (" " + v["address"] if v["address"] else ""))
-        links.append(f'<a class="btn btn-d" href="https://map.naver.com/p/search/{q}" rel="noopener noreferrer">지도에서 검색</a>')
+        links.append(f'<a class="btn btn-d" href="https://map.naver.com/p/search/{q}" rel="noopener noreferrer">지도에서 찾기</a>')
         srcs = [f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a>'] + [f'<a href="{E(u)}" rel="noopener noreferrer">{E(l)}</a>' for l, u in v["extra_sources"]]
         adnote = (f'<div class="note ad"><strong>광고</strong> · 이 항목에는 광고 표시가 붙어 있어요. 확인 정보는 공식 출처 기준이에요. '
                   f'{E(v["ad_note"])}</div>' if v["ad"] else "")
@@ -403,7 +403,7 @@ def build(site, venues, events, today):
     cards = "".join(event_card(e, today) for e in upcoming)
     if not upcoming: cards = '<div class="empty"><p>지금은 공식 페이지에서 일정을 확인한 대회가 없어요.</p><p class="muted">확인되는 대로 추가해요.</p></div>'
     ebody = f'''<div class="page"><h1>이벤트 캘린더</h1>
-<p class="lead">주최측 공식 페이지에서 일정을 확인한 대회만 실어요.</p></div>
+<p class="lead">공식 일정만 실어요. 주최측 페이지에서 확인했어요.</p></div>
 <div class="ev">{cards}</div>
 <div class="note">집계 사이트에만 올라온 일정은 주최측 확인 전까지 싣지 않아요. 참가비는 공식 페이지에서 확인한 값만 적어요. <a href="/events.ics">전체 일정 .ics 받기</a></div>'''
     site.add("/events/", "이벤트 캘린더", "HYROX 서울, 어반웨이브, 크로스핏 오픈 등 공식 페이지에서 확인한 대회 일정.", ebody, "events", ("dday.js",))
@@ -413,8 +413,8 @@ def build(site, venues, events, today):
     hv = "".join(mini_card(v) for v in hyrox_v)
     hbody = f'''<section class="hero"><span class="eyebrow">RACE WEEK GUIDE</span><h1>{E(feat["title"])}</h1>
 <div class="dday" data-dday="{feat["start"].isoformat()}"><b>D-{max((feat["start"] - today).days, 0)}</b>{span(feat["start"], feat["end"], today.year)} · KINTEX</div>
-<p>처음 나가는 분을 위해 레이스 구성을 한눈에 정리했어요. 일정은 공식 페이지 기준이에요.</p>
-<div class="btnrow"><a class="btn btn-a" href="{E(feat["url"])}" rel="noopener noreferrer">공식 페이지 (접수·참가비)</a></div></section>
+<p>첫 레이스라면, 여기서 시작하세요. 일정은 공식 페이지 기준이에요.</p>
+<div class="btnrow"><a class="btn btn-a" href="{E(feat["url"])}" rel="noopener noreferrer">접수·참가비는 공식 페이지에서</a></div></section>
 <div class="page"><h2>한눈에 보기</h2>
 <table class="facts"><tbody>{"".join(f"<tr><th>{E(k)}</th><td>{E(val)}</td></tr>" for k, val in feat["facts"])}</tbody></table>
 <h2>레이스 구성</h2>
@@ -423,7 +423,7 @@ def build(site, venues, events, today):
 <h2>어떤 종목으로 나가나요</h2>
 <ul><li>Open / Pro (개인)</li><li>Doubles / Doubles Pro (2인)</li><li>Relay: 본인 포함 4명 팀, 각자 2×1km와 스테이션 1개</li></ul>
 <div class="note">종목·성별별 무게 표는 공식 페이지에 있어요. 시즌별로 기준이 바뀔 수 있으니 출전 전에 <a href="https://hyrox.com/the-fitness-race/" rel="noopener noreferrer">HYROX 공식 안내</a>를 다시 확인하세요. 접수 상태와 참가비는 공식 페이지 본문에서 확인하지 못해 싣지 않았어요.</div>
-<h2>미리 훈련해 볼 곳</h2><p>공식 페이지에서 HYROX 수업이나 드롭인을 확인한 곳이에요. 요금은 확인된 것만 적어요.</p></div>
+<h2>레이스 전에, 미리 뛰어 보세요.</h2><p>공식 페이지에서 HYROX 수업이나 드롭인을 확인한 곳이에요. 요금은 확인된 것만 적어요.</p></div>
 <div class="grid g3">{hv}</div>
 <div class="page"><p class="muted">고양·일산권 사우나와 박스는 공식 페이지에서 확인한 곳부터 <a href="/finder/?city=gyeonggi">Finder</a>에 추가해요.</p>
 <p class="muted">{SAFETY}</p><p class="muted">확인일 {dot(feat["last_verified"])} · 출처 <a href="{E(feat["url"])}" rel="noopener noreferrer">HYROX Korea</a> · <a href="https://hyrox.com/the-fitness-race/" rel="noopener noreferrer">HYROX 공식</a></p></div>'''
@@ -437,7 +437,7 @@ def build(site, venues, events, today):
     mcards = "".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title"])}</a></h3>'
                      f'<div class="loc">{E(a["데크"][:90])}…</div><div class="meta">에디터 천한샘 · {dot(dt.date.fromisoformat(a["date"]))}</div></article>' for a in arts)
     site.add("/magazine/", "매거진", "한셋 에디터가 공식 자료와 논문을 확인해 쉽게 풀어 쓴 웰니스 리포트.",
-             f'<div class="page"><h1>매거진</h1><p class="lead">논문과 공식 자료를 확인해 쉽게 풀어 쓴 웰니스 리포트예요. 모든 글에 출처를 달아 둬요.</p></div><div class="grid">{mcards}</div>', "magazine")
+             f'<div class="page"><h1>매거진</h1><p class="lead">논문과 공식 자료, 쉽게 풀었어요. 모든 글에 출처가 있어요.</p></div><div class="grid">{mcards}</div>', "magazine")
 
     # ---- archive (조감도 아카이브)
     items = "".join(
@@ -445,10 +445,10 @@ def build(site, venues, events, today):
         f'<picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture></a>'
         f'<div class="arcbody"><h2>{E(t)}</h2><p class="meta">구역 배치는 개념도 · 공식 안내를 바탕으로 한 손그림 · 실제와 다를 수 있어요</p>'
         f'<p class="meta">출처 <a href="{E(su)}" rel="noopener noreferrer">{E(sl)}</a> · 확인일 {ARCHIVE_DATE}</p>'
-        f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener">눌러서 크게 보기 ↗</a><a class="btn btn-d" href="/finder/{vs}/">업장 정보 보기</a></div></div></article>'
+        f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener">크게 보기 ↗</a><a class="btn btn-d" href="/finder/{vs}/">업장 정보 보기</a></div></div></article>'
         for f, vs, t, st, d, sl, su in ARCHIVE)
     abody = f'''<div class="page"><h1>조감도 아카이브</h1>
-<p class="lead">업장 공식 홈페이지·공식 안내에 글자로 공개된 층과 구역 구성을 읽고, 한셋이 위에서 비스듬히 내려다본 조감도 스타일(아이소메트릭)로 새로 그린 손그림이에요.</p>
+<p class="lead">공식 안내의 층과 구역을 읽고, 위에서 내려다본 손그림(아이소메트릭)으로 새로 그렸어요.</p>
 <ul><li>사진이나 공식 안내도 원본을 옮기거나 따라 그리지 않았어요. 공식 안내에 없는 구조는 그리지 않아요.</li>
 <li>구역 배치는 개념도예요. 층·구역의 이름과 순서만 공식 안내를 따랐고, 위치·크기는 실제와 다를 수 있어요.</li>
 <li>글씨가 작으면 그림을 눌러 새 탭에서 크게 보세요(두 손가락으로 확대할 수 있어요).</li></ul></div>
@@ -464,11 +464,11 @@ def build(site, venues, events, today):
                                        ("corrections", "정정 요청", "틀린 정보를 알려 주세요.", "about")]:
         frag = (ROOT / f"content/pages/{slug}.html").read_text(encoding="utf-8")
         if slug == "guide":
-            figs = "".join(f'<figure class="fig" id="{k}"><a class="figlink" href="/assets/img/guide/{f}.svg" target="_blank" rel="noopener" aria-label="{E(t)} 그림 크게 보기(새 탭)"><img src="/assets/img/guide/{f}.svg" width="1080" height="1350" loading="lazy" decoding="async" alt="{E(d)}"></a><figcaption><strong>{E(t)}</strong><br>일반 안내 그림이에요. 실제 업장과 다를 수 있어요. <a href="/assets/img/guide/{f}.svg" target="_blank" rel="noopener">눌러서 크게 보기 ↗</a></figcaption></figure>' for k, f, t, d in ILLUSTRATIONS)
+            figs = "".join(f'<figure class="fig" id="{k}"><a class="figlink" href="/assets/img/guide/{f}.svg" target="_blank" rel="noopener" aria-label="{E(t)} 그림 크게 보기(새 탭)"><img src="/assets/img/guide/{f}.svg" width="1080" height="1350" loading="lazy" decoding="async" alt="{E(d)}"></a><figcaption><strong>{E(t)}</strong><br>일반 안내 그림이에요. 실제 업장과 다를 수 있어요. <a href="/assets/img/guide/{f}.svg" target="_blank" rel="noopener">크게 보기 ↗</a></figcaption></figure>' for k, f, t, d in ILLUSTRATIONS)
             frag = frag.replace("<!--ILLUSTRATIONS-->", f'<h2 id="pictures">그림으로 보기</h2><p>처음 가는 분을 위한 손그림 안내예요. 일반적인 예시이고, 실제 업장의 구조·방식과 다를 수 있어요. 글씨가 작으면 그림을 눌러 새 탭에서 크게 보세요(두 손가락으로 확대할 수 있어요).</p><div class="figs">{figs}</div>')
         site.add(f"/{slug}/", title, desc, f'<div class="page">{frag}</div>', active)
 
-    site.add("/404.html", "페이지를 찾을 수 없어요", "페이지를 찾을 수 없어요.", f'<div class="page"><h1>페이지를 찾을 수 없어요</h1><p><a href="/">홈으로</a> 또는 <a href="/finder/">{FINDER_LABEL}</a>로 가 보세요.</p></div>')
+    site.add("/404.html", "길을 잃으셨네요", "찾는 페이지가 없어요.", f'<div class="page"><h1>길을 잃으셨네요.</h1><p>찾는 페이지가 없어요. <a href="/">홈</a>이나 <a href="/finder/">{FINDER_LABEL}</a>에서 다시 시작하세요.</p></div>')
 
 def asset_ver(rel):
     import hashlib
