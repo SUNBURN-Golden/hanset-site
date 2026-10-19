@@ -29,7 +29,7 @@
   function sortCards(){
     var arr=home.slice();
     if(st.sort==='date') arr.sort(function(a,b){return a.dataset.date<b.dataset.date?1:a.dataset.date>b.dataset.date?-1:home.indexOf(a)-home.indexOf(b)});
-    else if(st.sort==='name') arr.sort(function(a,b){return a.dataset.title.localeCompare(b.dataset.title,'ko')});
+    else if(st.sort==='name') arr.sort(function(a,b){return a.dataset.title.localeCompare(b.dataset.title,'en')});
     arr.forEach(function(c){list.appendChild(c)});
   }
   function apply(){
@@ -49,7 +49,7 @@
     });
     cityBtns.forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-v')===st.city))});
     typeBtns.forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-v')===st.type))});
-    cnt.textContent='총 '+n+'곳';
+    cnt.textContent=n+(n===1?' place':' places');
     empty.hidden=n!==0;
     var p=new URLSearchParams(); Object.keys(st).forEach(function(k){ if(st[k]) p.set(k,st[k]); });
     var s=p.toString(); history.replaceState(null,'',location.pathname+(s?'?'+s:''));
