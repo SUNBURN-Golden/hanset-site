@@ -336,7 +336,7 @@ def build(site, venues, events, today):
 <li><strong>공식 목록</strong>: 크로스핏·하이록스 공식 목록에서 확인일에 직접 본 곳만 남겨요. 표시가 없는 곳은 확인 중이에요.</li>
 <li><strong>정렬</strong>: 기본 순서, 최근 확인한 순, 이름순 중에서 골라요.</li>
 </ul><p class="muted">더 자세한 설명은 <a href="/guide/">이용 안내</a>와 <a href="/faq/">자주 묻는 질문</a>에 있어요.</p></details></div>
-<form class="filters" onsubmit="return false" aria-label="필터">
+<form class="filters" aria-label="필터">
  <div class="fgroup"><span>이름·지역 검색</span><input id="f-q" type="search" placeholder="예: 한남, 부산, 호텔" autocomplete="off"></div>
  <div class="fgroup"><span>도시</span>{seg("city", [("", "전체"), ("seoul", "서울"), ("busan", "부산"), ("jeju", "제주"), ("gyeonggi", "경기")])}</div>
  <div class="fgroup"><span>유형</span>{seg("type", [("", "전체"), ("box", "크로스핏·HYROX 박스"), ("sauna", "사우나")])}</div>

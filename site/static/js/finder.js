@@ -7,7 +7,8 @@
   var qs=new URLSearchParams(location.search);
   ['city','type','sub','sort','sunday','price','hyrox','cf','q'].forEach(function(k){ if(qs.has(k)) st[k]=qs.get(k); });
   var $=function(id){return document.getElementById(id)};
-  var home=cards.slice(), subEl=$('f-sub'), sortEl=$('f-sort'), q=$('f-q'), sun=$('f-sunday'), pr=$('f-price'), hy=$('f-hyrox'), cfc=$('f-cf'), cnt=$('f-count'), empty=$('f-empty');
+  var home=cards.slice(), form=document.querySelector('.filters'), subEl=$('f-sub'), sortEl=$('f-sort'), q=$('f-q'), sun=$('f-sunday'), pr=$('f-price'), hy=$('f-hyrox'), cfc=$('f-cf'), cnt=$('f-count'), empty=$('f-empty');
+  form.addEventListener('submit',function(e){e.preventDefault()});
   q.value=st.q; subEl.value=st.sub; sortEl.value=st.sort; sun.value=st.sunday; pr.checked=st.price==='1'; hy.checked=st.hyrox==='1'; cfc.checked=st.cf==='1';
   function seg(group){
     var btns=[].slice.call(document.querySelectorAll('[data-seg="'+group+'"] button'));
