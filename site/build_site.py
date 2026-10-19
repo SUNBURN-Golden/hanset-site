@@ -316,7 +316,7 @@ def build(site, venues, events, today):
     fbody = f'''
 <div class="finder-head"><h1>{FINDER_LABEL}</h1>
 <p class="lead">드롭인으로 갈 수 있는 크로스핏·HYROX 박스와 호텔·부티크 사우나, 대형 스파·온천. 지금 {len(venues)}곳(박스 {cnt_box} · 사우나 {cnt_sauna})을 확인했고, 계속 늘려 가요.</p>
-<details class="howto"><summary>필터 이렇게 써요</summary><ul>
+<details class="howto"><summary>필터 쓰는 법</summary><ul>
 <li><strong>도시·유형</strong>: 가고 싶은 지역과 박스/사우나를 먼저 골라요. 사우나는 호텔 사우나·부티크 사우나·대형 스파·온천으로 한 번 더 나눠 뒀어요.</li>
 <li><strong>일요일</strong>: 공식 페이지에 적혀 있는 곳만 '운영/휴무 확인'으로 보여요. 적혀 있지 않으면 '확인 중'이에요.</li>
 <li><strong>요금 확인된 곳만</strong>: 공식 페이지에서 요금을 읽은 곳만 남겨요.</li>
@@ -527,7 +527,7 @@ ARCHIVE = [
     ("archive-spa-haesurang", "spa-haesurang-busan", "스파 해수랑 조감도", "스파 해수랑", "스파 해수랑 공식 편의시설 안내의 층 표기(2F 로비, 3~4F 파우더룸, 4~5F 락커룸, 5F 찜질방, 7F 노천탕)를 층별로 쌓아 올린 아이소메트릭 손그림. 6층은 공식 안내가 없고 구역 배치는 개념도예요.", "spahaesurang.co.kr", "https://spahaesurang.co.kr/amenities"),
     ("archive-heosimcheong", "heosimcheong-busan", "허심청 조감도", "허심청(호텔농심)", "호텔농심 허심청 공식 층별 시설 안내(B1·B2 주차장, 1F 식당, 2F 연회, 3F 찜질방, 4F 락카·안내데스크, 5F 온천탕)를 쌓아 올린 아이소메트릭 손그림. 구역 배치는 개념도예요.", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
     ("archive-termeden", "termeden-icheon", "테르메덴 조감도", "테르메덴", "테르메덴 공식 시설 소개의 구역(실내 풀&스파, 온천대욕장, 찜질스파, 실외 풀&스파)을 한 장에 모은 아이소메트릭 손그림. 칸의 위치는 실제 배치가 아니에요.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
-    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "오라카이 청계산 조감도", "오라카이 청계산", "오라카이 청계산 호텔 공식 안내의 지하 1층 사우나(건식·습식 사우나, 다양한 탕, 세신 현장 접수)와 지하 2층 전기차 충전소를 쌓아 올린 아이소메트릭 손그림. 사우나 안의 구체적인 배치는 그리지 않았어요.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
+    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "오라카이 청계산 조감도", "오라카이 청계산", "오라카이 청계산 호텔 공식 안내의 지하 1층 사우나(건식·습식 사우나, 여러 탕, 세신 현장 접수)와 지하 2층 전기차 충전소를 쌓아 올린 아이소메트릭 손그림. 사우나 안의 구체적인 배치는 그리지 않았어요.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
     ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "슈퍼사피엔스 조감도", "크로스핏 슈퍼사피엔스", "크로스핏 슈퍼사피엔스 공식 시설 안내의 층 구성(1F 메인 운동 공간, 2F 샤워실·락커룸·보조 운동 공간, 3F 태닝·스태프 공간)을 쌓아 올린 아이소메트릭 손그림. 층 안의 배치는 개념도예요.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
 ]
 ARCHIVE_BY_VENUE = {a[1]: a for a in ARCHIVE}
