@@ -191,10 +191,12 @@ def home_card(v):
     if re.search(r"\d", area):
         match = re.match(r"^((?:서울|부산|제주|경기)\s+(?:[가-힣]+시\s+)?[가-힣]+(?:구|군|시))", area)
         if match: area = match.group(1)
-    verified = v["last_verified"]
+    lv = v["last_verified"]
     return (f'<article class="card home-card"><h3><a href="/finder/{v["slug"]}/">{E(v["title"])}</a></h3>'
-            f'<div class="loc">{E(area)}</div><div class="home-card-foot"><div class="price{"" if v["price"] else " unk"}">{price}</div>'
-            f'<div class="meta">{verified.month}.{verified.day} 확인</div></div></article>')
+            f'<div class="home-info"><span>{E(area)}</span> <span aria-hidden="true">·</span> '
+            f'<span>{E(v["kind"])}</span> <span aria-hidden="true">·</span> '
+            f'<span class="price{"" if v["price"] else " unk"}">{price}</span></div>'
+            f'<div class="home-date">{lv.month}.{lv.day} 확인</div></article>')
 
 def event_card(e, today, detail_link=True):
     d = (e["start"] - today).days
@@ -267,15 +269,10 @@ def build(site, venues, events, today):
     upcoming = [e for e in events if e["end"] >= today]
     # ---- home
     picks = [v for v in venues if v["pick"]]
-    preview = picks[:4]
-    if len(preview) < 4:
+    preview = picks[:2]
+    if len(preview) < 2:
         rest = [v for v in venues if v["status"] == "verified" and v not in preview]
-        preview = preview + rest[:4 - len(preview)]
-    preview = preview[:4]
-    region_links = "".join(f'<a class="btn btn-a" href="/finder/?city={k}">{E(c)}</a>' for k, c in [("seoul", "서울"), ("busan", "부산"), ("jeju", "제주"), ("gyeonggi", "경기")])
-    interest_links = "".join(f'<a class="chip" href="{u}">{E(t)}</a>' for t, u in [
-        ("부티크 사우나 · 호텔 사우나", "/finder/?type=sauna"),
-        ("크로스핏·HYROX 박스", "/finder/?type=box")])
+        preview = preview + rest[:2 - len(preview)]
     race_strip = ""
     if feat["end"] >= today:
         d = max((feat["start"] - today).days, 0)
@@ -289,22 +286,21 @@ def build(site, venues, events, today):
                       f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>KINTEX</span><span>·</span><span>가이드 ›</span></a>'
                       f'</div>')
     body = f'''
-<section class="hero home-hero"><h1>운동하고 사우나할 곳, 공식 정보로 골라 가요.</h1>
-<div class="region"><span class="region-label">지역으로 고르기</span><div class="region-choices">{region_links}</div></div>
-<div class="interest"><div class="chips">{interest_links}</div></div></section>
+<section class="hero home-hero"><h1>운동할 곳, 사우나 할 곳, 공식정보로 확인하세요.</h1>
+<a class="btn btn-a region-pick" href="/finder/">지역 선택</a></section>
 
 <section class="sec home-results"><div class="sec-h"><h2>확인한 곳</h2><a href="/finder/">{len(venues)}곳 모두 보기 →</a></div>
 <div class="grid home-grid">{"".join(home_card(v) for v in preview)}</div>
 <p class="muted trust">공식 페이지 확인일·출처 표시</p></section>
 
+<section class="sec home-mag"><div class="sec-h"><h2>매거진</h2><a href="/magazine/">전체 보기</a></div>
+<div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title"])}</a></h3><div class="meta">에디터 천한샘 · {dot(dt.date.fromisoformat(a["date"]))}</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>
+
 {race_strip}
 <p class="safety-line">{SAFETY}</p>
 
-<section class="sec"><div class="sec-h"><h2>매거진</h2><a href="/magazine/">전체 보기</a></div>
-<div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title"])}</a></h3><div class="meta">에디터 천한샘 · {dot(dt.date.fromisoformat(a["date"]))}</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>
-
 <section class="sec"><div class="sec-h"><h2>그림으로 보기</h2><a href="/guide/#pictures">크게 보기</a></div>
-<p class="muted">처음 가는 분을 위한 손그림 안내예요. 일반적인 예시이고 실제 업장과 다를 수 있어요.</p>
+<p class="muted">크로스핏 박스·부티크 사우나 · 호텔 사우나, 처음 가는 분을 위한 손그림 안내예요. 일반적인 예시이고 실제 업장과 다를 수 있어요.</p>
 <div class="illrow">{"".join(f'<a class="illc" href="/guide/#{k}"><picture><source media="(min-width:720px)" srcset="/assets/img/guide/{f}.svg"><img src="/assets/img/guide/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(t)}</b><em>그림 보기 ›</em></span></a>' for k, f, t, d in ILLUSTRATIONS)}</div></section>
 
 <section class="sec"><div class="sec-h"><h2>조감도 아카이브</h2><a href="/archive/">전체 보기</a></div>
