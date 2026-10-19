@@ -304,7 +304,7 @@ def build(site, venues, events, today):
 <div class="illrow">{"".join(f'<a class="illc" href="/guide/#{k}"><picture><source media="(min-width:720px)" srcset="/assets/img/guide/{f}.svg"><img src="/assets/img/guide/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(t)}</b><em>그림 보기 ›</em></span></a>' for k, f, t, d in ILLUSTRATIONS)}</div></section>
 
 <section class="sec"><div class="sec-h"><h2>조감도 아카이브</h2><a href="/archive/">전체 보기</a></div>
-<p class="muted">업장 공식 안내에 글자로 공개된 층·구역 구성을 읽고, 위에서 비스듬히 내려다본 조감도 스타일로 새로 그린 손그림이에요. 구역 배치는 개념도이고 실제와 다를 수 있어요.</p>
+<p class="muted">업장 공식 안내에 글자로 공개된 층·구역 구성을 읽고, 위에서 비스듬히 내려다본 조감도 스타일로 새로 그린 손그림이에요. 구역 배치는 개념도예요. 실제와 다를 수 있어요.</p>
 <div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>그림 보기 ›</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
 <p><a class="btn btn-d" href="/archive/">조감도 아카이브 전체 보기 ›</a></p></section>'''
     site.add("/", f"{BRAND_KO} {BRAND_EN} — 크로스핏·HYROX·사우나 웰니스 매거진", "크로스핏·HYROX·호텔/부티크 사우나. 공식 출처와 확인일을 붙인 드롭인·사우나 파인더와 레이스 일정.", body, "home", ("dday.js",))
@@ -317,7 +317,7 @@ def build(site, venues, events, today):
 <div class="finder-head"><h1>{FINDER_LABEL}</h1>
 <p class="lead">드롭인으로 갈 수 있는 크로스핏·HYROX 박스와 호텔·부티크 사우나, 대형 스파·온천. 지금 {len(venues)}곳(박스 {cnt_box} · 사우나 {cnt_sauna})을 확인했고, 계속 늘려 가요.</p>
 <details class="howto"><summary>필터 이렇게 써요</summary><ul>
-<li><strong>도시·유형</strong>: 가고 싶은 지역과 박스/사우나를 먼저 골라요. 사우나는 호텔 사우나·부티크 사우나·대형 스파·온천으로 한 번 더 나눌 수 있어요.</li>
+<li><strong>도시·유형</strong>: 가고 싶은 지역과 박스/사우나를 먼저 골라요. 사우나는 호텔 사우나·부티크 사우나·대형 스파·온천으로 한 번 더 나눠 뒀어요.</li>
 <li><strong>일요일</strong>: 공식 페이지에 적혀 있는 곳만 '운영/휴무 확인'으로 보여요. 적혀 있지 않으면 '확인 중'이에요.</li>
 <li><strong>요금 확인된 곳만</strong>: 공식 페이지에서 요금을 읽은 곳만 남겨요.</li>
 <li><strong>공식 목록</strong>: 크로스핏·하이록스 공식 목록에서 확인일에 직접 본 곳만 남겨요. 표시가 없는 곳은 확인 중이에요.</li>
@@ -338,8 +338,8 @@ def build(site, venues, events, today):
 <div class="grid" id="finder-list">{"".join(venue_card(v) for v in ordered)}</div>
 <div class="empty" id="f-empty" hidden><p>조건에 맞는 곳이 아직 확인되지 않았어요.</p><p class="muted">필터를 줄이거나 아래 버튼으로 처음부터 다시 골라 보세요. 확인한 곳은 계속 추가돼요.</p><button type="button" class="btn btn-d" data-reset>필터 초기화</button></div>
 <div class="note">'확인됨'은 업장 공식 페이지에서 해당 정보를 직접 읽었다는 뜻이고, '일부 확인'은 주소 같은 일부만 확인했다는 뜻이에요. 일요일 칸은 공식 페이지에 적혀 있을 때만 채워요. '공식 어필리에이트 확인'과 '하이록스 공식 지점 목록 확인'은 해당 공식 페이지·목록에서 확인일에 직접 본 곳에만 붙여요. 표시가 없는 곳은 아직 확인 중이라는 뜻이에요.</div>
-<noscript><p class="muted">필터는 자바스크립트가 켜져 있을 때 쓸 수 있어요. 목록은 그대로 볼 수 있어요.</p></noscript>'''
-    site.add("/finder/", f"{FINDER_LABEL} — 드롭인·사우나 파인더", "도시·유형·일요일 운영·요금 확인 여부로 크로스핏·HYROX 박스와 호텔·부티크 사우나를 찾아보세요. 모든 항목에 확인일과 출처.", fbody, "finder", ("finder.js",))
+<noscript><p class="muted">필터는 자바스크립트가 켜져 있어야 작동해요. 목록은 그대로 볼 수 있어요.</p></noscript>'''
+    site.add("/finder/", f"{FINDER_LABEL} — 드롭인·사우나 파인더", "도시·유형·일요일 운영·요금 확인 여부로 고르는 크로스핏·HYROX 박스와 호텔·부티크 사우나. 모든 항목에 확인일과 출처를 달았어요.", fbody, "finder", ("finder.js",))
 
     # ---- venue pages
     hyrox_v = [v for v in venues if v["hyrox"]]
@@ -401,19 +401,19 @@ def build(site, venues, events, today):
 
     # ---- events
     cards = "".join(event_card(e, today) for e in upcoming)
-    if not upcoming: cards = '<div class="empty"><p>지금 공식 페이지로 일정을 확인한 대회가 없어요.</p><p class="muted">확인되는 대로 추가해요.</p></div>'
+    if not upcoming: cards = '<div class="empty"><p>지금은 공식 페이지에서 일정을 확인한 대회가 없어요.</p><p class="muted">확인되는 대로 추가해요.</p></div>'
     ebody = f'''<div class="page"><h1>이벤트 캘린더</h1>
 <p class="lead">주최측 공식 페이지에서 일정을 확인한 대회만 실어요.</p></div>
 <div class="ev">{cards}</div>
 <div class="note">집계 사이트에만 올라온 일정은 주최측 확인 전까지 싣지 않아요. 참가비는 공식 페이지에서 확인한 값만 적어요. <a href="/events.ics">전체 일정 .ics 받기</a></div>'''
-    site.add("/events/", "이벤트 캘린더", "HYROX 서울, 어반웨이브, 크로스핏 오픈 등 공식 페이지로 확인한 대회 일정.", ebody, "events", ("dday.js",))
+    site.add("/events/", "이벤트 캘린더", "HYROX 서울, 어반웨이브, 크로스핏 오픈 등 공식 페이지에서 확인한 대회 일정.", ebody, "events", ("dday.js",))
 
     # ---- HYROX feature
     trs = "".join(f"<tr><td>{i}</td><td>1km</td><td>{E(en)} <span class='muted'>({E(ko)})</span></td><td>{E(d)}</td></tr>" for i, (en, ko, d) in enumerate(HYROX_STATIONS, 1))
     hv = "".join(mini_card(v) for v in hyrox_v)
     hbody = f'''<section class="hero"><span class="eyebrow">RACE WEEK GUIDE</span><h1>{E(feat["title"])}</h1>
 <div class="dday" data-dday="{feat["start"].isoformat()}"><b>D-{max((feat["start"] - today).days, 0)}</b>{span(feat["start"], feat["end"], today.year)} · KINTEX</div>
-<p>처음 나가는 사람을 위해 레이스 구성을 한눈에 정리했어요. 일정은 공식 페이지 기준이에요.</p>
+<p>처음 나가는 분을 위해 레이스 구성을 한눈에 정리했어요. 일정은 공식 페이지 기준이에요.</p>
 <div class="btnrow"><a class="btn btn-a" href="{E(feat["url"])}" rel="noopener noreferrer">공식 페이지 (접수·참가비)</a></div></section>
 <div class="page"><h2>한눈에 보기</h2>
 <table class="facts"><tbody>{"".join(f"<tr><th>{E(k)}</th><td>{E(val)}</td></tr>" for k, val in feat["facts"])}</tbody></table>
@@ -422,10 +422,10 @@ def build(site, venues, events, today):
 <table class="t"><thead><tr><th>#</th><th>러닝</th><th>스테이션</th><th>거리·횟수</th></tr></thead><tbody>{trs}</tbody></table>
 <h2>어떤 종목으로 나가나요</h2>
 <ul><li>Open / Pro (개인)</li><li>Doubles / Doubles Pro (2인)</li><li>Relay: 본인 포함 4명 팀, 각자 2×1km와 스테이션 1개</li></ul>
-<div class="note">스테이션 무게는 종목·성별별 표가 공식 페이지에 있어요. 시즌별로 기준이 바뀔 수 있으니 출전 전에 <a href="https://hyrox.com/the-fitness-race/" rel="noopener noreferrer">HYROX 공식 안내</a>를 다시 확인하세요. 접수 상태와 참가비는 공식 페이지 본문에서 확인하지 못해 싣지 않았어요.</div>
-<h2>미리 훈련해 볼 곳</h2><p>HYROX 수업이나 드롭인이 있다고 공식 페이지에서 확인한 곳이에요. 요금은 확인된 것만 적어요.</p></div>
+<div class="note">종목·성별별 무게 표는 공식 페이지에 있어요. 시즌별로 기준이 바뀔 수 있으니 출전 전에 <a href="https://hyrox.com/the-fitness-race/" rel="noopener noreferrer">HYROX 공식 안내</a>를 다시 확인하세요. 접수 상태와 참가비는 공식 페이지 본문에서 확인하지 못해 싣지 않았어요.</div>
+<h2>미리 훈련해 볼 곳</h2><p>공식 페이지에서 HYROX 수업이나 드롭인을 확인한 곳이에요. 요금은 확인된 것만 적어요.</p></div>
 <div class="grid g3">{hv}</div>
-<div class="page"><p class="muted">고양·일산권 사우나와 박스는 공식 페이지로 확인되는 곳부터 <a href="/finder/?city=gyeonggi">Finder</a>에 추가해요.</p>
+<div class="page"><p class="muted">고양·일산권 사우나와 박스는 공식 페이지에서 확인한 곳부터 <a href="/finder/?city=gyeonggi">Finder</a>에 추가해요.</p>
 <p class="muted">{SAFETY}</p><p class="muted">확인일 {dot(feat["last_verified"])} · 출처 <a href="{E(feat["url"])}" rel="noopener noreferrer">HYROX Korea</a> · <a href="https://hyrox.com/the-fitness-race/" rel="noopener noreferrer">HYROX 공식</a></p></div>'''
     site.add("/hyrox-seoul/", "HYROX 서울 레이스 위크 가이드 (11/13–15, KINTEX)", "에어아시아 하이록스 서울 일정, 8개 스테이션 구성, 드롭인 가능한 훈련 장소.", hbody, "hyrox", ("dday.js",))
 
