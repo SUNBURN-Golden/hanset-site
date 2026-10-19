@@ -133,16 +133,15 @@ class Site:
         return (f'<a class="skip" href="#main">본문으로 건너뛰기</a><header class="site-header"><div class="wrap">'
                 f'<div class="hrow"><a class="brand" href="/"><i></i>{BRAND_KO}<small>{BRAND_EN}</small></a>'
                 f'<a class="pin" href="/finder/"{cur("finder")}>{FINDER_LABEL}</a></div>'
-                f'<nav class="nav" aria-label="주 메뉴"><a href="/"{cur("home")}>홈</a><a href="/hyrox-seoul/"{cur("hyrox")}>HYROX 서울</a>'
-                f'<a href="/magazine/"{cur("magazine")}>매거진</a><a href="/events/"{cur("events")}>이벤트</a><a href="/guide/"{cur("guide")}>이용 안내</a><a href="/about/"{cur("about")}>소개</a></nav></div></header>')
+                f'<nav class="nav" aria-label="주 메뉴"><a href="/"{cur("home")}>홈</a>'
+                f'<a href="/magazine/"{cur("magazine")}>매거진</a><a href="/guide/"{cur("guide")}>이용 안내</a></nav></div></header>')
 
     def foot(self, active):
-        mbar = "" if active == "finder" else f'<div class="mbar"><a class="pin" href="/finder/">{FINDER_LABEL}</a></div>'
         return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_KO} {BRAND_EN}</strong> · 운동하고, 사우나하고, 한 세트.'
-                f'<div class="flinks"><a href="/about/">소개</a><a href="/guide/">이용 안내</a><a href="/archive/">조감도 아카이브</a><a href="/faq/">자주 묻는 질문</a><a href="/corrections/">정정 요청</a>'
+                f'<div class="flinks"><a href="/about/">소개</a><a href="/guide/">이용 안내</a><a href="/archive/">조감도 아카이브</a><a href="/events/">이벤트</a><a href="/hyrox-seoul/">HYROX 서울</a><a href="/faq/">자주 묻는 질문</a><a href="/corrections/">정정 요청</a>'
                 f'<a href="/privacy/">개인정보 처리 안내</a></div>'
                 f'<p>가격·휴무일은 바뀔 수 있어요. 모든 항목의 확인일과 출처를 확인하고, 이용 전 업장에 한 번 더 문의하세요.</p>'
-                f'<p>© 2026 {BRAND_EN}</p></div></footer>{mbar}')
+                f'<p>© 2026 {BRAND_EN}</p></div></footer>')
 
     def add(self, path, title, desc, body, active="", scripts=()):
         sc = "".join(f'<script src="/assets/js/{s}?v={asset_ver("js/"+s)}" defer></script>' for s in scripts)
@@ -185,6 +184,17 @@ def mini_card(v):
     return (f'<article class="card">{v_badges(v)}<h3><a href="/finder/{v["slug"]}/">{E(v["title"])}</a></h3>'
             f'<div class="loc">{E(v["location"])}</div><div class="price{"" if v["price"] else " unk"}">{price}</div>{off_html(v)}'
             f'<div class="meta">확인일 {dot(v["last_verified"])}</div></article>')
+
+def home_card(v):
+    price = (f'{E(v["price_label"])} {E(v["price"])}' if v["price"] else "요금 확인 중")
+    area = v["location"].split(" · ", 1)[0]
+    if re.search(r"\d", area):
+        match = re.match(r"^((?:서울|부산|제주|경기)\s+(?:[가-힣]+시\s+)?[가-힣]+(?:구|군|시))", area)
+        if match: area = match.group(1)
+    verified = v["last_verified"]
+    return (f'<article class="card home-card"><h3><a href="/finder/{v["slug"]}/">{E(v["title"])}</a></h3>'
+            f'<div class="loc">{E(area)}</div><div class="home-card-foot"><div class="price{"" if v["price"] else " unk"}">{price}</div>'
+            f'<div class="meta">{verified.month}.{verified.day} 확인</div></div></article>')
 
 def event_card(e, today, detail_link=True):
     d = (e["start"] - today).days
@@ -257,60 +267,41 @@ def build(site, venues, events, today):
     upcoming = [e for e in events if e["end"] >= today]
     # ---- home
     picks = [v for v in venues if v["pick"]]
-    picks = picks[:3]
-    hotel_prices = [v for v in venues if v["kind_key"] == "sauna" and v["price"] and v["sub"] != "spa"]
-    hyrox_v = [v for v in venues if v["hyrox"]]
-    latest = sorted(venues, key=lambda v: (-v["last_verified"].toordinal(), v["order"]))[:6]
-    hot_rows = "".join(f'<li><span><a href="/finder/{v["slug"]}/">{E(v["title"])}</a> <span class="muted">{E(v["location"].split(" · ")[0])}</span>'
-                       f'{"".join(badge(t) for t in v["tags"])}{(" <span class=muted>※ " + E(v["price_caveat"]) + "</span>") if v["price_caveat"] else ""}</span><span class="r">{E(v["price"])}</span></li>' for v in hotel_prices)
-    hy_rows = "".join(f'<li><span><a href="/finder/{v["slug"]}/">{E(v["title"])}</a> <span class="muted">{E(v["city_ko"])}</span></span>'
-                      f'<span class="r{"" if v["price"] else " unk"}">{E(v["price"]) if v["price"] else "가격 확인 중"}</span></li>' for v in hyrox_v)
-    ev_cards = "".join(event_card(e, today) for e in upcoming[:3])
-    def _n(f): return sum(1 for v in venues if f(v))
-    qitems = [("서울", "/finder/?city=seoul", _n(lambda v: v["city_key"] == "seoul")), ("부산", "/finder/?city=busan", _n(lambda v: v["city_key"] == "busan")),
-              ("제주", "/finder/?city=jeju", _n(lambda v: v["city_key"] == "jeju")), ("경기(고양)", "/finder/?city=gyeonggi", _n(lambda v: v["city_key"] == "gyeonggi")),
-              ("호텔 사우나", "/finder/?sub=hotel", _n(lambda v: v["sub"] == "hotel")), ("부티크 사우나", "/finder/?sub=boutique", _n(lambda v: v["sub"] == "boutique")), ("대형 스파·온천", "/finder/?sub=spa", _n(lambda v: v["sub"] == "spa")),
-              ("크로스핏·HYROX 박스", "/finder/?type=box", _n(lambda v: v["sub"] == "box")), ("일요일 운영 확인", "/finder/?sunday=yes", _n(lambda v: v["sunday"] == "yes")),
-              ("하이록스 지점(공식 목록)", "/finder/?hyrox=1", _n(lambda v: v["off"]["hyrox"]))]
-    quick = "".join(f'<a class="qlink" href="{u}"><span>{E(t)}</span><b>{n}곳</b></a>' for t, u, n in qitems if n)
+    preview = picks[:4]
+    if len(preview) < 4:
+        rest = [v for v in venues if v["status"] == "verified" and v not in preview]
+        preview = preview + rest[:4 - len(preview)]
+    preview = preview[:4]
+    region_links = "".join(f'<a class="btn btn-a" href="/finder/?city={k}">{E(c)}</a>' for k, c in [("seoul", "서울"), ("busan", "부산"), ("jeju", "제주"), ("gyeonggi", "경기")])
+    interest_links = "".join(f'<a class="chip" href="{u}">{E(t)}</a>' for t, u in [
+        ("부티크 사우나 · 호텔 사우나", "/finder/?type=sauna"),
+        ("크로스핏·HYROX 박스", "/finder/?type=box")])
+    race_strip = ""
+    if feat["end"] >= today:
+        d = max((feat["start"] - today).days, 0)
+        started = today >= feat["start"]
+        btxt = "진행 중" if started else ("D-DAY" if d == 0 else f"D-{d}")
+        ds = f'{feat["start"].month}/{feat["start"].day}~{feat["end"].month}/{feat["end"].day}'
+        race_strip = (f'<div class="race-strip" data-end="{feat["end"].isoformat()}">'
+                      f'<a class="race-strip-link race-strip-narrow" href="/hyrox-seoul/"><span>HYROX 서울</span><span>·</span>'
+                      f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>가이드 ›</span></a>'
+                      f'<a class="race-strip-link race-strip-wide" href="/hyrox-seoul/"><span>HYROX 서울</span><span>·</span>'
+                      f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>KINTEX</span><span>·</span><span>가이드 ›</span></a>'
+                      f'</div>')
     body = f'''
-<section class="hero"><span class="eyebrow">RACE WEEK</span>
-<h1>{E(feat["title"].replace("에어아시아 ", ""))}</h1>
-<div class="dday" data-dday="{feat["start"].isoformat()}"><b>D-{max((feat["start"] - today).days, 0)}</b>{span(feat["start"], feat["end"], today.year)} · KINTEX</div>
-<p>8번의 1km 러닝과 8개의 스테이션. 처음 나가는 사람을 위한 구성 가이드와, 드롭인으로 미리 훈련해 볼 수 있는 곳을 모았어요.</p>
-<div class="btnrow"><a class="btn btn-a" href="/hyrox-seoul/">레이스 위크 가이드</a><a class="btn btn-o" href="/finder/?type=box">드롭인 박스 찾기</a></div></section>
+<section class="hero home-hero"><h1>운동하고 사우나할 곳, 공식 정보로 골라 가요.</h1>
+<div class="region"><span class="region-label">지역으로 고르기</span><div class="region-choices">{region_links}</div></div>
+<div class="interest"><div class="chips">{interest_links}</div></div></section>
 
-<section class="intro"><h2>한셋은 이렇게 정리해요</h2>
-<ul><li><strong>공식 페이지에서 읽은 값만</strong> 실어요. 모든 항목에 확인일과 출처 링크가 있어요.</li>
-<li><strong>모르면 '확인 중'</strong>이라고 적어요. 추측하거나 다른 곳의 값을 옮겨 적지 않아요.</li>
-<li><strong>예약·결제는 받지 않아요.</strong> 신청은 각 업장·주최측 공식 페이지에서 하세요.</li></ul>
-<p class="muted">처음이라면 <a href="/guide/">이용 안내</a>를 먼저 보세요. 궁금한 점은 <a href="/faq/">자주 묻는 질문</a>에 모아 뒀어요.</p></section>
+<section class="sec home-results"><div class="sec-h"><h2>확인한 곳</h2><a href="/finder/">{len(venues)}곳 모두 보기 →</a></div>
+<div class="grid home-grid">{"".join(home_card(v) for v in preview)}</div>
+<p class="muted trust">공식 페이지 확인일·출처 표시</p></section>
 
-<section class="sec quick"><div class="sec-h"><h2>골라서 보기</h2><a href="/finder/">전체 보기</a></div>
-<div class="qgrid">{quick}</div></section>
-
-<section class="sec picks"><div class="sec-h"><h2>에디터스 픽</h2><a href="/finder/">전체 보기</a></div>
-<div class="grid g3">{"".join(mini_card(v) for v in picks)}</div></section>
-
-<section class="sec"><div class="sec-h"><h2>공식 사이트 기준 호텔 사우나 요금</h2></div>
-<p class="muted">업장 공식 페이지에서 요금을 직접 읽은 곳만 모았어요. 투숙객 전용·남성 전용 여부를 꼭 함께 보세요.</p>
-<ul class="list">{hot_rows}</ul>
-<p class="muted">{SAFETY}</p></section>
-
-<section class="sec"><div class="sec-h"><h2>HYROX 수업·드롭인이 있는 곳</h2><a href="/finder/">전체 보기</a></div>
-<ul class="list">{hy_rows}</ul></section>
-
-<section class="sec"><div class="sec-h"><h2>다가오는 일정</h2><a href="/events/">캘린더</a></div><div class="ev">{ev_cards}</div></section>
-
-<section class="sec"><div class="sec-h"><h2>최근 확인한 곳</h2><a href="/finder/">Finder에서 보기</a></div>
-<div class="grid g3">{"".join(mini_card(v) for v in latest)}</div></section>
+{race_strip}
+<p class="safety-line">{SAFETY}</p>
 
 <section class="sec"><div class="sec-h"><h2>매거진</h2><a href="/magazine/">전체 보기</a></div>
 <div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title"])}</a></h3><div class="meta">에디터 천한샘 · {dot(dt.date.fromisoformat(a["date"]))}</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>
-
-<section class="band"><h2>{FINDER_LABEL}</h2>
-<p>도시, 유형, 일요일 운영, 요금 확인 여부로 걸러 보세요. 모든 항목에 확인일과 출처 링크가 있고, 확인하지 못한 값은 '확인 중'으로 남겨 둬요.</p>
-<a class="btn btn-d" href="/finder/">Finder 열기</a></section>
 
 <section class="sec"><div class="sec-h"><h2>그림으로 보기</h2><a href="/guide/#pictures">크게 보기</a></div>
 <p class="muted">처음 가는 분을 위한 손그림 안내예요. 일반적인 예시이고 실제 업장과 다를 수 있어요.</p>
@@ -355,6 +346,13 @@ def build(site, venues, events, today):
     site.add("/finder/", f"{FINDER_LABEL} — 드롭인·사우나 파인더", "도시·유형·일요일 운영·요금 확인 여부로 크로스핏·HYROX 박스와 호텔·부티크 사우나를 찾아보세요. 모든 항목에 확인일과 출처.", fbody, "finder", ("finder.js",))
 
     # ---- venue pages
+    hyrox_v = [v for v in venues if v["hyrox"]]
+    by_city = {}
+    for v in venues:
+        by_city.setdefault(v["city_key"], []).append(v)
+    for city in by_city:
+        by_city[city].sort(key=lambda v: v["order"])
+    all_ordered = sorted(venues, key=lambda v: v["order"])
     for v in venues:
         def rows():
             out = []
@@ -384,6 +382,16 @@ def build(site, venues, events, today):
         _ar = ARCHIVE_BY_VENUE.get(v["slug"])
         arch_blk = (f'<section class="archbox"><h2>손그림 조감도</h2><a class="illc" href="/archive/#{v["slug"]}"><picture><img src="/assets/img/archive/{_ar[0]}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ar[4])}"></picture>'
                     f'<span><b>{E(_ar[2])}</b><em>공식 안내를 바탕으로 한 손그림 · 눌러서 보기 ›</em></span></a></section>') if _ar else ""
+        city_group = by_city.get(v["city_key"], [])
+        same_city = len(city_group) > 1
+        if same_city:
+            idx = next((i for i, x in enumerate(city_group) if x["slug"] == v["slug"]), 0)
+            nxt = city_group[(idx + 1) % len(city_group)]
+        else:
+            idx = next((i for i, x in enumerate(all_ordered) if x["slug"] == v["slug"]), 0)
+            nxt = all_ordered[(idx + 1) % len(all_ordered)]
+        next_label = f'같은 지역 다음 업장: {E(nxt["title"])} ›' if same_city else f'다음 업장: {E(nxt["title"])} ›'
+        next_html = f'<p class="next-venue"><a href="/finder/{nxt["slug"]}/">{next_label}</a></p>'
         body = f'''<div class="detail"><p class="crumb"><a href="/finder/">{FINDER_LABEL}</a> › {E(v["city_ko"])}</p>
 {v_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{adnote}{stale}
 <p class="lead">{E(v["summary"])}</p>
@@ -391,6 +399,7 @@ def build(site, venues, events, today):
 {tips}{unv}{arch_blk}
 <div class="verify"><p><strong>마지막 확인일 {dot(v["last_verified"])}</strong></p><p>출처: {" · ".join(srcs)}</p>
 <p>정보가 다르면 <a href="/corrections/">정정 요청</a>으로 알려 주세요. 가격·휴무는 바뀔 수 있어요.</p></div>
+{next_html}
 <div class="btnrow">{"".join(links)}</div>{safety}</div>'''
         site.add(f"/finder/{v['slug']}/", f"{v['title']}", f"{v['title']} — {v['summary']}"[:150], body, "finder")
 
