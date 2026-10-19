@@ -1,0 +1,41 @@
+# build output / env
+site/dist/
+site/.venv/
+.venv/
+node_modules/
+__pycache__/
+*.pyc
+.DS_Store
+
+# secrets / deploy pipeline (never commit)
+.env
+.env.*
+*.pem
+*.key
+*.secret*
+*token*
+*jwt*
+.secrets/
+up.py
+deploy*.js
+gen_deploy*.py
+
+# backups / previous versions
+*.bak
+*.bak_*
+*.bak*
+_prev*
+_removed*
+_work/
+mobile_check/
+
+# large production outputs (kept outside the repo)
+instagram/
+video/
+youtube/
+render/
+raw/
+out/
+preview/
+*.mp4
+*.mov
