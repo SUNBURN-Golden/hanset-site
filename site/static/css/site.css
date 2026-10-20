@@ -261,3 +261,21 @@ table.t th{background:var(--surface-2);font-size:.82rem}
  .archbox .illc span{padding:0}
  .archbox .illc span em{display:block}
 }
+
+/* home hero for visitors 2026-10-20: two CTAs, city jump, guide list */
+.home-hero .lead{color:var(--muted)}
+.hero-ctas{display:flex;flex-wrap:wrap;gap:12px;margin-top:16px}
+.hero-ctas .btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px}
+.btn-ghost{background:transparent;border:1.5px solid var(--ink);color:var(--ink)}
+.btn-ghost:hover{background:var(--sand);color:var(--ink)}
+.city-jump{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.city-jump a{display:inline-flex;align-items:center;min-height:44px;padding:0 16px;border:1px solid var(--line);border-radius:999px;color:var(--ink);text-decoration:none;font-size:var(--fs-s);font-weight:700}
+.city-jump a:hover{border-color:var(--ink)}
+.guide-list{list-style:none;margin:0;padding:0;max-width:38em}
+.guide-list li+li{border-top:1px solid var(--line)}
+.guide-list a{display:flex;align-items:center;min-height:56px;padding:8px 0;color:var(--ink);text-decoration:none;font-weight:700}
+.guide-list a:hover{color:var(--accent-d)}
+@media(max-width:600px){
+ .hero-ctas{flex-direction:column}
+ .hero-ctas .btn{width:100%}
+}
