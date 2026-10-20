@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""한셋 '조감도(아이소메트릭) 손그림' 6장 (2026-10-18).
+"""한셋 '층별 아이소메트릭 손그림' 6장 (2026-10-18).
 공식 안내에 글자로 공개된 층·구역 이름만 사용. 구역의 위치·크기는 개념도(그리지 않은 정보는 지어내지 않음).
 원본 이미지 복사·트레이싱 없음. 가격·시간 미표기."""
 import sys, os, html as _h
@@ -171,7 +171,7 @@ def foot(src, sauna=True, extra=None, y=1092):
 
 # ------------------------------------------------------------------ 장면
 def haesurang():
-    b = base("스파 해수랑, 조감도", "부산 서구 · 공식 편의시설 층 표기를 쌓아 올린 손그림")
+    b = base("스파 해수랑, 층별로", "부산 서구 · 공식 편의시설 층 표기를 쌓아 올린 손그림")
     fl = [
         dict(tag="7F", title="노천탕", items=["노천탕 · 핀란드 사우나", "라운지바 · 대형스크린", "PDR룸(블루 웨이브 · 레드 하모니 · 퍼플 스카이)"], blocks=[("wave", 24), ("steam", 30), ("plain", 22)]),
         dict(tag="6F", title="공식 층 안내 없음", items=[], ghost=True),
@@ -188,7 +188,7 @@ def haesurang():
 from make_archive import steps_box, side_note
 
 def sisu():
-    b = base("시수하우스, 조감도", "서울 신사동 · 공식 '공간 안내'의 층 구성을 쌓아 올린 손그림")
+    b = base("시수하우스, 층별로", "서울 신사동 · 공식 '공간 안내'의 층 구성을 쌓아 올린 손그림")
     fl = [
         dict(tag="2-3F", title="Private Zone", tt=40, items=["Private Changing Room", "Warm Bath · Cold Shower", "Finnish Sauna · Ice Fountain"], blocks=[("steam", 30), ("wave", 22), ("plain", 20)]),
         dict(tag="1.5F", title="Touch Zone", items=["Pre-Sauna Touch Care"], blocks=[("desk", 20), ("plain", 18)]),
@@ -204,7 +204,7 @@ def sisu():
     return b
 
 def orakai():
-    b = base("오라카이 청계산, 조감도", "서울 서초 · 호텔 지하 1층 사우나 안내를 쌓아 올린 손그림")
+    b = base("오라카이 청계산, 층별로", "서울 서초 · 호텔 지하 1층 사우나 안내를 쌓아 올린 손그림")
     fl = [
         dict(tag="B1", title="사우나(공식: 지하 1층)", items=["건식 사우나 · 습식 사우나", "다양한 탕", "세신은 현장 접수만 가능", "같은 층에 'LEVEL B1' 레스토랑이 있어요"], blocks=[("steam", 30), ("wave", 22), ("plain", 20)]),
         dict(tag="B2", title="주차 · 전기차 충전소", items=["전기차 충전소는 지하 2층(공식 이용안내)"], blocks=[("car", 20), ("plain", 16)]),
@@ -219,7 +219,7 @@ def orakai():
     return b
 
 def heosimcheong():
-    b = base("허심청, 조감도", "호텔농심 온천 · 공식 층별 시설 안내를 쌓아 올린 손그림")
+    b = base("허심청, 층별로", "호텔농심 온천 · 공식 층별 시설 안내를 쌓아 올린 손그림")
     fl = [
         dict(tag="5F", title="온천시설 · 온천탕", items=["남·여 별도탕, 3,000명 동시 수용(공식)", "장수탕 · 이벤트탕 · 청자탕 · 노천탕 · 회목탕 · 물맞이탕 · 동굴탕 · 냉탕 · 반신욕탕 · 소금탕 · 미니풀장", "증기 사우나(습식) · 고온 사우나(건식) · 샤워장 · 세신코너"], blocks=[("wave", 22), ("steam", 28), ("wave", 20)]),
         dict(tag="4F", title="온천시설 · 입퇴장", items=["안내데스크(키 지급·계산)", "락카(남·여) · 이발소 · 구두수선실", "락카룸 용품판매코너에서 가운 받기"], blocks=[("desk", 22), ("locker", 26)]),
@@ -233,7 +233,7 @@ def heosimcheong():
     return b
 
 def supersapiens():
-    b = base("슈퍼사피엔스, 조감도", "서울 강동 · 크로스핏 박스 공식 'Our Facility'를 쌓아 올린 손그림")
+    b = base("슈퍼사피엔스, 층별로", "서울 강동 · 크로스핏 박스 공식 'Our Facility'를 쌓아 올린 손그림")
     fl = [
         dict(tag="3F", title="추가 시설", items=["회원용 태닝 시설", "스태프 전용 공간"], blocks=[("sun", 22), ("plain", 20)]),
         dict(tag="2F", title="편의 시설 · 보조 운동 공간", items=["샤워실 · 락커룸", "웨이트 · 스트레칭 · 유산소 존", "커뮤니티 공간"], blocks=[("locker", 26), ("plain", 20), ("plain", 18)]),
@@ -249,7 +249,7 @@ def supersapiens():
     return b
 
 def termeden():
-    b = base("테르메덴, 조감도", "경기 이천 · 공식 시설 소개의 구역 이름을 한 장에 모은 손그림")
+    b = base("테르메덴, 구역 한눈에", "경기 이천 · 공식 시설 소개의 구역 이름을 한 장에 모은 손그림")
     S = 290; ox, oy = 540, 238
     b += slab(ox, oy, S, 22)
     zones = [
@@ -285,12 +285,12 @@ def termeden():
     return b
 
 SCENES = {
-    "archive-sisu-house": (sisu, "시수하우스 조감도 손그림", "시수하우스 공식 공간 안내의 층 구성(1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone)과 리추얼 순서를 쌓아 올린 아이소메트릭 손그림. 구역 배치는 개념도예요."),
-    "archive-spa-haesurang": (haesurang, "스파 해수랑 조감도 손그림", "스파 해수랑 공식 편의시설 안내의 층 표기(2F 로비, 3~4F 파우더룸, 4~5F 락커룸, 5F 찜질방, 7F 노천탕)를 층별로 쌓아 올린 아이소메트릭 손그림. 6층은 공식 안내가 없고 구역 배치는 개념도예요."),
-    "archive-heosimcheong": (heosimcheong, "허심청 조감도 손그림", "호텔농심 허심청 공식 층별 시설 안내(B1·B2 주차장, 1F 식당, 2F 연회, 3F 찜질방, 4F 락카·안내데스크, 5F 온천탕)를 쌓아 올린 아이소메트릭 손그림. 구역 배치는 개념도예요."),
-    "archive-termeden": (termeden, "테르메덴 조감도 손그림", "테르메덴 공식 시설 소개의 구역(실내 풀&스파, 온천대욕장, 찜질스파, 실외 풀&스파)을 한 장에 모은 아이소메트릭 손그림. 칸의 위치는 실제 배치가 아니에요."),
-    "archive-orakai-cheonggyesan": (orakai, "오라카이 청계산 조감도 손그림", "오라카이 청계산 호텔 공식 안내의 지하 1층 사우나(건식·습식 사우나, 다양한 탕, 세신 현장 접수)와 지하 2층 전기차 충전소를 쌓아 올린 아이소메트릭 손그림. 사우나 안의 구체적인 배치는 그리지 않았어요."),
-    "archive-crossfit-super-sapiens": (supersapiens, "크로스핏 슈퍼사피엔스 조감도 손그림", "크로스핏 슈퍼사피엔스 공식 시설 안내의 층 구성(1F 메인 운동 공간, 2F 샤워실·락커룸·보조 운동 공간, 3F 태닝·스태프 공간)을 쌓아 올린 아이소메트릭 손그림. 층 안의 배치는 개념도예요."),
+    "archive-sisu-house": (sisu, "시수하우스 층별 손그림", "시수하우스 공식 공간 안내의 층 구성(1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone)과 리추얼 순서를 쌓아 올린 아이소메트릭 손그림. 구역 배치는 개념도예요."),
+    "archive-spa-haesurang": (haesurang, "스파 해수랑 층별 손그림", "스파 해수랑 공식 편의시설 안내의 층 표기(2F 로비, 3~4F 파우더룸, 4~5F 락커룸, 5F 찜질방, 7F 노천탕)를 층별로 쌓아 올린 아이소메트릭 손그림. 6층은 공식 안내가 없고 구역 배치는 개념도예요."),
+    "archive-heosimcheong": (heosimcheong, "허심청 층별 손그림", "호텔농심 허심청 공식 층별 시설 안내(B1·B2 주차장, 1F 식당, 2F 연회, 3F 찜질방, 4F 락카·안내데스크, 5F 온천탕)를 쌓아 올린 아이소메트릭 손그림. 구역 배치는 개념도예요."),
+    "archive-termeden": (termeden, "테르메덴 구역 손그림", "테르메덴 공식 시설 소개의 구역(실내 풀&스파, 온천대욕장, 찜질스파, 실외 풀&스파)을 한 장에 모은 아이소메트릭 손그림. 칸의 위치는 실제 배치가 아니에요."),
+    "archive-orakai-cheonggyesan": (orakai, "오라카이 청계산 층별 손그림", "오라카이 청계산 호텔 공식 안내의 지하 1층 사우나(건식·습식 사우나, 다양한 탕, 세신 현장 접수)와 지하 2층 전기차 충전소를 쌓아 올린 아이소메트릭 손그림. 사우나 안의 구체적인 배치는 그리지 않았어요."),
+    "archive-crossfit-super-sapiens": (supersapiens, "크로스핏 슈퍼사피엔스 층별 손그림", "크로스핏 슈퍼사피엔스 공식 시설 안내의 층 구성(1F 메인 운동 공간, 2F 샤워실·락커룸·보조 운동 공간, 3F 태닝·스태프 공간)을 쌓아 올린 아이소메트릭 손그림. 층 안의 배치는 개념도예요."),
 }
 
 def render(only=None, outdir="/workspace/fitness-hub/illustrations/svg"):

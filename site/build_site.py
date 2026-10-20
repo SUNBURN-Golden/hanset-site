@@ -183,7 +183,7 @@ class Site:
 
     def foot(self, active):
         return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_EN}</strong> · Train. Sweat. One set.'
-                f'<div class="flinks"><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Bird’s-Eye Archive</a><a href="/events/">Events</a><a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
+                f'<div class="flinks"><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a><a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
                 f'<a href="/privacy/">Privacy</a></div>'
                 f'<p>Prices and closing days change. Every entry shows its check date and source. Confirm with the venue before you go.</p>'
                 f'<p>© 2026 {BRAND_EN}</p></div></footer>')
@@ -443,7 +443,7 @@ def build(site, venues, events, today):
         if v["kind_key"] == "box" and any("일요일" in k or "휴무" in k for k, _ in v["facts_ko"]) and v["sunday"] != "unk": sunrow = ""
         if v["kind_key"] == "box" and v["sunday"] == "unk" and any("일요일" in k for k, _ in v["facts_ko"]): sunrow = ""
         _ar = ARCHIVE_BY_VENUE.get(v["slug"])
-        arch_blk = (f'<section class="archbox"><h2>Hand-drawn bird’s-eye view</h2><a class="illc" href="/archive/#{v["slug"]}"><picture><img src="/assets/img/archive/{_ar[0]}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ar[4])}"></picture>'
+        arch_blk = (f'<section class="archbox"><h2>Hand-drawn sketch</h2><a class="illc" href="/archive/#{v["slug"]}"><picture><img src="/assets/img/archive/{_ar[0]}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ar[4])}"></picture>'
                     f'<span><b>{E(_ar[2])}</b><em>Hand-drawn from the official guide · Tap to view ›</em></span></a></section>') if _ar else ""
         city_group = by_city.get(v["city_key"], [])
         same_city = len(city_group) > 1
@@ -506,7 +506,7 @@ def build(site, venues, events, today):
     if arts: site.add("/magazine/", "Magazine", "Wellness reports from HANSET editors. Research and official sources, made easy to read.",
              f'<div class="page"><h1>Magazine</h1><p class="lead">Research, made readable. Every article cited.</p><p class="muted">Articles are currently in Korean.</p></div><div class="grid">{mcards}</div>', "magazine")
 
-    # ---- archive (조감도 아카이브)
+    # ---- archive (손그림 아카이브)
     items = "".join(
         f'<article class="arc" id="{vs}"><a class="arcimg" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener" aria-label="{E(t)}: view larger (new tab)">'
         f'<picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture></a>'
@@ -514,14 +514,14 @@ def build(site, venues, events, today):
         f'<p class="meta">Source <a href="{E(su)}" rel="noopener noreferrer">{E(sl)}</a> · Checked {ARCHIVE_DATE}</p>'
         f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener">View larger ↗</a><a class="btn btn-d" href="/finder/{vs}/">Venue details</a></div></div></article>'
         for f, vs, t, st, d, sl, su in ARCHIVE)
-    abody = f'''<div class="page"><h1>Bird’s-Eye Archive</h1>
+    abody = f'''<div class="page"><h1>Venue Sketches</h1>
 <p class="lead">Floors and zones from official guides. Redrawn by hand, from above (isometric).</p>
 <ul><li>No photos or official maps copied or traced. Nothing drawn that the official guide doesn’t describe.</li>
 <li>Layouts are conceptual. Only floor and zone names and order follow the official guide. Position and size may differ from the actual venue.</li>
 <li>Labels in the drawings are in Korean. Tap a drawing to open it larger in a new tab (pinch to zoom).</li></ul></div>
 <div class="arcgrid">{items}</div>
 <div class="page"><p class="muted">More drawings as official floor and zone guides are published in text. {SAFETY}</p></div>'''
-    site.add("/archive/", "Bird’s-Eye Archive", "Hand-drawn bird’s-eye views based on official venue guides (conceptual layouts). May differ from the actual venue. Every drawing with a source and check date.", abody, "guide")
+    site.add("/archive/", "Venue Sketches", "Hand-drawn sketches of floors and zones, based on official venue guides (conceptual layouts). May differ from the actual venue. Every drawing with a source and check date.", abody, "guide")
 
     # ---- static pages
     for slug, title, desc, active in [("guide", "Guide", "How to read HANSET's finder, badges and check dates, and what to know before you go.", "guide"),
@@ -543,7 +543,7 @@ def asset_ver(rel):
     return hashlib.md5((ROOT / "static" / rel).read_bytes()).hexdigest()[:8]
 
 ILLUSTRATIONS = [
-    ("box", "crossfit-box-plan", "Inside a CrossFit box", "Hand-drawn top-down view of a typical CrossFit box: entrance and front desk, lockers and changing area, whiteboard, WOD area, rig, open gym and barbell racks, rowing and bike zone. A general example. May differ from the actual venue."),
+    ("box", "crossfit-box-plan", "Inside a CrossFit box", "Hand-drawn layout sketch of a typical CrossFit box: entrance and front desk, lockers and changing area, whiteboard, WOD area, rig, open gym and barbell racks, rowing and bike zone. A general example. May differ from the actual venue."),
     ("dropin", "dropin-steps", "How a drop-in works", "Hand-drawn CrossFit drop-in steps: 1 check timetable and price on the official page, 2 book or ask, 3 check in on arrival, 4 join the class, 5 clean up and pay. Class format and price vary by box."),
     ("sauna", "sauna-guide", "How to sauna", "Hand-drawn sauna sequence and a typical layout of dry and wet saunas, showers, cold plunge and rest area. With cardiovascular disease, during pregnancy, after drinking, or when you feel unwell, avoid saunas and cold plunges or consult a doctor. Facilities vary by venue."),
 ]
@@ -591,12 +591,12 @@ def leak_check(dist):
 ARCHIVE_DATE = "2026.10.18"
 # (file, venue slug, title, short title, alt text, source label, source URL)
 ARCHIVE = [
-    ("archive-sisu-house", "sisu-house", "Sisu House, bird’s-eye view", "Sisu House", "Isometric hand drawing stacking the floors from Sisu House’s official space guide (1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone) and its ritual sequence. Conceptual layout.", "sisu.house", "https://sisu.house/about"),
-    ("archive-spa-haesurang", "spa-haesurang-busan", "Spa Haesurang, bird’s-eye view", "Spa Haesurang", "Isometric hand drawing stacking the floors from Spa Haesurang’s official amenities guide (2F lobby, 3–4F powder rooms, 4–5F locker rooms, 5F jjimjil room, 7F open-air bath). No official info for 6F. Conceptual layout.", "spahaesurang.co.kr", "https://spahaesurang.co.kr/amenities"),
-    ("archive-heosimcheong", "heosimcheong-busan", "Hurshimchung, bird’s-eye view", "Hurshimchung (Hotel Nongshim)", "Isometric hand drawing stacking Hotel Nongshim Hurshimchung’s official floor guide (B1·B2 parking, 1F restaurant, 2F banquet, 3F jjimjil room, 4F lockers and front desk, 5F hot-spring baths). Conceptual layout.", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
-    ("archive-termeden", "termeden-icheon", "Termeden, bird’s-eye view", "Termeden", "Isometric hand drawing gathering the zones from Termeden’s official facility guide (indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa) on one sheet. Positions are not the real layout.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
-    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "Orakai Cheonggyesan, bird’s-eye view", "Orakai Cheonggyesan", "Isometric hand drawing stacking the B1 sauna (dry and wet saunas, several pools, walk-in body scrub) and the B2 EV charging area from Orakai Cheonggyesan Hotel’s official guide. The sauna’s interior layout is not drawn.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
-    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "Super Sapiens, bird’s-eye view", "CrossFit Super Sapiens", "Isometric hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
+    ("archive-sisu-house", "sisu-house", "Sisu House, floor by floor", "Sisu House", "Isometric hand drawing stacking the floors from Sisu House’s official space guide (1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone) and its ritual sequence. Conceptual layout.", "sisu.house", "https://sisu.house/about"),
+    ("archive-spa-haesurang", "spa-haesurang-busan", "Spa Haesurang, floor by floor", "Spa Haesurang", "Isometric hand drawing stacking the floors from Spa Haesurang’s official amenities guide (2F lobby, 3–4F powder rooms, 4–5F locker rooms, 5F jjimjil room, 7F open-air bath). No official info for 6F. Conceptual layout.", "spahaesurang.co.kr", "https://spahaesurang.co.kr/amenities"),
+    ("archive-heosimcheong", "heosimcheong-busan", "Hurshimchung, floor by floor", "Hurshimchung (Hotel Nongshim)", "Isometric hand drawing stacking Hotel Nongshim Hurshimchung’s official floor guide (B1·B2 parking, 1F restaurant, 2F banquet, 3F jjimjil room, 4F lockers and front desk, 5F hot-spring baths). Conceptual layout.", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
+    ("archive-termeden", "termeden-icheon", "Termeden, zone by zone", "Termeden", "Isometric hand drawing gathering the zones from Termeden’s official facility guide (indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa) on one sheet. Positions are not the real layout.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
+    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "Orakai Cheonggyesan, floor by floor", "Orakai Cheonggyesan", "Isometric hand drawing stacking the B1 sauna (dry and wet saunas, several pools, walk-in body scrub) and the B2 EV charging area from Orakai Cheonggyesan Hotel’s official guide. The sauna’s interior layout is not drawn.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
+    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Isometric hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
 ]
 ARCHIVE_BY_VENUE = {a[1]: a for a in ARCHIVE}
 
