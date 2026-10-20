@@ -341,12 +341,17 @@ def build(site, venues, events, today):
     home_mag = (f'''<section class="sec home-mag"><div class="sec-h"><h2>Read first. Every claim cited.</h2><a href="/magazine/">All articles ›</a></div>
 <div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))} · Article in Korean</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>''' if ARTICLES else '')
     guide_rows = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _ in GUIDES)
-    city_jump = "".join(f'<a href="/finder/?city={k}">{E(c)}</a>' for c, k in CITY_KEY.items())
     body = f'''
-<section class="hero home-hero"><h1>Can I go? Know before you go.</h1>
+<section class="hero home-hero"><span class="home-kicker">Wellness in Korea, for visitors</span><h1>Can I go?</h1>
 <p class="lead">CrossFit and HYROX drop-ins, boutique saunas and hotel saunas across Korea. Tattoo rules, non-guest access and drop-in, from each official page.</p>
-<div class="hero-ctas"><a class="btn btn-d" href="/finder/">Find a place</a> <a class="btn btn-ghost" href="/guides/">Visitors guide</a></div>
-<nav class="city-jump" aria-label="Jump to a city">{city_jump}</nav></section>
+<div class="hero-ctas"><a class="btn btn-d" href="/finder/">Find a place</a> <a class="btn btn-ghost" href="/guides/">Visitors guide</a></div></section>
+
+<form class="find-panel" action="/finder/" method="get" role="search">
+<div class="find-field"><label for="home-q">Name or area</label><input id="home-q" name="q" type="search" placeholder="e.g. Hannam, Busan, hotel"></div>
+<div class="find-field"><label for="home-city">City</label><select id="home-city" name="city"><option value="">Any city</option><option value="seoul">Seoul</option><option value="busan">Busan</option><option value="jeju">Jeju</option><option value="gyeonggi">Gyeonggi</option></select></div>
+<div class="find-field"><label for="home-type">Type</label><select id="home-type" name="type"><option value="">Any kind</option><option value="box">CrossFit · HYROX boxes</option><option value="sauna">Saunas</option></select></div>
+<button class="btn btn-d" type="submit">Search</button></form>
+<p class="find-note">First time in Korea? <a href="/guides/">Read the Visitors guide →</a></p>
 
 <section class="sec home-results"><div class="sec-h"><h2>Only verified places.</h2><a href="/finder/">See all {len(venues)} →</a></div>
 <div class="grid home-grid">{"".join(home_card(v) for v in preview)}</div>
@@ -621,7 +626,7 @@ def main():
     else:
         (dist / "robots.txt").write_text("User-agent: *\nDisallow: /\n")
     (dist / "_headers").write_text("/*\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: strict-origin-when-cross-origin\n  X-Frame-Options: DENY\n  Permissions-Policy: camera=(), microphone=(), geolocation=()\n"
-        "  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'\n"
+        "  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'\n"
         "/assets/*\n  Cache-Control: public, max-age=86400\n/*.html\n  Cache-Control: public, max-age=0, must-revalidate\n")
     subset_fonts(dist)
     bad = leak_check(dist)
