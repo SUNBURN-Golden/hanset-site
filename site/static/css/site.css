@@ -235,7 +235,7 @@ table.t th{background:var(--surface-2);font-size:.82rem}
 .illc span em{font-style:normal;font-size:var(--fs-xs);color:var(--muted)}
 @media(min-width:720px){.illrow{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;overflow:visible}.illc{display:block;padding:0}.illc picture{display:block}.illc img{width:100%;height:auto;object-fit:fill;border:0;border-radius:0}.illc span{display:block;padding:8px 12px}.illc span em{display:none}}
 
-/* archive (조감도 아카이브) 2026-10-18 */
+/* archive (손그림 아카이브) 2026-10-18 */
 .arcgrid{display:flex;flex-direction:column;gap:14px;margin:6px 0 22px}
 .arc{display:flex;gap:14px;align-items:flex-start;border:1px solid var(--line);border-radius:12px;background:var(--surface);padding:10px;scroll-margin-top:84px}
 .arcimg{flex:0 0 96px;display:block}
