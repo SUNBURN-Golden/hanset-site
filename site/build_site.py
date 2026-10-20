@@ -179,7 +179,7 @@ class Site:
                 f'<div class="hrow"><a class="brand" href="/"><i></i>{BRAND_EN}<small lang="ko">{BRAND_KO}</small></a>'
                 f'<a class="pin" href="/finder/"{cur("finder")}>{FINDER_LABEL}</a></div>'
                 f'<nav class="nav" aria-label="Main menu"><a href="/"{cur("home")}>Home</a>'
-                f'<a href="/magazine/"{cur("magazine")}>Magazine</a><a href="/guide/"{cur("guide")}>Guide</a><a href="/guides/"{cur("visitors")}>Visitors</a></nav></div></header>')
+                f'{MAG_NAV(cur) if ARTICLES else ""}<a href="/guide/"{cur("guide")}>Guide</a><a href="/guides/"{cur("visitors")}>Visitors</a></nav></div></header>')
 
     def foot(self, active):
         return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_EN}</strong> · Train. Sweat. One set.'
@@ -263,10 +263,9 @@ HYROX_STATIONS = [("SkiErg", "1,000m"), ("Sled Push", "50m"), ("Sled Pull", "50m
 
 
 # ------------------------------------------------------------------ magazine (articles)
-ARTICLES = [  # newest first; source markdown lives in content/articles/
-    {"slug": "shin-weight-loss-lean-mass", "file": "shin-weight-loss-lean-mass.md", "date": "2026-10-17", "category": "Wellness Report",
-     "title_en": "Losing weight. Losing muscle? Not so fast.",
-     "deck_en": "When lean mass drops on a body scan, it's easy to fear muscle loss. What that number really measures, and how to think about muscle while you lose weight."},
+MAG_NAV = lambda cur: f'<a href="/magazine/"{cur("magazine")}>Magazine</a>'
+ARTICLES = [  # newest first; source markdown lives in content/articles/. Empty = magazine hidden (nav, home, /magazine/ not built).
+    # 2026-10-20: old Wellness Report removed (archived in content/articles/_archive/). New English articles go here.
 ]
 
 def parse_article(meta):
@@ -339,6 +338,8 @@ def build(site, venues, events, today):
                       f'<a class="race-strip-link race-strip-wide" href="/hyrox-seoul/"><span>HYROX Seoul</span><span>·</span>'
                       f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>KINTEX</span><span>·</span><span>Guide ›</span></a>'
                       f'</div>')
+    home_mag = (f'''<section class="sec home-mag"><div class="sec-h"><h2>Read first. Every claim cited.</h2><a href="/magazine/">All articles ›</a></div>
+<div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))} · Article in Korean</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>''' if ARTICLES else '')
     guide_rows = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _ in GUIDES)
     city_jump = "".join(f'<a href="/finder/?city={k}">{E(c)}</a>' for c, k in CITY_KEY.items())
     body = f'''
@@ -357,8 +358,7 @@ def build(site, venues, events, today):
 {race_strip}
 <p class="safety-line">{SAFETY}</p>
 
-<section class="sec home-mag"><div class="sec-h"><h2>Read first. Every claim cited.</h2><a href="/magazine/">All articles ›</a></div>
-<div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))} · Article in Korean</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>
+{home_mag}
 
 <section class="sec"><div class="sec-h"><h2>First time? No problem.</h2><a href="/guide/#pictures">View larger</a></div>
 <p class="muted">CrossFit boxes, Boutique Saunas · Hotel Saunas. One drawing each, before you go. General examples. May differ from the actual venue.</p>
@@ -494,11 +494,11 @@ def build(site, venues, events, today):
 
     # ---- magazine
     arts = [parse_article(m) for m in ARTICLES]
-    for a in arts:
+    for a in arts:  # magazine pages only when there are articles
         site.add(f"/magazine/{a['slug']}/", a["title_en"], clip(a["deck_en"]), article_html(a), "magazine")
     mcards = "".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3>'
                      f'<div class="loc">{E(a["deck_en"])}</div><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))} · Article in Korean</div></article>' for a in arts)
-    site.add("/magazine/", "Magazine", "Wellness reports from HANSET editors. Research and official sources, made easy to read.",
+    if arts: site.add("/magazine/", "Magazine", "Wellness reports from HANSET editors. Research and official sources, made easy to read.",
              f'<div class="page"><h1>Magazine</h1><p class="lead">Research, made readable. Every article cited.</p><p class="muted">Articles are currently in Korean.</p></div><div class="grid">{mcards}</div>', "magazine")
 
     # ---- archive (조감도 아카이브)
