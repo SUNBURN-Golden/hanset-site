@@ -59,18 +59,21 @@ def fchk(v):
     rows = "".join(f'<tr><th>{lab}</th>' + (f'<td>{E(d[k])}</td>' if d.get(k) else '<td class="unk">Not confirmed</td>') + '</tr>' for k, lab in FCHK_KEYS)
     return f'<h2>Foreigner checklist</h2><table class="facts"><tbody>{rows}</tbody></table><p class="muted">From the official page only, checked {dot(v["last_verified"])}. Not confirmed? Ask the venue before you go.</p>'
 
+GUIDES = [  # (slug, title, description); page bodies are built in guides()
+    ("tattoo-friendly-saunas-korea", "Tattoos and saunas in Korea", "What official pages of Korean hotel saunas and spas say about tattoos. Verified, dated, sourced."),
+    ("hotel-saunas-korea-non-guests", "Hotel saunas in Korea: can non-guests get in?", "Which Korean hotel saunas are open to visitors without a room, per their official pages."),
+    ("crossfit-hyrox-drop-in-korea", "CrossFit & HYROX drop-in in Korea", "CrossFit and HYROX boxes in Korea that list drop-ins or English support on their official pages.")]
+
 def guides(site, venues):
     sau = [v for v in venues if v["kind_key"] == "sauna"]; box = [v for v in venues if v["kind_key"] == "box"]
     def tbl(vs, key, head):
         r = "".join(f'<tr><th><a href="/finder/{v["slug"]}/">{E(v["title"])}</a><br><span class="muted">{E(v["city_ko"])}</span></th>' + (f'<td>{E(FOREIGNER.get(v["slug"],{}).get(key))}</td>' if FOREIGNER.get(v["slug"],{}).get(key) else '<td class="unk">Not confirmed</td>') + f'<td>{dot(v["last_verified"])} · <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></td></tr>' for v in vs)
         return f'<table class="facts"><thead><tr><th>Venue</th><th>{head}</th><th>Checked · Source</th></tr></thead><tbody>{r}</tbody></table>'
     note = '<p class="muted">Official pages only. Every line links to its source and check date. Rules change. Confirm with the venue before you go.</p>'
-    G = [("tattoo-friendly-saunas-korea", "Tattoos and saunas in Korea", "What official pages of Korean hotel saunas and spas say about tattoos. Verified, dated, sourced.",
-          "<h1>Tattoos? Read this first.</h1><p class=\"lead\">Some Korean saunas limit entry with tattoos. Here’s exactly what each official page says. Nothing more.</p>" + note + tbl(sau, "tattoo", "Tattoo rule")),
-         ("hotel-saunas-korea-non-guests", "Hotel saunas in Korea: can non-guests get in?", "Which Korean hotel saunas are open to visitors without a room, per their official pages.",
-          "<h1>No room? Some doors still open.</h1><p class=\"lead\">Hotel saunas in Seoul, Busan and Jeju. Who gets in, straight from the official pages.</p>" + note + tbl(sau, "dropin", "Open to visitors?") + f'<p class="safety">{SAFETY}</p>'),
-         ("crossfit-hyrox-drop-in-korea", "CrossFit & HYROX drop-in in Korea", "CrossFit and HYROX boxes in Korea that list drop-ins or English support on their official pages.",
-          "<h1>Traveling? Keep training.</h1><p class=\"lead\">CrossFit and HYROX boxes in Korea. Drop-in and English support, from official pages only.</p>" + note + tbl(box, "dropin", "Drop-in") + "<h2>English support</h2>" + tbl(box, "english", "English"))]
+    bodies = {"tattoo-friendly-saunas-korea": "<h1>Tattoos? Read this first.</h1><p class=\"lead\">Some Korean saunas limit entry with tattoos. Here’s exactly what each official page says. Nothing more.</p>" + note + tbl(sau, "tattoo", "Tattoo rule"),
+              "hotel-saunas-korea-non-guests": "<h1>No room? Some doors still open.</h1><p class=\"lead\">Hotel saunas in Seoul, Busan and Jeju. Who gets in, straight from the official pages.</p>" + note + tbl(sau, "dropin", "Open to visitors?") + f'<p class="safety">{SAFETY}</p>',
+              "crossfit-hyrox-drop-in-korea": "<h1>Traveling? Keep training.</h1><p class=\"lead\">CrossFit and HYROX boxes in Korea. Drop-in and English support, from official pages only.</p>" + note + tbl(box, "dropin", "Drop-in") + "<h2>English support</h2>" + tbl(box, "english", "English")}
+    G = [(s, t, d, bodies[s]) for s, t, d in GUIDES]
     links = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _, _ in G)
     for s, t, d, b in G:
         site.add(f"/guides/{s}/", t, d, f'<div class="page">{b}<h2>More guides</h2><ul class="clean">{links}</ul></div>', "visitors")
@@ -336,13 +339,20 @@ def build(site, venues, events, today):
                       f'<a class="race-strip-link race-strip-wide" href="/hyrox-seoul/"><span>HYROX Seoul</span><span>·</span>'
                       f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>KINTEX</span><span>·</span><span>Guide ›</span></a>'
                       f'</div>')
+    guide_rows = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _ in GUIDES)
+    city_jump = "".join(f'<a href="/finder/?city={k}">{E(c)}</a>' for c, k in CITY_KEY.items())
     body = f'''
-<section class="hero home-hero"><h1>Train here. Sweat there. Officially verified.</h1>
-<a class="btn btn-a region-pick" href="/finder/">Pick a city</a></section>
+<section class="hero home-hero"><h1>Can I go? Know before you go.</h1>
+<p class="lead">CrossFit and HYROX drop-ins, boutique saunas and hotel saunas across Korea. Tattoo rules, non-guest access and drop-in, from each official page.</p>
+<div class="hero-ctas"><a class="btn btn-d" href="/finder/">Find a place</a> <a class="btn btn-ghost" href="/guides/">Visitors guide</a></div>
+<nav class="city-jump" aria-label="Jump to a city">{city_jump}</nav></section>
 
 <section class="sec home-results"><div class="sec-h"><h2>Only verified places.</h2><a href="/finder/">See all {len(venues)} →</a></div>
 <div class="grid home-grid">{"".join(home_card(v) for v in preview)}</div>
 <p class="muted trust">Every source. Every date.</p></section>
+
+<section class="sec home-guides"><h2>Visitors guide</h2>
+<ul class="guide-list">{guide_rows}</ul></section>
 
 {race_strip}
 <p class="safety-line">{SAFETY}</p>
@@ -354,6 +364,7 @@ def build(site, venues, events, today):
 <p class="muted">CrossFit boxes, Boutique Saunas · Hotel Saunas. One drawing each, before you go. General examples. May differ from the actual venue.</p>
 <div class="illrow">{"".join(f'<a class="illc" href="/guide/#{k}"><picture><source media="(min-width:720px)" srcset="/assets/img/guide/{f}.svg"><img src="/assets/img/guide/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(t)}</b><em>View ›</em></span></a>' for k, f, t, d in ILLUSTRATIONS)}</div></section>
 
+<div class="slot" data-slot="kix-ticketing" hidden></div>
 <section class="sec"><div class="sec-h"><h2>See it from above.</h2><a href="/archive/">Archive ›</a></div>
 <p class="muted">Floors and zones from official guides, redrawn by hand. Layouts are conceptual. May differ from the actual venue.</p>
 <div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>View ›</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
