@@ -375,12 +375,12 @@ def build(site, venues, events, today):
 <li><strong>Sort</strong>: default, recently checked, or A–Z.</li>
 </ul><p class="muted">More in the <a href="/guide/">Guide</a> and <a href="/faq/">FAQ</a>.</p></details></div>
 <form class="filters" aria-label="Filters">
- <div class="fgroup"><span>Search name or area</span><input id="f-q" type="search" placeholder="e.g. Hannam, Busan, hotel" autocomplete="off"></div>
+ <div class="fgroup"><label for="f-q">Search name or area</label><input id="f-q" type="search" placeholder="e.g. Hannam, Busan, hotel" autocomplete="off"></div>
  <div class="fgroup"><span>City</span>{seg("city", [("", "All"), ("seoul", "Seoul"), ("busan", "Busan"), ("jeju", "Jeju"), ("gyeonggi", "Gyeonggi")])}</div>
  <div class="fgroup"><span>Type</span>{seg("type", [("", "All"), ("box", "CrossFit · HYROX boxes"), ("sauna", "Saunas")])}</div>
- <div class="fgroup"><span>Sauna type</span><select id="f-sub"><option value="">All</option><option value="hotel">Hotel Saunas</option><option value="boutique">Boutique Saunas</option><option value="spa">Large Spa · Hot Spring</option></select></div>
- <div class="fgroup"><span>Sort</span><select id="f-sort"><option value="">Default</option><option value="date">Recently checked</option><option value="name">A–Z</option></select></div>
- <div class="fgroup"><span>Sunday</span><select id="f-sunday"><option value="">All</option><option value="yes">Open (verified)</option><option value="no">Closed (verified)</option><option value="unk">Pending</option></select></div>
+ <div class="fgroup"><label for="f-sub">Sauna type</label><select id="f-sub"><option value="">All</option><option value="hotel">Hotel Saunas</option><option value="boutique">Boutique Saunas</option><option value="spa">Large Spa · Hot Spring</option></select></div>
+ <div class="fgroup"><label for="f-sort">Sort</label><select id="f-sort"><option value="">Default</option><option value="date">Recently checked</option><option value="name">A–Z</option></select></div>
+ <div class="fgroup"><label for="f-sunday">Sunday</label><select id="f-sunday"><option value="">All</option><option value="yes">Open (verified)</option><option value="no">Closed (verified)</option><option value="unk">Pending</option></select></div>
  <div class="fgroup"><span>Price</span><label class="chk"><input id="f-price" type="checkbox"> Price confirmed only</label></div>
  <div class="fgroup"><span>Official lists</span><label class="chk"><input id="f-hyrox" type="checkbox"> HYROX gyms (official list)</label> <label class="chk"><input id="f-cf" type="checkbox"> CrossFit affiliates (verified)</label></div>
  <div class="fgroup"><span>&nbsp;</span><button id="f-reset" data-reset type="button" class="btn btn-d">Start over</button></div>

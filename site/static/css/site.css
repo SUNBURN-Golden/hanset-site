@@ -120,7 +120,7 @@ p,li{max-width:38em}
 .finder-head{padding:22px 0 6px;max-width:40em}
 .filters{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;display:grid;gap:12px;margin:12px 0}
 .fgroup{display:flex;flex-direction:column;gap:6px}
-.fgroup>span{font-size:.78rem;font-weight:700;color:var(--muted);letter-spacing:.04em}
+.fgroup>span,.fgroup>label:first-child{font-size:.78rem;font-weight:700;color:var(--muted);letter-spacing:.04em}
 .seg{display:flex;flex-wrap:wrap;gap:6px}
 .seg button,.seg label{font:inherit;font-size:.88rem;border:1.5px solid var(--line);background:var(--field);color:var(--ink);padding:6px 13px;border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;min-height:44px}
 .seg button[aria-pressed=true]{background:var(--contrast);color:var(--on-contrast);border-color:var(--contrast)}
