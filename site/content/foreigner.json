@@ -1,0 +1,22 @@
+{
+ "_readme": "Foreigner checklist per venue slug. Only facts already read on the venue's OFFICIAL page (the venue page's source + check date). Venue email replies are NOT used here. Missing key = Not confirmed. Keys: tattoo, card (foreign card payment), english (English booking/staff), dropin (open to visitors without a room/membership).",
+ "grand-josun-busan": {"tattoo": "Tattoos 15cm or larger must be covered with a patch. Not coverable = no entry.", "dropin": "Not stated for non-guests."},
+ "paradise-hotel-busan": {"dropin": "No. Hotel guests only."},
+ "commodore-hotel-busan": {"dropin": "Yes, walk-in rate listed. Adult men only."},
+ "shilla-jeju": {"tattoo": "Tattoos may limit entry.", "dropin": "No. Hotel guests only."},
+ "fraser-place-central-seoul": {"dropin": "Hotel guests. Non-guest access not stated."},
+ "orakai-daehakro": {"dropin": "Yes. Non-guests welcome."},
+ "grand-josun-jeju": {"dropin": "Hotel guests. Non-guest access not stated."},
+ "crossfit-hannam": {"dropin": "Yes. Drop-in rate listed."},
+ "crossfit-zest": {"dropin": "Yes. Drop-in rate listed."},
+ "crossfit-super-sapiens": {"dropin": "Yes. Drop-in rate listed."},
+ "holis-training-club": {"english": "Bilingual coaches."},
+ "heyday-cultures-crossfit": {"english": "English supported."},
+ "crossfit-grove-gunja": {"dropin": "Yes. Drop-in request form on its site."},
+ "crossfit-kilogram-tribe": {"dropin": "Yes. Drop-in rate listed."},
+ "signiel-seoul": {"tattoo": "Tattoos may limit entry.", "dropin": "No. Members and hotel guests only."},
+ "signiel-busan": {"dropin": "No. Members and hotel guests only."},
+ "lotte-hotel-jeju": {"dropin": "No. Hotel guests only."},
+ "orakai-cheonggyesan": {"dropin": "Yes. Open to everyone, room or not."},
+ "heosimcheong-busan": {"tattoo": "No entry with tattoos."}
+}

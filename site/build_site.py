@@ -52,6 +52,31 @@ def span(a, b, ref_year):
         return (f"{d.month}/{d.day} ({wd(d)})" if d.year == ref_year else f"{d.year}.{d.month}.{d.day} ({wd(d)})")
     return f(a) if a == b else f"{f(a)}–{f(b)}"
 
+FOREIGNER = json.loads((ROOT / "content/foreigner.json").read_text(encoding="utf-8"))
+FCHK_KEYS = [("tattoo", "Tattoos"), ("card", "Foreign card payment"), ("english", "English booking / staff"), ("dropin", "Drop-in for visitors")]
+def fchk(v):
+    d = FOREIGNER.get(v["slug"], {})
+    rows = "".join(f'<tr><th>{lab}</th>' + (f'<td>{E(d[k])}</td>' if d.get(k) else '<td class="unk">Not confirmed</td>') + '</tr>' for k, lab in FCHK_KEYS)
+    return f'<h2>Foreigner checklist</h2><table class="facts"><tbody>{rows}</tbody></table><p class="muted">From the official page only, checked {dot(v["last_verified"])}. Not confirmed? Ask the venue before you go.</p>'
+
+def guides(site, venues):
+    sau = [v for v in venues if v["kind_key"] == "sauna"]; box = [v for v in venues if v["kind_key"] == "box"]
+    def tbl(vs, key, head):
+        r = "".join(f'<tr><th><a href="/finder/{v["slug"]}/">{E(v["title"])}</a><br><span class="muted">{E(v["city_ko"])}</span></th>' + (f'<td>{E(FOREIGNER.get(v["slug"],{}).get(key))}</td>' if FOREIGNER.get(v["slug"],{}).get(key) else '<td class="unk">Not confirmed</td>') + f'<td>{dot(v["last_verified"])} · <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></td></tr>' for v in vs)
+        return f'<table class="facts"><thead><tr><th>Venue</th><th>{head}</th><th>Checked · Source</th></tr></thead><tbody>{r}</tbody></table>'
+    note = '<p class="muted">Official pages only. Every line links to its source and check date. Rules change. Confirm with the venue before you go.</p>'
+    G = [("tattoo-friendly-saunas-korea", "Tattoos and saunas in Korea", "What official pages of Korean hotel saunas and spas say about tattoos. Verified, dated, sourced.",
+          "<h1>Tattoos? Read this first.</h1><p class=\"lead\">Some Korean saunas limit entry with tattoos. Here’s exactly what each official page says. Nothing more.</p>" + note + tbl(sau, "tattoo", "Tattoo rule")),
+         ("hotel-saunas-korea-non-guests", "Hotel saunas in Korea: can non-guests get in?", "Which Korean hotel saunas are open to visitors without a room, per their official pages.",
+          "<h1>No room? Some doors still open.</h1><p class=\"lead\">Hotel saunas in Seoul, Busan and Jeju. Who gets in, straight from the official pages.</p>" + note + tbl(sau, "dropin", "Open to visitors?") + f'<p class="safety">{SAFETY}</p>'),
+         ("crossfit-hyrox-drop-in-korea", "CrossFit & HYROX drop-in in Korea", "CrossFit and HYROX boxes in Korea that list drop-ins or English support on their official pages.",
+          "<h1>Traveling? Keep training.</h1><p class=\"lead\">CrossFit and HYROX boxes in Korea. Drop-in and English support, from official pages only.</p>" + note + tbl(box, "dropin", "Drop-in") + "<h2>English support</h2>" + tbl(box, "english", "English"))]
+    links = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _, _ in G)
+    for s, t, d, b in G:
+        site.add(f"/guides/{s}/", t, d, f'<div class="page">{b}<h2>More guides</h2><ul class="clean">{links}</ul></div>', "visitors")
+    site.add("/guides/", "Guides for visitors to Korea", "Verified guides for international visitors: saunas, tattoos, hotel saunas, CrossFit and HYROX drop-ins in Korea.",
+             f'<div class="page"><h1>Visiting Korea? Start here.</h1><p class="lead">Short guides. Official facts only.</p><ul class="clean">{links}</ul></div>', "visitors")
+
 # ------------------------------------------------------------------ data
 def load(today, ads_path):
     content = json.loads((ROOT / "content/venues.json").read_text(encoding="utf-8"))
@@ -151,7 +176,7 @@ class Site:
                 f'<div class="hrow"><a class="brand" href="/"><i></i>{BRAND_EN}<small lang="ko">{BRAND_KO}</small></a>'
                 f'<a class="pin" href="/finder/"{cur("finder")}>{FINDER_LABEL}</a></div>'
                 f'<nav class="nav" aria-label="Main menu"><a href="/"{cur("home")}>Home</a>'
-                f'<a href="/magazine/"{cur("magazine")}>Magazine</a><a href="/guide/"{cur("guide")}>Guide</a></nav></div></header>')
+                f'<a href="/magazine/"{cur("magazine")}>Magazine</a><a href="/guide/"{cur("guide")}>Guide</a><a href="/guides/"{cur("visitors")}>Visitors</a></nav></div></header>')
 
     def foot(self, active):
         return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_EN}</strong> · Train. Sweat. One set.'
@@ -418,7 +443,7 @@ def build(site, venues, events, today):
 {v_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{adnote}{stale}
 <p class="lead">{E(v["summary"])}</p>
 <table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{offrows}</tbody></table>
-{tips}{unv}{arch_blk}
+{tips}{unv}{fchk(v)}{arch_blk}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong></p><p>Source: {" · ".join(srcs)}</p>
 <p>Something's off? Tell us via <a href="/corrections/">Corrections</a>. Prices and closing days change.</p></div>
 {next_html}
@@ -494,6 +519,7 @@ def build(site, venues, events, today):
             frag = frag.replace("<!--ILLUSTRATIONS-->", f'<h2 id="pictures">In pictures</h2><p>Hand-drawn guides for first-timers. General examples. Layout and process may differ from the actual venue. Tap a drawing to open it larger in a new tab (pinch to zoom).</p><div class="figs">{figs}</div>')
         site.add(f"/{slug}/", title, desc, f'<div class="page">{frag}</div>', active)
 
+    guides(site, venues)
     site.add("/404.html", "Page not found", "This page doesn’t exist.", f'<div class="page"><h1>Lost? Let’s get you back.</h1><p>This page doesn’t exist. Start again from <a href="/">Home</a> or the <a href="/finder/">{FINDER_LABEL}</a>.</p></div>')
 
 def asset_ver(rel):
