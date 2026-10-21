@@ -6,4 +6,4 @@
 Build rules (`site/verified.py`): https URLs only; missing/invalid required field = item dropped with a WARN;
 phone/email-like text = item dropped; events that ended before the build date are skipped; sorted by date (creators A–Z).
 Missing or empty file = section hidden, no crash. No photos/avatars are loaded; creators show initials.
-`examples/*.json` hold fake data marked `"example": true` — always skipped, used only by `build_site.py --verified-dir data/verified/examples` previews.
+`examples/*.json` hold fake data marked `"example": true` — always skipped, used only by `build_site.py --verified-examples` previews (never with `--release`).
