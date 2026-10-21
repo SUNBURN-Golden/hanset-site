@@ -152,6 +152,10 @@ def load(today, ads_path):
     return venues, events, skipped, ev_skipped
 
 # ------------------------------------------------------------------ html pieces
+IG_URL = "https://www.instagram.com/hanset.mag/"
+IG_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.7" r="1.1" fill="currentColor" stroke="none"/></svg>'
+IG_ATTRS = f'href="{IG_URL}" target="_blank" rel="noopener noreferrer" aria-label="HANSET on Instagram @hanset.mag"'
+
 class Site:
     def __init__(self, today, release):
         self.today, self.release = today, release
@@ -177,7 +181,7 @@ class Site:
         def cur(k): return ' aria-current="page"' if active == k else ""
         return (f'<a class="skip" href="#main">Skip to content</a><header class="site-header"><div class="wrap">'
                 f'<div class="hrow"><a class="brand" href="/"><i></i>{BRAND_EN}<small lang="ko">{BRAND_KO}</small></a>'
-                f'<a class="pin" href="/finder/"{cur("finder")}>{FINDER_LABEL}</a></div>'
+                f'<div class="hact"><a class="pin" href="/finder/"{cur("finder")}>{FINDER_LABEL}</a><a class="ig" {IG_ATTRS}>{IG_SVG}</a></div></div>'
                 f'<nav class="nav" aria-label="Main menu"><a href="/"{cur("home")}>Home</a>'
                 f'{MAG_NAV(cur) if ARTICLES else ""}<a href="/guide/"{cur("guide")}>Guide</a><a href="/guides/"{cur("visitors")}>Visitors</a></nav></div></header>')
 
@@ -185,6 +189,7 @@ class Site:
         return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_EN}</strong> · Train. Sweat. One set.'
                 f'<div class="flinks"><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a><a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
                 f'<a href="/privacy/">Privacy</a></div>'
+                f'<p class="fsocial"><a class="ig ig-f" {IG_ATTRS}>{IG_SVG}<span>@hanset.mag</span></a></p>'
                 f'<p>Prices and closing days change. Every entry shows its check date and source. Confirm with the venue before you go.</p>'
                 f'<p>© 2026 {BRAND_EN}</p></div></footer>')
 
