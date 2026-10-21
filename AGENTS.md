@@ -5,7 +5,7 @@ Violating any of them = reject the PR. If a rule seems to conflict with a task, 
 
 ## Roles
 - **Frontend work**: CrazyFrontendManBOT, **PR-only**. Never push to `main` directly.
-- **Merging**: only the owner (준태님). Nobody else merges.
+- **Merging**: the HANSET 운영 bot reviews and merges hanset-site PRs, then deploys with `build_site.py --release` (authorized by 준태님 on 2026-10-19). Other agents open PRs but do not merge.
 - **Deploy**: only the HANSET operations bot (Cloudflare Pages project `hanset`). Frontend workers have **no Cloudflare tokens** and must not ask for, create, or commit any token/secret/key. Do not add deploy scripts or CI deploy steps to the repo.
 - Content/data facts (prices, hours, venues, events) are maintained by the HANSET operations bot through the CSVs → `site/content/*.json`. Frontend PRs must not change facts.
 
