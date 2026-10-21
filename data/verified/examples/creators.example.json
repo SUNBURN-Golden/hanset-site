@@ -1,0 +1,4 @@
+{"version":1,"updated":"2026-10-21","creators":[
+{"example":true,"id":"example-runner","display_name":"Example Runner","handle":"@example.runner","platform":"instagram","profile_url":"https://example.com/runner","focus":["run","hyrox"],"city":"Seoul","verified_on":"2026-10-21"},
+{"example":true,"id":"example-sauna-notes","display_name":"Example Sauna Notes","handle":"@example.sauna","platform":"youtube","profile_url":"https://example.com/sauna","focus":["sauna"],"city":"Busan","verified_on":"2026-10-21"},
+{"example":true,"id":"example-box-coach","display_name":"Example Box Coach","handle":"@example.coach","platform":"instagram","profile_url":"https://example.com/coach","focus":["crossfit"],"verified_on":"2026-10-21"}]}

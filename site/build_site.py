@@ -14,10 +14,12 @@ import argparse, csv, datetime as dt, html, json, re, shutil, sys
 from pathlib import Path
 from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo
+import verified as VF
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT.parent
 DIST = ROOT / "dist"
+VERIFIED = DATA / "data/verified"
 SITE_URL = "https://hanset.soulbound.co.kr"
 BRAND_KO, BRAND_EN = "한셋", "HANSET"
 FINDER_LABEL = "Drop-in & Sauna Finder"
@@ -151,7 +153,42 @@ def load(today, ads_path):
     ev_skipped = [r["name"] for r in read_csv("events.csv") if r["name"] not in ev_content]
     return venues, events, skipped, ev_skipped
 
+# ------------------------------------------------------------------ verified feeds (data/verified/*.json)
+CAT_LABEL = {"hyrox": "HYROX", "crossfit": "CrossFit", "run": "Run", "sauna": "Sauna", "yoga": "Yoga", "other": "Event"}
+CAT_SHAPE = {"hyrox": '<rect x="2" y="2" width="10" height="10" rx="2"/>', "crossfit": '<path d="M7 1.5 12.5 12h-11z"/>',
+             "run": '<circle cx="7" cy="7" r="5.5"/>', "sauna": '<path d="M1.5 9.5a5.5 5.5 0 0 1 11 0z"/>',
+             "yoga": '<path d="M7 1 13 7 7 13 1 7z"/>', "other": '<circle cx="7" cy="7" r="3"/>'}
+NEW_TAB = '<span class="vh"> (opens in a new tab)</span>'
+def cat_icon(c): return f'<svg class="vshape" viewBox="0 0 14 14" width="14" height="14" aria-hidden="true" focusable="false">{CAT_SHAPE[c]}</svg>'
+def vevent_card(e):
+    s, n = e["start"], e["end"]
+    day = str(s.day) if s == n else (f"{s.day}–{n.day}" if (s.year, s.month) == (n.year, n.month) else str(s.day))
+    till = f'<span class="vtill">to {MON[n.month]} {n.day}</span>' if (s.year, s.month) != (n.year, n.month) else ""
+    yr = f" {s.year}" if s.year != dt.date.today().year else ""
+    price = f'<p class="vnote">{E(e["price_note"])}</p>' if e["price_note"] else ""
+    return (f'<article class="vcard" id="v-{e["id"]}"><time class="vdate" datetime="{s.isoformat()}"><span class="vmon">{MON[s.month]}{yr}</span><span class="vday">{day}</span>{till}</time>'
+            f'<div class="vbody"><span class="vcat vcat-{e["category"]}">{cat_icon(e["category"])}{CAT_LABEL[e["category"]]}</span><h3>{E(e["title"])}</h3>'
+            f'<p class="vloc">{E(e["city"])} · {E(e["venue"])}</p>{price}<p class="vmeta">Checked {dot(e["verified_on"])} · <a href="{E(e["source_url"])}" rel="noopener noreferrer">Source</a></p></div>'
+            f'<a class="vcta" href="{E(e["official_url"])}" target="_blank" rel="noopener noreferrer">Official page<span class="vh"> for {E(e["title"])}</span>{NEW_TAB} <span aria-hidden="true">↗</span></a></article>')
+PLAT = {"instagram": "Instagram", "youtube": "YouTube", "other": "Profile"}
+def initials(name):
+    w = [x for x in re.split(r"[\s._-]+", name) if x]
+    return "".join(x[0] for x in w[:2]).upper() or "?"
+def creator_card(c):
+    focus = " · ".join(CAT_LABEL.get(f, f.capitalize()) for f in c["focus"])
+    city = f' · {E(c["city"])}' if c["city"] else ""
+    return (f'<article class="vcard vcreator" id="c-{c["id"]}"><span class="vinit" aria-hidden="true">{E(initials(c["display_name"]))}</span>'
+            f'<div class="vbody"><h3>{E(c["display_name"])}</h3><p class="vloc">{E(c["handle"])} · {PLAT[c["platform"]]}</p>'
+            f'<p class="vfocus">{E(focus)}{city}</p><p class="vmeta">Checked {dot(c["verified_on"])}</p></div>'
+            f'<a class="vcta" href="{E(c["profile_url"])}" target="_blank" rel="noopener noreferrer">View<span class="vh"> {E(c["display_name"])} on {PLAT[c["platform"]]}</span>{NEW_TAB} <span aria-hidden="true">↗</span></a></article>')
+def vevents_section(vevents):
+    if not vevents: return ""
+    return (f'<section class="sec vsec" aria-labelledby="vev-h"><div class="sec-h"><h2 id="vev-h">Coming up</h2></div>'
+            f'<div class="vlist">{"".join(vevent_card(e) for e in vevents)}</div>'
+            f'<p class="muted">Official pages only. Dates change. Check before you go.</p></section>')
+
 # ------------------------------------------------------------------ html pieces
+CREATORS_LINK = '<a href="/creators/">Creators</a>'
 IG_URL = "https://www.instagram.com/hanset.mag/"
 IG_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.7" r="1.1" fill="currentColor" stroke="none"/></svg>'
 IG_ATTRS = f'href="{IG_URL}" target="_blank" rel="noopener noreferrer" aria-label="HANSET on Instagram @hanset.mag"'
@@ -160,6 +197,7 @@ class Site:
     def __init__(self, today, release):
         self.today, self.release = today, release
         self.pages = {}  # path -> html
+        self.creators = False
 
     def head(self, title, desc, path):
         full = title if title.startswith(BRAND_EN) else f"{title} · {BRAND_EN}"
@@ -187,7 +225,7 @@ class Site:
 
     def foot(self, active):
         return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_EN}</strong> · Train. Sweat. One set.'
-                f'<div class="flinks"><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a><a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
+                f'<div class="flinks"><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a>{CREATORS_LINK if self.creators else ""}<a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
                 f'<a href="/privacy/">Privacy</a></div>'
                 f'<p class="fsocial"><a class="ig ig-f" {IG_ATTRS}>{IG_SVG}<span>@hanset.mag</span></a></p>'
                 f'<p>Prices and closing days change. Every entry shows its check date and source. Confirm with the venue before you go.</p>'
@@ -321,7 +359,7 @@ def article_html(a):
             f'<div class="note">{E(a["안내 문구"])}</div></div>'
             f'<p><a href="/magazine/">← All articles</a></p></article>')
 
-def build(site, venues, events, today):
+def build(site, venues, events, today, vevents=(), creators=()):
     by_slug = {v["slug"]: v for v in venues}
     feat = next(e for e in events if e["feature"])
     upcoming = [e for e in events if e["end"] >= today]
@@ -477,8 +515,16 @@ def build(site, venues, events, today):
     ebody = f'''<div class="page"><h1>Event Calendar</h1>
 <p class="lead">Official dates only. Straight from the organizers.</p></div>
 <div class="ev">{cards}</div>
+{vevents_section(vevents)}
 <div class="note">Races listed only on aggregator sites wait until the organizer confirms. Fees appear only when read on the official page. <a href="/events.ics">Download all dates (.ics)</a></div>'''
     site.add("/events/", "Event Calendar", "HYROX Seoul, Urban Wave, the CrossFit Open and more. Race dates confirmed on official pages.", ebody, "events", ("dday.js",))
+
+    # ---- creators (verified feed; page only when there is data)
+    if creators:
+        cbody = (f'<div class="page"><h1>Creators</h1><p class="lead">People worth following. Training, racing, sauna.</p></div>'
+                 f'<section class="sec vsec" aria-label="Creators"><div class="vlist">{"".join(creator_card(c) for c in creators)}</div>'
+                 f'<p class="muted">Public profiles only. Checked on the date shown. No paid placements.</p></section>')
+        site.add("/creators/", "Creators", "CrossFit, HYROX, running and sauna creators in Korea. Public profiles, checked by date.", cbody, "creators")
 
     # ---- HYROX feature
     trs = "".join(f"<tr><td>{i}</td><td>1km</td><td>{E(en)}</td><td>{E(d)}</td></tr>" for i, (en, d) in enumerate(HYROX_STATIONS, 1))
@@ -608,12 +654,19 @@ ARCHIVE_BY_VENUE = {a[1]: a for a in ARCHIVE}
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--release", action="store_true"); ap.add_argument("--ads"); ap.add_argument("--today"); ap.add_argument("--out", default=str(DIST))
+    ap.add_argument("--verified-examples", action="store_true", help="preview only: render fake data from data/verified/examples")
     a = ap.parse_args()
     today = ymd(a.today) if a.today else dt.datetime.now(ZoneInfo("Asia/Seoul")).date()
     dist = Path(a.out)
     venues, events, skipped, ev_skipped = load(today, a.ads)
-    site = Site(today, a.release)
-    build(site, venues, events, today)
+    if a.verified_examples and a.release: sys.exit("ERROR: --verified-examples is preview-only; never with --release")
+    if a.verified_examples:
+        vevents = VF.load_events(VERIFIED / "examples/events.example.json", today, allow_example=True)
+        creators = VF.load_creators(VERIFIED / "examples/creators.example.json", allow_example=True)
+    else:
+        vevents = VF.load_events(VERIFIED / "events.json", today); creators = VF.load_creators(VERIFIED / "creators.json")
+    site = Site(today, a.release); site.creators = bool(creators)
+    build(site, venues, events, today, vevents, creators)
     if dist.exists(): shutil.rmtree(dist)
     dist.mkdir(parents=True)
     for path, h in site.pages.items():
@@ -636,7 +689,7 @@ def main():
     subset_fonts(dist)
     bad = leak_check(dist)
     total = sum(p.stat().st_size for p in dist.rglob("*") if p.is_file())
-    print(f"built {len(site.pages)} pages, {len(venues)} venues ({sum(v['kind_key']=='box' for v in venues)} boxes, {sum(v['kind_key']=='sauna' for v in venues)} saunas), {len(events)} events -> {dist}  ({total/1024:.0f} KB total)")
+    print(f"built {len(site.pages)} pages, {len(venues)} venues ({sum(v['kind_key']=='box' for v in venues)} boxes, {sum(v['kind_key']=='sauna' for v in venues)} saunas), {len(events)} events, {len(vevents)} verified-feed events, {len(creators)} creators -> {dist}  ({total/1024:.0f} KB total)")
     print(f"not published (no verified/partial content): {len(skipped)} venue rows, {len(ev_skipped)} event rows")
     for k, n, c in skipped[:0]: print("  ", k, n, c)
     if bad:
