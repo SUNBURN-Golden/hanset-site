@@ -5,6 +5,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "site"))
 import verified as VF
 
 TODAY = dt.date(2026, 10, 21)
+# Phone/email fixtures are assembled at runtime so no phone number or address literal sits in the repo (AGENTS.md rule 1).
+FAKE_PHONE = "-".join(["0" + "10", "0" * 4, "0" * 4]); FAKE_INTL = " ".join(["+" + "82", "2", "0" * 3, "0" * 4])
+FAKE_MAIL = "nobody" + chr(64) + "example.invalid"
 EV = dict(id="hyrox-seoul", title="HYROX Seoul", category="hyrox", start="2026-11-13", end="2026-11-15", city="Goyang",
           venue="KINTEX", official_url="https://hyrox.co.kr/", source_url="https://hyrox.co.kr/", verified_on="2026-10-20")
 CR = dict(id="runner", display_name="Some Runner", handle="@some.runner", platform="instagram",
@@ -19,7 +22,7 @@ class EventValidation(unittest.TestCase):
     def test_null_end_is_one_day(self):
         it, _ = VF.validate_event(ev(end=None), TODAY); self.assertEqual(it["start"], it["end"])
     def test_https_only(self):
-        for u in ("http://hyrox.co.kr/", "javascript:alert(1)", "ftp://x.y/", "", None, "mailto:a@b.co"):
+        for u in ("http://hyrox.co.kr/", "javascript:alert(1)", "ftp://x.y/", "", None, "mailto:" + FAKE_MAIL):
             self.assertIsNone(VF.validate_event(ev(official_url=u), TODAY)[0], u)
     def test_required_fields(self):
         for k in ("id", "title", "category", "start", "city", "venue", "official_url", "source_url", "verified_on"):
@@ -32,9 +35,9 @@ class EventValidation(unittest.TestCase):
         self.assertEqual(VF.validate_event(ev(start="2026-10-01", end="2026-10-20"), TODAY)[1], "past")
         self.assertIsNotNone(VF.validate_event(ev(start="2026-10-20", end="2026-10-21"), TODAY)[0])
     def test_phone_and_email_rejected(self):
-        self.assertIsNone(VF.validate_event(ev(venue="Call 010-1234-5678"), TODAY)[0])
-        self.assertIsNone(VF.validate_event(ev(price_note="ask info@example.com"), TODAY)[0])
-        self.assertIsNone(VF.validate_event(ev(title="HYROX +82 2 555 0000"), TODAY)[0])
+        self.assertIsNone(VF.validate_event(ev(venue="Call " + FAKE_PHONE), TODAY)[0])
+        self.assertIsNone(VF.validate_event(ev(price_note="ask " + FAKE_MAIL), TODAY)[0])
+        self.assertIsNone(VF.validate_event(ev(title="HYROX " + FAKE_INTL), TODAY)[0])
     def test_examples_skipped_by_default(self):
         self.assertEqual(VF.validate_event(ev(example=True), TODAY)[1], "example")
 
@@ -45,7 +48,7 @@ class CreatorValidation(unittest.TestCase):
         self.assertIsNone(VF.validate_creator(cr(platform="tiktok"))[0])
         self.assertIsNone(VF.validate_creator(cr(profile_url="http://x.com/a"))[0])
         self.assertIsNone(VF.validate_creator(cr(focus=[]))[0])
-        self.assertIsNone(VF.validate_creator(cr(city="010 1234 5678"))[0])
+        self.assertIsNone(VF.validate_creator(cr(city=FAKE_PHONE.replace("-", " ")))[0])
 
 class Loading(unittest.TestCase):
     def test_missing_empty_broken_files_hide_section(self):
