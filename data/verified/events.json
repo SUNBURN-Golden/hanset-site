@@ -1,1 +1,19 @@
-{"version":1,"updated":"2026-10-21","events":[]}
+{
+ "version": 1,
+ "updated": "2026-10-22",
+ "events": [
+  {
+   "id": "seoul-wellness-travel-week-2026",
+   "title": "Seoul Wellness Travel Week 2026",
+   "category": "other",
+   "start": "2026-10-24",
+   "end": "2026-11-04",
+   "city": "Seoul",
+   "venue": "Bongeunsa, Pilgyeongjae and more, Gangnam",
+   "official_url": "https://mediahub.seoul.go.kr/archives/2019810",
+   "source_url": "https://mediahub.seoul.go.kr/archives/2019810",
+   "verified_on": "2026-10-22",
+   "price_note": "Temple programs ₩5,000 each. Night audio meditation free. Book ahead."
+  }
+ ]
+}

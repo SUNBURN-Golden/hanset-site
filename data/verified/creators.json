@@ -1,1 +1,29 @@
-{"version":1,"updated":"2026-10-21","creators":[]}
+{
+ "version": 1,
+ "updated": "2026-10-22",
+ "creators": [
+  {
+   "id": "fitvely",
+   "display_name": "FITVELY 핏블리",
+   "handle": "@fitvely",
+   "platform": "youtube",
+   "profile_url": "https://www.youtube.com/@fitvely",
+   "focus": [
+    "strength",
+    "nutrition"
+   ],
+   "verified_on": "2026-10-22"
+  },
+  {
+   "id": "gym-jong-kook",
+   "display_name": "GYM JONG KOOK 김종국",
+   "handle": "@GYMJONGKOOK",
+   "platform": "youtube",
+   "profile_url": "https://www.youtube.com/@GYMJONGKOOK",
+   "focus": [
+    "strength"
+   ],
+   "verified_on": "2026-10-22"
+  }
+ ]
+}
