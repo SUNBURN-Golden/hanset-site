@@ -248,7 +248,8 @@ def v_badges(v, full=False):
     if v["ad"]: b.append(badge("Ad", "badge-ad"))
     b.append(badge("Box" if v["kind_key"] == "box" else "Sauna", "badge-box" if v["kind_key"] == "box" else "badge-sauna"))
     b.append(badge(v["kind"]))
-    b.append(badge("Verified" if v["status"] == "verified" else "Partly verified", "badge-ok" if v["status"] == "verified" else "badge-part"))
+    if v["c"].get("opening_soon"): b.append(badge("Opening soon", "badge-part"))
+    else: b.append(badge("Verified" if v["status"] == "verified" else "Partly verified", "badge-ok" if v["status"] == "verified" else "badge-part"))
     if v["stale"]: b.append(badge("Outdated", "badge-old"))
     for t in v["tags"]: b.append(badge(t))
     return '<div class="chips">' + "".join(b) + "</div>"
