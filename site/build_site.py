@@ -523,7 +523,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     if creators:
         cbody = (f'<div class="page"><h1>Creators</h1><p class="lead">People worth following. Training, racing, sauna.</p></div>'
                  f'<section class="sec vsec" aria-label="Creators"><div class="vlist">{"".join(creator_card(c) for c in creators)}</div>'
-                 f'<p class="muted">Public profiles only. Checked on the date shown. No paid placements.</p></section>')
+                 f'<p class="muted">Public profiles only. Each one checked on the date shown.</p></section>')
         site.add("/creators/", "Creators", "CrossFit, HYROX, running and sauna creators in Korea. Public profiles, checked by date.", cbody, "creators")
 
     # ---- HYROX feature
