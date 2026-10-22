@@ -197,18 +197,20 @@ class Site:
     def __init__(self, today, release):
         self.today, self.release = today, release
         self.pages = {}  # path -> html
+        self.noindex = set()  # pages kept out of canonical/sitemap even in release (e.g. /join/welcome/)
         self.creators = False
 
-    def head(self, title, desc, path):
+    def head(self, title, desc, path, noindex=False):
         full = title if title.startswith(BRAND_EN) else f"{title} · {BRAND_EN}"
-        robots = "" if self.release else '<meta name="robots" content="noindex,nofollow">\n'
-        canon = f'<link rel="canonical" href="{SITE_URL}{path}">\n' if self.release else ""
+        indexable = self.release and not noindex
+        robots = "" if indexable else '<meta name="robots" content="noindex,nofollow">\n'
+        canon = f'<link rel="canonical" href="{SITE_URL}{path}">\n' if indexable else ""
         og = (f'<meta property="og:type" content="website"><meta property="og:site_name" content="{BRAND_EN}">'
               f'<meta property="og:title" content="{E(full)}"><meta property="og:description" content="{E(desc)}">'
               + (f'<meta property="og:url" content="{SITE_URL}{path}"><meta property="og:locale" content="en_US">'
                  f'<meta property="og:image" content="{SITE_URL}/assets/img/og-image.png"><meta property="og:image:width" content="1200"><meta property="og:image:height" content="630">'
                  f'<meta property="og:image:alt" content="HANSET - hand-drawn floor plan of a CrossFit box">'
-                 f'<meta name="twitter:card" content="summary_large_image">' if self.release else ""))
+                 f'<meta name="twitter:card" content="summary_large_image">' if indexable else ""))
         return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
                 f'<title>{E(full)}</title><meta name="description" content="{E(desc)}">\n{robots}{canon}{og}'
                 f'<meta name="msvalidate.01" content="5986AEB0A3C1E9F1E558DA5CA02E1CE0" /><meta name="theme-color" content="#F5F2EC"><link rel="icon" href="/favicon.svg" type="image/svg+xml">'
@@ -225,16 +227,17 @@ class Site:
 
     def foot(self, active):
         return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_EN}</strong> · Train. Sweat. One set.'
-                f'<div class="flinks"><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a>{CREATORS_LINK if self.creators else ""}<a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
+                f'<div class="flinks"><a href="/join/">Join</a><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a>{CREATORS_LINK if self.creators else ""}<a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
                 f'<a href="/privacy/">Privacy</a></div>'
                 f'<p class="fsocial"><a class="ig ig-f" {IG_ATTRS}>{IG_SVG}<span>@hanset.mag</span></a></p>'
                 f'<p>Prices and closing days change. Every entry shows its check date and source. Confirm with the venue before you go.</p>'
                 f'<p>© 2026 {BRAND_EN}</p></div></footer>')
 
-    def add(self, path, title, desc, body, active="", scripts=()):
+    def add(self, path, title, desc, body, active="", scripts=(), noindex=False):
+        if noindex: self.noindex.add(path)
         sc = "".join(f'<script src="/assets/js/{s}?v={asset_ver("js/"+s)}" defer></script>' for s in scripts)
         out_path = path
-        self.pages[out_path] = (self.head(title, desc, path) + f'<body>{self.nav(active)}<main id="main" class="wrap">{body}</main>{self.foot(active)}{sc}</body></html>')
+        self.pages[out_path] = (self.head(title, desc, path, noindex) + f'<body>{self.nav(active)}<main id="main" class="wrap">{body}</main>{self.foot(active)}{sc}</body></html>')
 
 def clip(t, n=160):
     """Meta description: never cut inside a word or number; prefer a sentence end."""
@@ -587,6 +590,19 @@ def build(site, venues, events, today, vevents=(), creators=()):
             frag = frag.replace("<!--ILLUSTRATIONS-->", f'<h2 id="pictures">In pictures</h2><p>Hand-drawn guides for first-timers. General examples. Layout and process may differ from the actual venue. Tap a drawing to open it larger in a new tab (pinch to zoom).</p><div class="figs">{figs}</div>')
         site.add(f"/{slug}/", title, desc, f'<div class="page">{frag}</div>', active)
 
+    # ---- join (Google sign-up; the OAuth flow runs in functions/api/auth/*, server-side only)
+    jbody = '''<h1>Join HANSET.</h1>
+<p class="lead">Weekly drop-ins and saunas, checked.</p>
+<p class="join-error" id="join-error" hidden role="alert">Something went wrong. Try again.</p>
+<form class="join-form" method="get" action="/api/auth/google">
+<input type="hidden" name="nl" value="0">
+<label class="chk"><input type="checkbox" name="nl" value="1" checked> Send me the weekly picks.</label>
+<button class="btn btn-d" type="submit">Continue with Google</button>
+</form>
+<p class="muted">Google only. We keep your name and email. Nothing else. <a href="/privacy/">Privacy</a></p>'''
+    site.add("/join/", f"{BRAND_EN} — Join", "Join HANSET with Google. Weekly drop-ins and saunas, checked.", f'<div class="page">{jbody}</div>', "about", ("join.js",))
+    site.add("/join/welcome/", "You're in", "Welcome to HANSET.", '<div class="page"><h1>You&#x27;re in.</h1><p><a class="btn btn-d" href="/">Back home</a></p></div>', "about", noindex=True)
+
     guides(site, venues)
     site.add("/404.html", "Page not found", "This page doesn’t exist.", f'<div class="page"><h1>Lost? Let’s get you back.</h1><p>This page doesn’t exist. Start again from <a href="/">Home</a> or the <a href="/finder/">{FINDER_LABEL}</a>.</p></div>')
 
@@ -678,14 +694,14 @@ def main():
     for _f in (ROOT / "static/root").glob("*"):  # 루트 정적 파일(구글 서치콘솔 소유확인 등; 지우지 말 것)
         if _f.is_file(): shutil.copy(_f, dist / _f.name)
     (dist / "events.ics").write_text(ics(events), encoding="utf-8")
-    urls = [p for p in site.pages if p != "/404.html"]
+    urls = [p for p in site.pages if p != "/404.html" and p not in site.noindex]
     if a.release:
         (dist / "robots.txt").write_text(f"User-agent: *\nAllow: /\nSitemap: {SITE_URL}/sitemap.xml\n")
         (dist / "sitemap.xml").write_text('<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">' + "".join(f"<url><loc>{SITE_URL}{u}</loc><lastmod>{today}</lastmod></url>" for u in urls) + "</urlset>\n")
     else:
         (dist / "robots.txt").write_text("User-agent: *\nDisallow: /\n")
     (dist / "_headers").write_text("/*\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: strict-origin-when-cross-origin\n  X-Frame-Options: DENY\n  Permissions-Policy: camera=(), microphone=(), geolocation=()\n"
-        "  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'\n"
+        "  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'\n"
         "/assets/*\n  Cache-Control: public, max-age=86400\n/*.html\n  Cache-Control: public, max-age=0, must-revalidate\n")
     subset_fonts(dist)
     bad = leak_check(dist)
