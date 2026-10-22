@@ -313,6 +313,8 @@ HYROX_STATIONS = [("SkiErg", "1,000m"), ("Sled Push", "50m"), ("Sled Pull", "50m
 MAG_NAV = lambda cur: f'<a href="/magazine/"{cur("magazine")}>Magazine</a>'
 ARTICLES = [  # newest first; source markdown lives in content/articles/. Empty = magazine hidden (nav, home, /magazine/ not built).
     # 2026-10-20: old Wellness Report removed (archived in content/articles/_archive/). New English articles go here.
+    {"slug": "bryan-johnson-sauna-protocol", "file": "bryan-johnson-sauna-protocol.md", "date": "2026-10-22", "category": "Sauna", "lang": "en",
+     "title_en": "Bryan Johnson's Sauna Protocol, Read Closely", "deck_en": "Hot room, ice on the face. Here is what he says, and what the research says."},
 ]
 
 def parse_article(meta):
@@ -341,6 +343,8 @@ def article_html(a):
     for blk in re.split(r"\n\s*\n", a["본문"]):
         blk = blk.strip()
         if not blk: continue
+        m = re.match(r"^Original post: (https://x\.com/\S+)$", blk)
+        if m: parts.append(f'<p>Original post: <a href="{E(m.group(1))}" rel="noopener noreferrer">{E(m.group(1).split("//")[1])}</a></p>'); continue
         parts.append(f'<h2>{E(blk[4:].strip())}</h2>' if blk.startswith("### ") else f"<p>{cite(blk)}</p>")
     summ = "".join(f"<li>{cite(re.sub(r'^\d+\.\s*', '', l.strip()))}</li>" for l in a["3줄 요약"].splitlines() if l.strip())
     refs = []
@@ -355,8 +359,9 @@ def article_html(a):
         refs.append(f'<li id="ref-{n}" value="{n}">{E(txt)}{link}</li>')
     return (f'<article class="article"><header class="a-head"><span class="eyebrow">{E(a["category"])}</span><h1>{E(a["title_en"])}</h1>'
             f'<p class="deck">{E(a["deck_en"])}</p><div class="byline">{BYLINE} · {dot(d)}</div>'
-            f'<p class="muted lang-note"><strong>Article in Korean.</strong> The full text below is in Korean.</p></header>'
-            f'<div lang="ko"><p class="ko-title"><strong>{E(a["title"])}</strong></p>'
+            + ('</header><div lang="en">' if a.get("lang") == "en" else
+               f'<p class="muted lang-note"><strong>Article in Korean.</strong> The full text below is in Korean.</p></header>'
+               f'<div lang="ko"><p class="ko-title"><strong>{E(a["title"])}</strong></p>') +
             f'<aside class="summary" aria-label="In brief"><h2 lang="en">In brief</h2><ol>{summ}</ol></aside>'
             f'<div class="a-body">{"".join(parts)}</div>'
             f'<section class="refs"><h2 lang="en">Sources</h2><ol>{"".join(refs)}</ol></section>'
@@ -386,7 +391,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
                       f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>KINTEX</span><span>·</span><span>Guide ›</span></a>'
                       f'</div>')
     home_mag = (f'''<section class="sec home-mag"><div class="sec-h"><h2>Read first. Every claim cited.</h2><a href="/magazine/">All articles ›</a></div>
-<div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))} · Article in Korean</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>''' if ARTICLES else '')
+<div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))}{"" if a.get("lang") == "en" else " · Article in Korean"}</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>''' if ARTICLES else '')
     guide_rows = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _ in GUIDES)
     body = f'''
 <section class="hero home-hero"><span class="home-kicker">Wellness in Korea, for visitors</span><h1>Can I go?</h1>
@@ -557,7 +562,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     for a in arts:  # magazine pages only when there are articles
         site.add(f"/magazine/{a['slug']}/", a["title_en"], clip(a["deck_en"]), article_html(a), "magazine")
     mcards = "".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3>'
-                     f'<div class="loc">{E(a["deck_en"])}</div><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))} · Article in Korean</div></article>' for a in arts)
+                     f'<div class="loc">{E(a["deck_en"])}</div><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))}{"" if a.get("lang") == "en" else " · Article in Korean"}</div></article>' for a in arts)
     if arts: site.add("/magazine/", "Magazine", "Wellness reports from HANSET editors. Research and official sources, made easy to read.",
              f'<div class="page"><h1>Magazine</h1><p class="lead">Research, made readable. Every article cited.</p><p class="muted">Articles are currently in Korean.</p></div><div class="grid">{mcards}</div>', "magazine")
 
