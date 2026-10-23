@@ -28,11 +28,21 @@ python3 -m http.server 8765 --directory dist --bind 127.0.0.1          # http://
 - The preview build (no `--release`) adds `noindex` — local look only, never deploy.
 - Without fonttools the builder still builds (falls back to system fonts) but fonts will differ.
 - The build ends with a leak check (phones, forbidden terms, third-party source names, trackers) and fails if it trips. A clean run prints e.g. `built 44 pages, 31 venues (10 boxes, 21 saunas), 6 events` and `leak check OK`.
-- There are no automated tests; verification = release build + leak check + opening the pages (mobile + desktop widths) + internal link check.
+- Automated checks: `python3 -m unittest discover -s tests -p 'test_*.py'`. Site verification also requires the release build + leak check + opening affected pages (mobile + desktop widths) + internal link check.
 - Illustrations: `cd illustrations && python3 make_all.py && ./render_png.sh` (needs Chrome headless for PNG; fonts in `_fonts/`, SIL OFL). Copy updated SVGs into `site/static/img/{guide,archive}/`.
 
 ## Deploy
 Only the HANSET operations bot deploys (Cloudflare Pages direct upload). PRs must be merge-ready: release build clean, no secrets. Workers have no tokens.
+
+## Independent local collector
+
+[`crawler/`](crawler/README.md) is a Linux local worker with automatic discovery,
+approved browser extraction, privacy filtering, evidence review and five-stage
+reporting. [`tools/chrome-clipper/`](tools/chrome-clipper/README.md) is its Manifest
+V3 manual intake extension. Collector state lives outside the repository; the
+legacy queue can be reported read-only. Neither system writes site content or
+publishes. Browser dependencies and mandatory integration checks are separate
+from the static site's build requirements.
 
 ## Suggested priority screens for frontend work
 1. Home `/` (magazine home; illustration section at the bottom, mobile compact list)

@@ -1,0 +1,22 @@
+{
+  "daily_candidates": 500,
+  "daily_new_bodies": 200,
+  "daily_attempts": 200,
+  "domain_concurrency": 1,
+  "min_interval": 5.0,
+  "max_depth": 2,
+  "lease_seconds": 120,
+  "max_requests": 40,
+  "max_response_bytes": 2000000,
+  "max_total_bytes": 8000000,
+  "request_timeout": 15,
+  "max_redirects": 5,
+  "policies": [],
+  "venues": [],
+  "document_relations": [],
+  "public_contacts": [],
+  "extension_origins": [],
+  "seeds": [],
+  "excluded_terms": ["runport", "런포트", "butfit", "버핏"],
+  "excluded_venues": ["runport-mapo"]
+}

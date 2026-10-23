@@ -1,0 +1,2 @@
+# Install separately from the static site. Then: python3 -m playwright install chromium
+playwright==1.64.0

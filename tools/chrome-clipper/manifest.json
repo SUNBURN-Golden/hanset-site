@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "HANSET 자료 담기",
+  "version": "1.0.0",
+  "description": "공개 페이지의 최소 근거를 Linux 로컬 수집함에 담습니다.",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "optional_permissions": ["alarms"],
+  "optional_host_permissions": [
+    "http://127.0.0.1/*",
+    "https://api.crossref.org/*",
+    "https://eutils.ncbi.nlm.nih.gov/*",
+    "https://pubmed.ncbi.nlm.nih.gov/*"
+  ],
+  "background": {"service_worker": "service-worker.js"},
+  "action": {"default_popup": "popup.html"},
+  "content_security_policy": {"extension_pages": "script-src 'self'; object-src 'none'"}
+}
