@@ -334,8 +334,9 @@ class Worker:
                     continue
                 if r.pop('access_hold', None):
                     self._save(self.store.db, r)
-                if r.get('collected_at') and not r.get('recheck_requested'):
-                    age = self.clock() - dt.datetime.fromisoformat(r['collected_at']).timestamp()
+                last_ts = r.get('collected_at') or r.get('last_attempt_at')
+                if last_ts and not r.get('recheck_requested'):
+                    age = self.clock() - dt.datetime.fromisoformat(last_ts).timestamp()
                     interval = policy.get('recheck_seconds', 86400 if policy.get('adapter') or any(f['field'] in ('rates', 'hours', 'closures') for f in r['extracted_facts']) else 30 * 86400)
                     if age < max(300, interval):
                         continue
@@ -351,8 +352,11 @@ class Worker:
                 from .fetcher import collect
                 collect(self, res)
                 return True
-            except Rejected:
+            except Rejected as exc:
                 if res:
                     self.revoke(res)
+                    r['last_attempt_at'] = dt.datetime.fromtimestamp(self.clock(), dt.timezone.utc).isoformat()
+                    r['last_error'] = str(exc)
+                    self._save(self.store.db, r)
                 continue
         return False
