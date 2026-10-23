@@ -1,58 +1,136 @@
-/* Client-side filters for the Drop-in & Sauna Finder. Cards are server-rendered; this only hides/shows them.
-   State lives in the URL (?city=seoul&type=sauna&sunday=no&price=1&q=...) so Instagram links can deep-link. No storage, no network. */
-(function(){
-  var list=document.getElementById('finder-list'); if(!list) return;
-  var cards=[].slice.call(list.querySelectorAll('.card'));
-  var st={city:'',type:'',sub:'',sort:'',sunday:'',price:'',hyrox:'',cf:'',q:''};
-  var qs=new URLSearchParams(location.search);
-  ['city','type','sub','sort','sunday','price','hyrox','cf','q'].forEach(function(k){ if(qs.has(k)) st[k]=qs.get(k); });
-  var $=function(id){return document.getElementById(id)};
-  var home=cards.slice(), form=document.querySelector('.filters'), subEl=$('f-sub'), sortEl=$('f-sort'), q=$('f-q'), sun=$('f-sunday'), pr=$('f-price'), hy=$('f-hyrox'), cfc=$('f-cf'), cnt=$('f-count'), empty=$('f-empty');
-  form.addEventListener('submit',function(e){e.preventDefault()});
-  q.value=st.q; subEl.value=st.sub; sortEl.value=st.sort; sun.value=st.sunday; pr.checked=st.price==='1'; hy.checked=st.hyrox==='1'; cfc.checked=st.cf==='1';
-  function seg(group){
-    var btns=[].slice.call(document.querySelectorAll('[data-seg="'+group+'"] button'));
-    btns.forEach(function(b){
-      b.addEventListener('click',function(){ st[group]=b.getAttribute('data-v'); apply(); });
+/* Shared Home/Finder explorer. Cards, map pins and previews are built into HTML.
+   URL state supports deep links; no storage or network access. */
+(function () {
+  'use strict';
+  var list = document.getElementById('finder-list');
+  if (!list) return;
+  var $ = function (id) { return document.getElementById(id); };
+  var cards = Array.from(list.querySelectorAll('.venue-card'));
+  var pins = Array.from(document.querySelectorAll('[data-pin]'));
+  var regions = Array.from(document.querySelectorAll('[data-map-city]'));
+  var form = document.querySelector('.filters');
+  var preview = $('map-preview'), selected = null;
+  var fields = {sub: $('f-sub'), sort: $('f-sort'), q: $('f-q'), sunday: $('f-sunday'), price: $('f-price'), hyrox: $('f-hyrox'), cf: $('f-cf')};
+  var choices = {city: ['', 'seoul', 'busan', 'jeju', 'gyeonggi'], type: ['', 'box', 'sauna'], sub: ['', 'hotel', 'boutique', 'spa'], sort: ['', 'date', 'name'], sunday: ['', 'yes', 'no', 'unk'], price: ['', '1'], hyrox: ['', '1'], cf: ['', '1']};
+  var st;
+  function readState() {
+    var params = new URLSearchParams(location.search);
+    st = {q: params.get('q') || ''};
+    Object.keys(choices).forEach(function (key) {
+      var value = params.get(key) || '';
+      st[key] = choices[key].includes(value) ? value : '';
     });
-    return btns;
+    syncFields();
   }
-  var cityBtns=seg('city'), typeBtns=seg('type');
-  q.addEventListener('input',function(){st.q=q.value.trim();apply()});
-  subEl.addEventListener('change',function(){st.sub=subEl.value;apply()});
-  sortEl.addEventListener('change',function(){st.sort=sortEl.value;apply()});
-  sun.addEventListener('change',function(){st.sunday=sun.value;apply()});
-  pr.addEventListener('change',function(){st.price=pr.checked?'1':'';apply()});
-  hy.addEventListener('change',function(){st.hyrox=hy.checked?'1':'';apply()});
-  cfc.addEventListener('change',function(){st.cf=cfc.checked?'1':'';apply()});
-  [].forEach.call(document.querySelectorAll('[data-reset]'),function(b){b.addEventListener('click',function(){st={city:'',type:'',sub:'',sort:'',sunday:'',price:'',hyrox:'',cf:'',q:''};q.value='';subEl.value='';sortEl.value='';sun.value='';pr.checked=false;hy.checked=false;cfc.checked=false;apply()})});
-  function sortCards(){
-    var arr=home.slice();
-    if(st.sort==='date') arr.sort(function(a,b){return a.dataset.date<b.dataset.date?1:a.dataset.date>b.dataset.date?-1:home.indexOf(a)-home.indexOf(b)});
-    else if(st.sort==='name') arr.sort(function(a,b){return a.dataset.title.localeCompare(b.dataset.title,'en')});
-    arr.forEach(function(c){list.appendChild(c)});
-  }
-  function apply(){
-    sortCards();
-    var n=0, qq=st.q.toLowerCase();
-    cards.forEach(function(c){
-      var d=c.dataset, ok=true;
-      if(st.city && d.city!==st.city) ok=false;
-      if(st.type && d.type!==st.type) ok=false;
-      if(st.sub && d.sub!==st.sub) ok=false;
-      if(st.sunday && d.sunday!==st.sunday) ok=false;
-      if(st.price==='1' && d.price!=='1') ok=false;
-      if(st.hyrox==='1' && d.hyrox!=='1') ok=false;
-      if(st.cf==='1' && d.cf!=='1') ok=false;
-      if(qq && (d.name||'').indexOf(qq)<0) ok=false;
-      c.hidden=!ok; if(ok) n++;
+  function syncFields() {
+    Object.keys(fields).forEach(function (key) {
+      if (fields[key].type === 'checkbox') fields[key].checked = st[key] === '1';
+      else fields[key].value = st[key];
     });
-    cityBtns.forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-v')===st.city))});
-    typeBtns.forEach(function(b){b.setAttribute('aria-pressed',String(b.getAttribute('data-v')===st.type))});
-    cnt.textContent=n+(n===1?' place':' places');
-    empty.hidden=n!==0;
-    var p=new URLSearchParams(); Object.keys(st).forEach(function(k){ if(st[k]) p.set(k,st[k]); });
-    var s=p.toString(); history.replaceState(null,'',location.pathname+(s?'?'+s:''));
   }
-  apply();
+  function selectVenue(slug) {
+    var template = $('preview-' + slug);
+    if (selected !== slug) {
+      preview.replaceChildren();
+      if (template) preview.appendChild(template.content.cloneNode(true));
+      else {
+        var message = document.createElement('p');
+        message.textContent = slug === null ? 'Select a pin to preview.' : 'No venues match these filters. Try fewer filters or start over.';
+        preview.appendChild(message);
+      }
+    }
+    selected = slug;
+    $('map-selection').classList.toggle('has-selection', !!template);
+    pins.forEach(function (pin) { pin.setAttribute('aria-pressed', String(pin.dataset.pin === slug)); });
+  }
+  pins.forEach(function (pin) {
+    pin.addEventListener('click', function () {
+      selectVenue(pin.dataset.pin);
+    });
+    pin.addEventListener('keydown', function (event) {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        selectVenue(pin.dataset.pin);
+      } else if (['ArrowRight', 'ArrowDown', 'ArrowLeft', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+        event.preventDefault();
+        var visible = pins.filter(function (p) { return !p.hasAttribute('hidden') && !p.closest('[data-map-city]').hasAttribute('hidden'); });
+        var index = visible.indexOf(pin);
+        var next = event.key === 'Home' ? 0 : event.key === 'End' ? visible.length - 1 :
+          (index + (event.key === 'ArrowRight' || event.key === 'ArrowDown' ? 1 : -1) + visible.length) % visible.length;
+        if (visible[next]) visible[next].focus();
+      }
+    });
+  });
+  form.addEventListener('submit', function (event) { event.preventDefault(); });
+  ['city', 'type'].forEach(function (group) {
+    document.querySelectorAll('[data-seg="' + group + '"] button').forEach(function (button) {
+      button.addEventListener('click', function () { st[group] = button.dataset.v; apply(true); });
+    });
+  });
+  Object.keys(fields).forEach(function (key) {
+    var field = fields[key];
+    field.addEventListener(key === 'q' ? 'input' : 'change', function () {
+      st[key] = field.type === 'checkbox' ? (field.checked ? '1' : '') : field.value;
+      apply(true);
+    });
+  });
+  document.querySelectorAll('[data-reset]').forEach(function (button) {
+    button.addEventListener('click', function () {
+      Object.keys(st).forEach(function (key) { st[key] = ''; });
+      syncFields();
+      selectVenue(null);
+      apply(true);
+    });
+  });
+  function apply(writeURL) {
+    var ordered = cards.slice();
+    if (st.sort === 'date') ordered.sort(function (a, b) { return b.dataset.date.localeCompare(a.dataset.date); });
+    else if (st.sort === 'name') ordered.sort(function (a, b) { return a.dataset.title.localeCompare(b.dataset.title, 'en'); });
+    ordered.forEach(function (card) { list.appendChild(card); });
+    var visible = new Set(), query = st.q.trim().toLowerCase();
+    ordered.forEach(function (card) {
+      var d = card.dataset;
+      var matches = ['city', 'type', 'sub', 'sunday'].every(function (key) { return !st[key] || d[key] === st[key]; }) &&
+        ['price', 'hyrox', 'cf'].every(function (key) { return st[key] !== '1' || d[key] === '1'; }) &&
+        (!query || d.name.includes(query));
+      card.hidden = !matches;
+      if (matches) visible.add(d.slug);
+    });
+    pins.forEach(function (pin) {
+      // SVG elements need the hidden attribute, not HTMLElement.hidden.
+      var hidden = !visible.has(pin.dataset.pin);
+      pin.toggleAttribute('hidden', hidden);
+      pin.setAttribute('tabindex', hidden ? '-1' : '0');
+    });
+    regions.forEach(function (region) {
+      // SVG hidden must use attributes, just like the pins.
+      var inactive = region.dataset.mapCity !== (st.city || 'all');
+      region.toggleAttribute('hidden', inactive);
+      region.querySelectorAll('[data-pin]').forEach(function (pin) {
+        pin.setAttribute('tabindex', !inactive && visible.has(pin.dataset.pin) ? '0' : '-1');
+      });
+    });
+    document.querySelectorAll('[data-seg] button').forEach(function (button) {
+      var group = button.closest('[data-seg]').dataset.seg;
+      button.setAttribute('aria-pressed', String(button.dataset.v === st[group]));
+    });
+    $('map-view').textContent = st.city ? st.city.charAt(0).toUpperCase() + st.city.slice(1) : 'All Korea';
+    $('f-count').textContent = visible.size + (visible.size === 1 ? ' place' : ' places');
+    $('f-empty').hidden = visible.size !== 0;
+    var moreCount = ['sub', 'sunday', 'price', 'hyrox', 'cf', 'sort'].filter(function (key) { return !!st[key]; }).length;
+    $('f-more-count').textContent = moreCount ? '(' + moreCount + ' applied)' : '';
+    // Only an explicit pin activation expands a preview. Never select a result
+    // as a side effect of loading, filtering, resetting or restoring the URL.
+    if (!visible.size) selectVenue('');
+    else if (!visible.has(selected)) selectVenue(null);
+    if (writeURL) {
+      var params = new URLSearchParams();
+      Object.keys(st).forEach(function (key) { if (st[key]) params.set(key, st[key]); });
+      var search = params.toString();
+      history.replaceState(null, '', location.pathname + (search ? '?' + search : '') + location.hash);
+    }
+  }
+  window.addEventListener('popstate', function () { readState(); apply(false); });
+  readState();
+  apply(false);
 })();

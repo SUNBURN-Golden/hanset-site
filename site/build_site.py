@@ -28,7 +28,7 @@ CITY_EN = {"Seoul": "Seoul", "Busan": "Busan", "Jeju": "Jeju", "Gyeonggi": "Gyeo
 MON = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 KIND_EN = {"호텔 사우나": "Hotel Sauna", "부티크 사우나": "Boutique Sauna", "대형 스파·온천": "Large Spa · Hot Spring", "크로스핏 박스": "CrossFit Box",
            "HYROX·스트렝스 짐": "HYROX · Strength Gym", "호텔·클럽 사우나": "Hotel · Club Sauna"}
-PENDING = "Pending"
+PENDING = "확인 중 (not confirmed)"
 CITY_KEY = {"Seoul": "seoul", "Busan": "busan", "Jeju": "jeju", "Gyeonggi": "gyeonggi"}
 WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 SAFETY = "Cardiovascular disease, pregnancy, after drinking, or feeling unwell? Skip the sauna and cold plunge, or ask a doctor first. This is not medical advice."
@@ -274,8 +274,8 @@ def v_badges(v, full=False):
     b.append(badge("Box" if v["kind_key"] == "box" else "Sauna", "badge-box" if v["kind_key"] == "box" else "badge-sauna"))
     b.append(badge(v["kind"]))
     if v["c"].get("opening_soon"): b.append(badge("Opening soon", "badge-part"))
-    else: b.append(badge("Verified" if v["status"] == "verified" else "Partly verified", "badge-ok" if v["status"] == "verified" else "badge-part"))
-    if v["stale"]: b.append(badge("Outdated", "badge-old"))
+    b.append(badge("Verified" if v["status"] == "verified" else "Partly verified", "badge-ok" if v["status"] == "verified" else "badge-part"))
+    if v["stale"]: b.append(badge("오래됨 (outdated)", "badge-old"))
     for t in v["tags"]: b.append(badge(t))
     return '<div class="chips">' + "".join(b) + "</div>"
 def off_marks(v):
@@ -286,34 +286,259 @@ def off_marks(v):
 def off_html(v):
     m = off_marks(v)
     return "".join(f'<div class="off">✓ {E(t)}</div>' for t in m)
-SUN_TXT = {"yes": "Open Sunday (verified)", "no": "Closed Sunday (verified)", "unk": "Sunday: pending"}
+SUN_TXT = {"yes": "Open Sunday (verified)", "no": "Closed Sunday (verified)", "unk": "Sunday: 확인 중 (not confirmed)"}
 
 def cav(v): return f'<div class="meta cav">※ {E(v["price_caveat"])}</div>' if v["price_caveat"] and v["price"] else ""
 
+def map_url(v):
+    return "https://map.naver.com/p/search/" + quote(v["title_ko"] + (" " + v["address"] if v["address"] else ""))
+
+UNKNOWN = PENDING
+
+
+def access_conflict(v):
+    """Keep conflicting page/reply access claims unresolved, without picking a winner."""
+    rows = [(k.lower(), val.lower()) for k, val in v["facts"]]
+    denied = any(k in ("who can use", "non-guests", "entry") and
+                 any(t in val for t in ("no outside guests", "no non-guests", "guests only"))
+                 for k, val in rows)
+    reply_access = any(k == "non-guests" and "reply" in val and
+                       any(t in val for t in ("coupon", "welcome", "open to")) for k, val in rows)
+    return denied and reply_access
+
+
+def fact_groups(v):
+    """Map original conditions verbatim. Never merge a checklist over source facts."""
+    facts = [(k, val) for k, val in v["facts"] if val.strip()]
+    visitor = FOREIGNER.get(v["slug"], {})
+    hours, access, rules = [], [], []
+    for k, val in facts:
+        key = k.lower()
+        if (key.startswith("hours") or key in ("class times", "saturday", "sunday", "closed", "closed / adjusted",
+                "timetable", "temporary closures", "public holidays", "hybrid class", "citizens' forest branch")
+                or (key == "open gym" and "₩" not in val)):
+            hours.append((k, val))
+        elif key in ("who can use", "booking", "request", "entry", "non-guests", "capacity",
+                     "session length", "time allowed", "types · length", "hotel guests", "language"):
+            access.append((k, val))
+        elif key in ("conditions", "house rules", "open-air bath rules", "age", "note", "status", "body scrub"):
+            rules.append((k, val))
+    if not any(k == "Sunday" for k, _ in hours) and (v["kind_key"] == "box" or v["sunday"] != "unk"):
+        hours.append(("Sunday", SUN_TXT[v["sunday"]] if v["sunday"] != "unk" else UNKNOWN))
+    # Restrictions can be in tips rather than the facts table. Keep the whole tip.
+    for tip in v.get("tips", []):
+        if re.search(r"tattoo|children|guardian|age[s]?\b|under \d|no pairs|can't share|one person", tip, re.I):
+            if not any(tip == value for _, value in rules + access):
+                rules.append(("Entry restriction", tip))
+    tattoo = [(k, val) for k, val in facts + rules if "tattoo" in val.lower() or "tattoo" in k.lower()]
+    rules.insert(0, ("Tattoos", tattoo[0][1] if tattoo else visitor.get("tattoo") or UNKNOWN))
+    access_facts = [(k, val) for k, val in access if k in ("Who can use", "Non-guests", "Entry")]
+    if access_conflict(v):
+        access.insert(0, ("Visitor access", UNKNOWN + " · Official page and venue reply differ; confirm with the venue."))
+    elif not access_facts:
+        visitor_access = visitor.get("dropin") or UNKNOWN
+        if re.search(r"pending|not stated|not confirmed", visitor_access, re.I):
+            visitor_access = UNKNOWN
+        access.insert(0, ("Visitor access", visitor_access))
+    elif (all(re.search(r"pending|not stated|not confirmed", val, re.I) for _, val in access_facts)
+          or re.search(r"pending|not stated|not confirmed", visitor.get("dropin", ""), re.I)):
+        access.insert(0, ("Visitor access", UNKNOWN))
+    if v["kind_key"] == "sauna":
+        for key, label in SAUNA_PKG_KEYS:
+            if key not in visitor:
+                continue
+            value = visitor[key] if _is_confirmed(visitor[key]) else UNKNOWN
+            if key in ("last_entry", "closures"):
+                group = hours
+            elif key in ("scrub_fee", "age_tattoo_attire"):
+                group = rules
+            else:
+                group = access
+            if (label, value) not in group:
+                group.append((label, value))
+    if visitor.get("english") and not (v["kind_key"] == "sauna" and "english" in visitor) and not any(k == "Language" for k, _ in access):
+        access.append(("English support", visitor["english"]))
+    return [("Hours & Closed", hours), ("Access / Booking", access), ("Visitor / Tattoo rules", rules)]
+
+
+def fact_provenance(v, value):
+    """A venue reply is not evidence available at the representative website."""
+    if value.startswith(UNKNOWN) or value.lower() in ("pending", "not confirmed", "not yet announced"):
+        return ""
+    citations = re.findall(
+        r"\((?:official page and )?(?:venue|hotel) reply\b[^()]*\)"
+        r"|(?:—|--)\s*(?:venue|hotel) reply\b[^\n()]*", value, re.I)
+    if citations:
+        # Dates outside an explicit reply citation may be closures or inquiry dates.
+        dates = [date for citation in citations for date in
+                 re.findall(r"\b20\d{2}[-.]\d{2}[-.]\d{2}\b|\b\d{1,2}/\d{1,2}\b", citation)]
+        if dates or not any(c.lower().startswith("(official page and ") for c in citations):
+            checked = ", ".join(dict.fromkeys(dates)) if dates else "확인일 확인 중"
+            return f'<small class="fact-source">Venue reply · {E(checked)} · Public source: {UNKNOWN}</small>'
+    return (f'<small class="fact-source">확인일 {dot(v["last_verified"])} · '
+            f'<a href="{E(v["source"])}" rel="noopener noreferrer">Official source</a></small>')
+
+
+def fact_lines(rows, v=None):
+    return "".join(f'<span class="fact-line"><strong>{E(k)}:</strong> {E(val)}'
+                   f'{fact_provenance(v, val) if v else ""}</span>' for k, val in rows) or f'<span class="unk">{UNKNOWN}</span>'
+
+
+def price_html(v):
+    # The numeric CSV value is a sortable hint, not a replacement for the terms.
+    context = [(k, val) for k, val in v["facts"] if
+               (k.startswith("Price") or k.startswith("Drop-in") or k in
+                ("Group session", "Open gym", "Traveler pass", "Trial", "Guest discount rate", "Jjimjil", "Jjimjil wear"))
+               and val.strip() and val != PENDING]
+    numeric = (f'<div class="price"><span class="price-label">{E(v["price_label"])}:</span> '
+               f'<strong>{E(v["price"])}</strong></div>{cav(v)}') if v["price"] else ""
+    terms = fact_lines(context, v) if context else ("" if numeric else f'<span class="unk">Price: {UNKNOWN}</span>')
+    return numeric + '<div class="price price-context">' + terms + '</div>'
+
+
+def venue_facts(v, preview=False):
+    groups = []
+    for label, rows in fact_groups(v):
+        essential, extra = [], []
+        for key, value in rows:
+            # Keep access, tattoo, age, capacity and time limits visible in full.
+            target = extra if (label == "Hours & Closed" and len(value) > 160) or key in (
+                "House rules", "Open-air bath rules", "Body scrub", "English support", "Language") else essential
+            if preview and label == "Hours & Closed":
+                target = extra
+            if access_conflict(v) and key in ("Who can use", "Non-guests", "Entry"):
+                target = extra
+            if key == "Entry restriction" and any(value == val for k, val in essential):
+                continue
+            if key != "Tattoos" and any(value == val for k, val in essential if k == "Tattoos"):
+                continue
+            target.append((key, value))
+        shown = fact_lines(essential, v) if essential else ""
+        if extra:
+            shown += f'<details class="fact-extra"><summary>Full {E(label.lower())} · source notes</summary>{fact_lines(extra, v)}</details>'
+        groups.append(f'<div><dt>{E(label)}</dt><dd>{shown or fact_lines([])}</dd></div>')
+    return '<dl class="card-facts">' + "".join(groups) + '</dl>'
+
+
+def venue_contents(v, preview=False):
+    title = E(v["title"]) if preview else f'<a href="/finder/{v["slug"]}/">{E(v["title"])}</a>'
+    footer = (f'<div class="meta">확인일 {dot(v["last_verified"])} · Official reference '
+              f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></div>')
+    actions = (f'<div class="btnrow"><a class="btn btn-d" href="/finder/{v["slug"]}/">View full details →</a>'
+               f'<a class="btn map-link" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map ↗</a></div>' if preview else
+               f'<a class="card-details" href="/finder/{v["slug"]}/">Details &amp; facts →</a>')
+    return (f'{v_badges(v)}<h3>{title}</h3><div class="loc">{E(v["location"])}</div>{price_html(v)}'
+            f'{venue_facts(v, preview=preview)}{footer}{actions}')
+
 def venue_card(v):
-    price = (f'<div class="price">{E(v["price_label"])} {E(v["price"])}</div>' if v["price"]
-             else '<div class="price unk">Price pending</div>')
-    attrs = (f'data-city="{v["city_key"]}" data-type="{v["kind_key"]}" data-sunday="{v["sunday"]}" data-price="{1 if v["price"] else 0}" data-cf="{1 if v["off"]["cf"] else 0}" data-hyrox="{1 if v["off"]["hyrox"] else 0}" data-sub="{v["sub"]}" data-order="{v["order"]}" data-date="{v["last_verified"].isoformat()}" data-title="{E(v["title"])}" '
-             f'data-name="{E((v["title"] + " " + v["name"] + " " + v["location"] + " " + v["title_ko"] + " " + v["location_ko"]).lower())}"')
-    return (f'<article class="card" {attrs}>{v_badges(v)}<h3><a href="/finder/{v["slug"]}/">{E(v["title"])}</a></h3>'
-            f'<div class="loc">{E(v["location"])}</div>{price}{cav(v)}<div class="loc">{SUN_TXT[v["sunday"]]}</div>{off_html(v)}'
-            f'<div class="meta">Checked {dot(v["last_verified"])} · Source {E(host(v["source"]))}</div></article>')
+    attrs = (f'data-slug="{v["slug"]}" data-city="{v["city_key"]}" data-type="{v["kind_key"]}" data-sunday="{v["sunday"]}" data-price="{1 if v["price"] else 0}" data-cf="{1 if v["off"]["cf"] else 0}" data-hyrox="{1 if v["off"]["hyrox"] else 0}" data-sub="{v["sub"]}" data-order="{v["order"]}" data-date="{v["last_verified"].isoformat()}" data-title="{E(v["title"])}" '
+             f'data-name="{E((v["title"] + " " + v["name"] + " " + v["location"] + " " + v["area"] + " " + v["kind"] + " " + v["title_ko"] + " " + v["location_ko"]).lower())}"')
+    return f'<article class="card venue-card" {attrs}>{venue_contents(v)}</article>'
+
+# Presentation coordinates for schematic regions only, never entrance coordinates.
+# Membership comes solely from existing location/area text. Unknowns are off-map.
+MAP_DISTRICTS = {
+    "seoul": [("Jongno", "Jongno", 130, 23, [(130, 48)]),
+              ("Jung-gu", "Jung-gu", 198, 61, [(154, 84), (198, 84), (242, 84)]),
+              ("Yongsan", "Yongsan / Hannam", 191, 102, [(154, 126), (198, 126), (242, 126)]),
+              ("Gwangjin", "Gwangjin", 293, 61, [(294, 84)]),
+              ("Yeongdeungpo", "Yeongdeungpo", 56, 151, [(54, 176)]),
+              ("Dongjak", "Dongjak", 109, 191, [(110, 216)]),
+              ("Seocho", "Seocho", 181, 211, [(176, 238), (220, 238)]),
+              ("Gangnam", "Gangnam / Sinsa", 248, 155, [(206, 180), (250, 180), (294, 180), (264, 238)]),
+              ("Songpa", "Songpa", 337, 220, [(344, 244)]),
+              ("Gangdong", "Gangdong", 350, 103, [(330, 126), (374, 126)])],
+    "busan": [("Dongnae", "Dongnae", 153, 35, [(154, 60)]),
+              ("Haeundae", "Haeundae", 302, 90, [(264, 116), (308, 116), (352, 116)]),
+              ("Nam-gu", "Nam-gu", 224, 151, [(224, 176)]),
+              ("Jung-gu", "Jung-gu", 144, 181, [(144, 206)]),
+              ("Seo-gu", "Seo-gu", 71, 174, [(72, 200)]),
+              ("", "District 확인 중 · off-map", 286, 225, [(286, 250)])],
+    "jeju": [("Jeju-si", "Jeju-si", 207, 68, [(208, 94)]),
+             ("Seogwipo", "Seogwipo / Jungmun", 202, 174, [(158, 200), (202, 200), (246, 200)])],
+    "gyeonggi": [("Goyang", "Goyang / Samsong", 98, 54, [(98, 80)]),
+                 ("Icheon", "Icheon", 296, 178, [(296, 204)])],
+}
+MAP_PATHS = {
+    "all": '<path class="map-land" d="M201 10 280 20 305 54 286 86 321 126 366 163 381 202 346 255 306 247 268 218 230 217 206 181 173 173 157 132 171 92 153 59Z"/><path class="map-zone" d="M20 22H286V153H20Z"/><path class="map-zone" d="M300 22H356V112H300Z"/><path class="map-zone" d="M222 168H398V261H222Z"/><path class="map-land" d="M18 241Q47 211 120 216T201 241Q142 275 53 262Z"/>',
+    "seoul": '<path class="map-land" d="M32 121 69 69 111 62 119 15 209 27 241 47 296 29 340 71 386 107 381 171 363 258 286 266 241 253 167 270 121 253 92 225 24 207Z"/><path class="map-river" d="M10 133C66 118 79 191 127 169S185 142 230 151 272 167 290 139 344 153 398 155"/><text class="river-label" x="59" y="122">Han River</text>',
+    "busan": '<path class="map-land" d="M41 34 136 15 207 42 248 26 352 55 390 126 345 157 310 145 275 188 238 201 199 239 165 236 144 260 113 234 73 246 29 209Z"/><path class="map-river" d="M22 210Q85 254 139 263T240 224 309 173 398 159"/>',
+    "jeju": '<path class="map-land" d="M26 139C45 95 111 65 189 60S338 68 375 111 348 183 294 215 145 238 66 207 15 170 26 139Z"/><path class="map-contour" d="M88 150Q199 78 309 141 230 205 88 150Z"/>',
+    "gyeonggi": '<path class="map-land" d="M37 45 119 14 182 48 218 27 267 60 348 89 375 155 352 236 281 263 222 240 161 263 96 213 27 157Z"/><path class="map-river" d="M7 121Q101 161 168 128T304 162 400 174"/><path class="map-contour" d="M139 95 204 90 230 136 182 170 136 147Z"/><text class="map-label" x="178" y="135">Seoul</text>',
+}
+
+
+def city_tabs(map_header=False):
+    items = [("", "All Korea" if map_header else "All"), ("seoul", "Seoul"), ("busan", "Busan"), ("jeju", "Jeju"), ("gyeonggi", "Gyeonggi")]
+    return '<div class="seg map-tabs" data-seg="city" role="group" aria-label="Map city">' + "".join(
+        f'<button type="button" data-v="{key}" aria-pressed="{str(not key).lower()}">{label}</button>' for key, label in items) + '</div>'
+
+
+def pin_glyph(kind):
+    if kind == "box":
+        return '<rect class="pin-shape" x="-11" y="-11" width="22" height="22" rx="2"/><path class="pin-glyph" d="M-7 0H7M-7-4V4M-4-6V6M7-4V4M4-6V6"/>'
+    return '<circle class="pin-shape" r="11"/><path class="pin-glyph" d="M-7 6a7 7 0 0 1 14 0M-4-6q-2 2 0 4M1-7q-2 2 0 4M6-6q-2 2 0 4"/>'
+
+
+def map_pin(v, x, y, label):
+    return (f'<g class="map-pin map-pin-{v["kind_key"]}" role="button" tabindex="0" '
+            f'aria-label="{E(v["title"])} · {E(label)} · {E(v["kind"])}" aria-pressed="false" aria-controls="map-preview" '
+            f'data-pin="{v["slug"]}" transform="translate({x} {y})"><title>{E(v["title"])}</title>'
+            f'<rect class="pin-target" x="-22" y="-22" width="44" height="44"/>{pin_glyph(v["kind_key"])}</g>')
+
+
+def venue_map(venues):
+    panels = []
+    city_venues = {city: sorted((v for v in venues if v["city_key"] == city), key=lambda v: v["order"]) for city in MAP_DISTRICTS}
+    for city in ("all", *MAP_DISTRICTS):
+        drawing = MAP_PATHS[city]
+        if city == "all":
+            # Regional insets spread pins for readability, not precise locations.
+            slots = {"seoul": [(44 + col * 44, 46 + row * 44) for row in range(3) for col in range(6)],
+                     "gyeonggi": [(328, 46), (328, 90)],
+                     "busan": [(244 + col * 44, 194 + row * 44) for row in range(2) for col in range(4)],
+                     "jeju": [(44 + col * 44, 238) for col in range(4)]}
+            for region, items in city_venues.items():
+                if len(items) > len(slots[region]):
+                    raise ValueError(f'Expand schematic slots for {region}; never overlap pins')
+                for v, (x, y) in zip(items, slots[region]):
+                    drawing += map_pin(v, x, y, region.title() + " · schematic region only")
+            for label, x, y in (("Seoul", 106, 23), ("Gyeonggi", 328, 23), ("Busan", 307, 171), ("Jeju", 105, 211)):
+                drawing += f'<text class="map-label" x="{x}" y="{y}">{label}</text>'
+        else:
+            groups = {key: [] for key, *_ in MAP_DISTRICTS[city]}
+            for v in city_venues[city]:
+                location = (v["location"] + " " + v["area"]).lower()
+                key = next((key for key in groups if key and key.lower() in location), "")
+                if key not in groups:
+                    raise ValueError(f'Unknown region for {v["slug"]}; add an off-map area')
+                groups[key].append(v)
+            for key, label, lx, ly, slots in MAP_DISTRICTS[city]:
+                drawing += f'<text class="map-label" x="{lx}" y="{ly}">{E(label)}</text>'
+                if not key:
+                    drawing += '<path class="map-unknown" d="M251 232H321V275H251Z"/>'
+                if len(groups[key]) > len(slots):
+                    raise ValueError(f'Expand schematic slots for {city}/{key}; never overlap pins')
+                for v, (x, y) in zip(groups[key], slots):
+                    drawing += map_pin(v, x, y, label)
+        label = "All Korea" if city == "all" else city.title()
+        panels.append(f'<svg class="district-map" data-map-city="{city}" viewBox="0 0 400 280" role="group" '
+                      f'aria-label="{label} schematic venue map"' + (' hidden="hidden"' if city != "all" else '') + f'>{drawing}</svg>')
+    boxes = sum(v["kind_key"] == "box" for v in venues)
+    legend = "".join(f'<span><svg viewBox="-20 -20 40 40" class="legend-pin map-pin-{kind}" aria-hidden="true">{pin_glyph(kind)}</svg>{label} ({count})</span>' for kind, label, count in (("box", "Box", boxes), ("sauna", "Sauna", len(venues)-boxes)))
+    templates = "".join(f'<template id="preview-{v["slug"]}"><article class="selected-venue">{venue_contents(v, preview=True)}</article></template>' for v in venues)
+    return (f'<section class="venue-map" aria-labelledby="map-heading"><div class="map-header"><h2 id="map-heading">Explore the map <span id="map-view">All Korea</span></h2>'
+            f'{city_tabs(True)}<div class="map-legend" aria-label="Map legend">{legend}</div></div>'
+            f'<div class="map-regions">{"".join(panels)}</div>'
+            '<p class="map-disclaimer">Schematic regions, not exact entrances. Pins are spaced within confirmed city/district groups. District 확인 중 pins sit off-map. Use the venue’s map link for directions.</p></section>'
+            '<div id="map-selection" class="map-selection"><div id="map-preview" aria-live="polite" aria-atomic="true"><p>Select a pin to preview.</p></div></div>' + templates)
+
 
 def mini_card(v):
     price = (f'{E(v["price_label"])} {E(v["price"])}' if v["price"] else "Price pending")
     return (f'<article class="card">{v_badges(v)}<h3><a href="/finder/{v["slug"]}/">{E(v["title"])}</a></h3>'
             f'<div class="loc">{E(v["location"])}</div><div class="price{"" if v["price"] else " unk"}">{price}</div>{off_html(v)}'
             f'<div class="meta">Checked {dot(v["last_verified"])}</div></article>')
-
-def home_card(v):
-    price = (f'{E(v["price_label"])} {E(v["price"])}' if v["price"] else "Price pending")
-    area = v["area"] or v["location"].split(" · ", 1)[0]
-    lv = v["last_verified"]
-    return (f'<article class="card home-card"><h3><a href="/finder/{v["slug"]}/">{E(v["title"])}</a></h3>'
-            f'<div class="home-info"><span>{E(area)}</span> <span aria-hidden="true">·</span> '
-            f'<span>{E(v["kind"])}</span> <span aria-hidden="true">·</span> '
-            f'<span class="price{"" if v["price"] else " unk"}">{price}</span></div>'
-            f'<div class="home-date">Checked {MON[lv.month]} {lv.day}</div></article>')
 
 def event_card(e, today, detail_link=True):
     d = (e["start"] - today).days
@@ -394,12 +619,30 @@ def build(site, venues, events, today, vevents=(), creators=()):
     by_slug = {v["slug"]: v for v in venues}
     feat = next(e for e in events if e["feature"])
     upcoming = [e for e in events if e["end"] >= today]
+    ordered = sorted(venues, key=lambda v: (not v["ad"], not bool(v["price"]), v["status"] != "verified", -len(v["facts"]), v["order"]))
+    cnt_box = sum(v["kind_key"] == "box" for v in venues); cnt_sauna = len(venues) - cnt_box
+    seg = lambda g, items: '<div class="seg" data-seg="%s" role="group" aria-label="%s">' % (g, g.title()) + "".join(f'<button type="button" data-v="{k}" aria-pressed="false">{E(t)}</button>' for k, t in items) + "</div>"
+    explorer = f'''
+{venue_map(ordered)}
+<form class="filters" aria-label="Filters">
+ <div class="fgroup"><span>City</span>{seg("city", [("", "All"), ("seoul", "Seoul"), ("busan", "Busan"), ("jeju", "Jeju"), ("gyeonggi", "Gyeonggi")])}</div>
+ <div class="fgroup"><span>Type</span>{seg("type", [("", "All"), ("box", "CrossFit · HYROX boxes"), ("sauna", "Saunas")])}</div>
+ <div class="fgroup"><label for="f-q">Search name or area</label><input id="f-q" type="search" placeholder="e.g. Hannam, Busan, hotel" autocomplete="off"></div>
+ <details class="more-filters"><summary>More filters <span id="f-more-count"></span></summary><div class="more-filter-fields">
+ <div class="fgroup"><label for="f-sub">Sauna type</label><select id="f-sub"><option value="">All</option><option value="hotel">Hotel Saunas</option><option value="boutique">Boutique Saunas</option><option value="spa">Large Spa · Hot Spring</option></select></div>
+ <div class="fgroup"><label for="f-sort">Sort</label><select id="f-sort"><option value="">Default</option><option value="date">Recently checked</option><option value="name">A–Z</option></select></div>
+ <div class="fgroup"><label for="f-sunday">Sunday</label><select id="f-sunday"><option value="">All</option><option value="yes">Open (verified)</option><option value="no">Closed (verified)</option><option value="unk">확인 중 (not confirmed)</option></select></div>
+ <div class="fgroup"><span>Price</span><label class="chk"><input id="f-price" type="checkbox"> Price confirmed only</label></div>
+ <div class="fgroup"><span>Official lists</span><label class="chk"><input id="f-hyrox" type="checkbox"> HYROX gyms (official list)</label> <label class="chk"><input id="f-cf" type="checkbox"> CrossFit affiliates (verified)</label></div>
+ <div class="fgroup"><span>&nbsp;</span><button id="f-reset" data-reset type="button" class="btn btn-d">Start over</button></div>
+ </div></details>
+</form>
+<p class="count" id="f-count" aria-live="polite">{len(venues)} places</p>
+<div class="grid" id="finder-list">{"".join(venue_card(v) for v in ordered)}</div>
+<div class="empty" id="f-empty" hidden><p>Nothing here yet.</p><p class="muted">Try fewer filters. More verified places are on the way.</p><button type="button" class="btn btn-d" data-reset>Start over</button></div>
+<div class="note">"Verified" means we read the info directly on the venue’s official page. "Partly verified" means only some items, like the address. Sunday is filled in only when the official page says so. "CrossFit affiliate verified" and "HYROX official gym list verified" appear only where we saw the place ourselves in that official page or list on the check date. No mark means still checking.</div>
+<noscript><p class="muted">Filters need JavaScript. The full list still works without it.</p></noscript>'''
     # ---- home
-    picks = [v for v in venues if v["pick"]]
-    preview = picks[:2]
-    if len(preview) < 2:
-        rest = [v for v in venues if v["status"] == "verified" and v not in preview]
-        preview = preview + rest[:2 - len(preview)]
     race_strip = ""
     if feat["end"] >= today:
         d = max((feat["start"] - today).days, 0)
@@ -418,18 +661,10 @@ def build(site, venues, events, today, vevents=(), creators=()):
     body = f'''
 <section class="hero home-hero"><span class="home-kicker">Wellness in Korea, for visitors</span><h1>Can I go?</h1>
 <p class="lead">CrossFit and HYROX drop-ins, boutique saunas and hotel saunas across Korea. Tattoo rules, non-guest access and drop-in, from each official page.</p>
-<div class="hero-ctas"><a class="btn btn-d" href="/finder/">Find a place</a> <a class="btn btn-ghost" href="/guides/">Visitors guide</a></div></section>
+<div class="hero-ctas"><a class="btn btn-ghost" href="/guides/">Visitors guide</a></div></section>
 
-<form class="find-panel" action="/finder/" method="get" role="search">
-<div class="find-field"><label for="home-q">Name or area</label><input id="home-q" name="q" type="search" placeholder="e.g. Hannam, Busan, hotel"></div>
-<div class="find-field"><label for="home-city">City</label><select id="home-city" name="city"><option value="">Any city</option><option value="seoul">Seoul</option><option value="busan">Busan</option><option value="jeju">Jeju</option><option value="gyeonggi">Gyeonggi</option></select></div>
-<div class="find-field"><label for="home-type">Type</label><select id="home-type" name="type"><option value="">Any kind</option><option value="box">CrossFit · HYROX boxes</option><option value="sauna">Saunas</option></select></div>
-<button class="btn btn-d" type="submit">Search</button></form>
-<p class="find-note">First time in Korea? <a href="/guides/">Read the Visitors guide →</a></p>
-
-<section class="sec home-results"><div class="sec-h"><h2>Only verified places.</h2><a href="/finder/">See all {len(venues)} →</a></div>
-<div class="grid home-grid">{"".join(home_card(v) for v in preview)}</div>
-<p class="muted trust">Every source. Every date.</p></section>
+<section class="sec home-results"><h2>Explore {len(venues)} boxes &amp; saunas</h2>
+{explorer}</section>
 
 <section class="sec home-guides"><h2>Visitors guide</h2>
 <ul class="guide-list">{guide_rows}</ul></section>
@@ -439,47 +674,18 @@ def build(site, venues, events, today, vevents=(), creators=()):
 
 {home_mag}
 
-<section class="sec"><div class="sec-h"><h2>First time? No problem.</h2><a href="/guide/#pictures">View larger</a></div>
-<p class="muted">CrossFit boxes, Boutique Saunas · Hotel Saunas. One drawing each, before you go. General examples. May differ from the actual venue.</p>
-<div class="illrow">{"".join(f'<a class="illc" href="/guide/#{k}"><picture><source media="(min-width:720px)" srcset="/assets/img/guide/{f}.svg"><img src="/assets/img/guide/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(t)}</b><em>View ›</em></span></a>' for k, f, t, d in ILLUSTRATIONS)}</div></section>
-
 <div class="slot" data-slot="kix-ticketing" hidden></div>
 <section class="sec"><div class="sec-h"><h2>See it from above.</h2><a href="/archive/">Archive ›</a></div>
 <p class="muted">Floors and zones from official guides, redrawn by hand. Layouts are conceptual. May differ from the actual venue.</p>
 <div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>View ›</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
 <p><a class="btn btn-d" href="/archive/">See every drawing ›</a></p></section>'''
-    site.add("/", f"{BRAND_EN} — CrossFit, HYROX & Sauna Wellness Magazine in Korea", "CrossFit, HYROX, hotel and boutique saunas in Korea. A drop-in and sauna finder plus race dates. Every entry with an official source and check date.", body, "home", ("dday.js",))
+    site.add("/", f"{BRAND_EN} — CrossFit, HYROX & Sauna Wellness Magazine in Korea", "CrossFit, HYROX, hotel and boutique saunas in Korea. A drop-in and sauna finder plus race dates. Every entry with an official source and check date.", body, "home", ("dday.js", "finder.js"))
 
     # ---- finder
-    ordered = sorted(venues, key=lambda v: (not v["ad"], v["status"] != "verified", v["order"]))
-    cnt_box = sum(v["kind_key"] == "box" for v in venues); cnt_sauna = len(venues) - cnt_box
-    seg = lambda g, items: '<div class="seg" data-seg="%s">' % g + "".join(f'<button type="button" data-v="{k}" aria-pressed="false">{E(t)}</button>' for k, t in items) + "</div>"
     fbody = f'''
 <div class="finder-head"><h1>{FINDER_LABEL}</h1>
-<p class="lead">Drop-in boxes. Hotel and boutique saunas. Large spas and hot springs. {len(venues)} officially verified places ({cnt_box} boxes · {cnt_sauna} saunas), and counting.</p>
-<details class="howto"><summary>How the filters work</summary><ul>
-<li><strong>City · Type</strong>: pick where, then box or sauna. Saunas split further into hotel, boutique, and large spa · hot spring.</li>
-<li><strong>Sunday</strong>: "open/closed (verified)" only when the official page says so. Otherwise, "pending."</li>
-<li><strong>Price confirmed</strong>: keeps only places whose price we read on the official page.</li>
-<li><strong>Official lists</strong>: keeps only places we saw ourselves in CrossFit’s or HYROX’s official list on the check date. No mark means still checking.</li>
-<li><strong>Sort</strong>: default, recently checked, or A–Z.</li>
-</ul><p class="muted">More in the <a href="/guide/">Guide</a> and <a href="/faq/">FAQ</a>.</p></details></div>
-<form class="filters" aria-label="Filters">
- <div class="fgroup"><label for="f-q">Search name or area</label><input id="f-q" type="search" placeholder="e.g. Hannam, Busan, hotel" autocomplete="off"></div>
- <div class="fgroup"><span>City</span>{seg("city", [("", "All"), ("seoul", "Seoul"), ("busan", "Busan"), ("jeju", "Jeju"), ("gyeonggi", "Gyeonggi")])}</div>
- <div class="fgroup"><span>Type</span>{seg("type", [("", "All"), ("box", "CrossFit · HYROX boxes"), ("sauna", "Saunas")])}</div>
- <div class="fgroup"><label for="f-sub">Sauna type</label><select id="f-sub"><option value="">All</option><option value="hotel">Hotel Saunas</option><option value="boutique">Boutique Saunas</option><option value="spa">Large Spa · Hot Spring</option></select></div>
- <div class="fgroup"><label for="f-sort">Sort</label><select id="f-sort"><option value="">Default</option><option value="date">Recently checked</option><option value="name">A–Z</option></select></div>
- <div class="fgroup"><label for="f-sunday">Sunday</label><select id="f-sunday"><option value="">All</option><option value="yes">Open (verified)</option><option value="no">Closed (verified)</option><option value="unk">Pending</option></select></div>
- <div class="fgroup"><span>Price</span><label class="chk"><input id="f-price" type="checkbox"> Price confirmed only</label></div>
- <div class="fgroup"><span>Official lists</span><label class="chk"><input id="f-hyrox" type="checkbox"> HYROX gyms (official list)</label> <label class="chk"><input id="f-cf" type="checkbox"> CrossFit affiliates (verified)</label></div>
- <div class="fgroup"><span>&nbsp;</span><button id="f-reset" data-reset type="button" class="btn btn-d">Start over</button></div>
-</form>
-<p class="count" id="f-count" aria-live="polite">{len(venues)} places</p>
-<div class="grid" id="finder-list">{"".join(venue_card(v) for v in ordered)}</div>
-<div class="empty" id="f-empty" hidden><p>Nothing here yet.</p><p class="muted">Try fewer filters. More verified places are on the way.</p><button type="button" class="btn btn-d" data-reset>Start over</button></div>
-<div class="note">"Verified" means we read the info directly on the venue’s official page. "Partly verified" means only some items, like the address. Sunday is filled in only when the official page says so. "CrossFit affiliate verified" and "HYROX official gym list verified" appear only where we saw the place ourselves in that official page or list on the check date. No mark means still checking.</div>
-<noscript><p class="muted">Filters need JavaScript. The full list still works without it.</p></noscript>'''
+<p class="lead">{cnt_box} CrossFit &amp; HYROX boxes · {cnt_sauna} hotel, boutique &amp; large saunas across Korea. Every entry shows its official source and check date.</p></div>
+{explorer}'''
     site.add("/finder/", f"{FINDER_LABEL} — Korea", "CrossFit and HYROX boxes, hotel and boutique saunas in Korea. Filter by city, type, Sunday hours and confirmed prices. Every entry with a check date and source.", fbody, "finder", ("finder.js",))
 
     # ---- venue pages
@@ -494,7 +700,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
         def rows():
             out = []
             for k, val in v["facts"]:
-                cell = f'<td class="unk">{PENDING}</td>' if not val.strip() else f'<td>{E(val)}</td>'
+                cell = f'<td class="unk">{PENDING}</td>' if not val.strip() else f'<td>{E(val)}{fact_provenance(v, val)}</td>'
                 out.append(f'<tr><th>{E(k)}</th>{cell}</tr>')
             return "".join(out)
         links = []
@@ -502,14 +708,13 @@ def build(site, venues, events, today, vevents=(), creators=()):
             links.append(f'<a class="btn btn-d" href="{E(v["website"])}" rel="{"sponsored " if v["ad"] else ""}noopener noreferrer">Official site</a>')
         if v["booking"] and v["booking"] != v["website"]:
             links.append(f'<a class="btn btn-d" href="{E(v["booking"])}" rel="noopener noreferrer">Book</a>')
-        q = quote(v["title_ko"] + (" " + v["address"] if v["address"] else ""))
-        links.append(f'<a class="btn btn-d" href="https://map.naver.com/p/search/{q}" rel="noopener noreferrer">Open in map</a>')
+        links.append(f'<a class="btn btn-d" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map</a>')
         srcs = [f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a>'] + [f'<a href="{E(u)}" rel="noopener noreferrer">{E(l)}</a>' for l, u in v["extra_sources"]]
         adnote = (f'<div class="note ad"><strong>Ad</strong> · This entry is labeled as an ad. Verified info still comes from official sources. '
                   f'{E(v["ad_note"])}</div>' if v["ad"] else "")
         tips = ("<h2>Tips · Heads-up</h2><ul class='clean'>" + "".join(f"<li>{E(t)}</li>" for t in v["tips"]) + "</ul>") if v["tips"] else ""
         unv = ("<h2>Not yet verified</h2><ul class='clean'>" + "".join(f"<li>{E(t)}</li>" for t in v["unverified"]) + "</ul>") if v["unverified"] else ""
-        stale = (f'<div class="note">Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if v["stale"] else "")
+        stale = (f'<div class="note">오래됨 (outdated) · Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if v["stale"] else "")
         safety = f'<p class="safety">{SAFETY}</p>' if v["kind_key"] == "sauna" else ""
         offrows = "".join(f'<tr><th>Official list</th><td>{E(t)}</td></tr>' for t in off_marks(v))
         extra_addr = f'<tr><th>Address</th><td><span lang="ko">{E(v["address"])}</span></td></tr>' if v["address"] and not any(k == "주소" for k, _ in v["facts_ko"]) else ""
@@ -532,6 +737,10 @@ def build(site, venues, events, today, vevents=(), creators=()):
         body = f'''<div class="detail"><p class="crumb"><a href="/finder/">{FINDER_LABEL}</a> › {E(v["city_ko"])}</p>
 {v_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{adnote}{stale}
 <p class="lead">{E(v["summary"])}</p>
+<div class="btnrow detail-actions">{"".join(links)}</div>
+<section class="detail-glance" aria-labelledby="glance-heading"><h2 id="glance-heading">At a glance</h2>
+<div class="glance-grid"><div><h3>Price</h3>{price_html(v)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v)}</div>' for label, values in fact_groups(v))}</div>
+<p class="meta">확인일 {dot(v["last_verified"])} · Official reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></p></section>
 <table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{offrows}</tbody></table>
 {tips}{unv}{fchk(v)}{arch_blk}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong></p><p>Source: {" · ".join(srcs)}</p>
