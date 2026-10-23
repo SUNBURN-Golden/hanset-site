@@ -1,0 +1,225 @@
+{
+  "count": 10,
+  "packages": [
+    {
+      "slug": "fraser-place-central-seoul",
+      "name_en": "Fraser Place Central Seoul",
+      "name_ko": "프레이저 플레이스 센트럴 서울",
+      "district": "Jung-gu",
+      "status": "verified",
+      "last_verified": "2026-10-23",
+      "official_source_url": "https://fpcs.co.kr/facility-service/sauna",
+      "conditions": {
+        "public_access": "No. Hotel guests only.",
+        "restriction": "All in-house hotel guests only (non-guests cannot enter).",
+        "booking": "In-house guest access during stay (room booking required).",
+        "kr_phone": "Not confirmed",
+        "card": "Not confirmed",
+        "english": "Official English sauna guide published (fpcs.co.kr/en/facility-service/sauna).",
+        "full_price": "Included/guest facility; no separate sauna fee listed on the official page.",
+        "scrub_fee": "Not stated on official page.",
+        "last_entry": "Not confirmed (operating hours 06:00–22:00).",
+        "closures": "Closed 1st Wednesday of every month (subject to change on holidays).",
+        "age_tattoo_attire": "Children entering the opposite-gender sauna must be under age 3 · Tattoo rule not stated."
+      }
+    },
+    {
+      "slug": "novotel-ambassador-seoul-gangnam",
+      "name_en": "Novotel Ambassador Seoul Gangnam",
+      "name_ko": "노보텔 앰배서더 서울 강남",
+      "district": "Gangnam-gu",
+      "status": "verified",
+      "last_verified": "2026-10-23",
+      "official_source_url": "https://www.ambatel.com/novotel/gangnam/ko/facilitiesView.do?facilities_contents_seq=36",
+      "conditions": {
+        "public_access": "Not confirmed",
+        "restriction": "Not confirmed whether non-guests without membership or a room may enter.",
+        "booking": "Not confirmed",
+        "kr_phone": "Not confirmed",
+        "card": "Not confirmed",
+        "english": "Official English facility guide published (ambatel.com/novotel/gangnam/en/facilitiesList.do).",
+        "full_price": "Sauna admission fee not listed on official page.",
+        "scrub_fee": "Body clean (세신) ₩35,000 extra (official KR & EN pages).",
+        "last_entry": "Not confirmed (operating hours 06:00–21:50).",
+        "closures": "Closed 1st Monday of every month.",
+        "age_tattoo_attire": "Ages 15 and under restricted (16+ only) · No swimwear allowed in sauna or baths · No entry after alcohol or with skin diseases."
+      }
+    },
+    {
+      "slug": "banyan-tree-club-seoul",
+      "name_en": "Banyan Tree Club & Spa Seoul",
+      "name_ko": "반얀트리 클럽 앤 스파 서울",
+      "district": "Jung-gu",
+      "status": "verified",
+      "last_verified": "2026-10-23",
+      "official_source_url": "https://www.banyantreeclub.com/web/kr/facilities/view.asp?idx=4",
+      "conditions": {
+        "public_access": "No. Club members and in-house hotel guests only.",
+        "restriction": "Banyan Tree Club members and hotel guests (guest rate listed at 50% off regular price).",
+        "booking": "Hotel room or club membership required; body scrub/shine last registration 19:20.",
+        "kr_phone": "Not confirmed",
+        "card": "Not confirmed",
+        "english": "Official English sauna guide published (banyantreeclub.com/web/en/facilities/view.asp?idx=4).",
+        "full_price": "Hotel guest rate ₩35,000 (stated as 50% off regular price; membership fee not listed).",
+        "scrub_fee": "Body scrub (세신) 09:00–19:00 & shoe shine until 20:00 (last registration 19:20; separate fee not listed on page).",
+        "last_entry": "Service registration cutoff 19:20 (sauna hours 06:00–22:00, lounge 11:00–20:00).",
+        "closures": "Closed 1st Tuesday of every month.",
+        "age_tattoo_attire": "Tattoos 15 × 15 cm or larger permitted only when covered with a tattoo patch or personal rash guard · Bathrobe and towels provided · No smoking."
+      }
+    },
+    {
+      "slug": "sisu-house",
+      "name_en": "Sisu House",
+      "name_ko": "시수하우스",
+      "district": "Gangnam-gu (Sinsa)",
+      "status": "verified",
+      "last_verified": "2026-10-18",
+      "official_source_url": "http://sisu.house/",
+      "conditions": {
+        "public_access": "Yes. Open to the general public by advance reservation (private 1-person rooms).",
+        "restriction": "Strictly 1 person per room (no couples or 2-person shared entry; confirmed by venue 2026-10-18).",
+        "booking": "100% advance booking required via Naver Booking; international visitors can request a booking link via official Instagram DM (@sisuhouse.official), KakaoTalk channel, or email.",
+        "kr_phone": "Naver Booking requires a verified account; visitors without a Korean number can book via Instagram DM, KakaoTalk channel, or email.",
+        "card": "Not confirmed",
+        "english": "Official website headings in English; foreign booking inquiry supported via Instagram DM / email (spoken staff fluency not stated).",
+        "full_price": "Sisu Spa Basic ₩79,000 · Sisu Spa Deep ₩89,000 · Sisu Recovery ₩109,000 (venue reply 2026-10-18).",
+        "scrub_fee": "Not applicable (Finnish dry sauna & ritual touch program; no traditional 세신).",
+        "last_entry": "Not confirmed (operating hours 11:00–21:45).",
+        "closures": "Closed every Tuesday.",
+        "age_tattoo_attire": "Private 1-person room (tattoos are not exposed to other guests); age limit not stated on official page."
+      }
+    },
+    {
+      "slug": "signiel-seoul",
+      "name_en": "Signiel Seoul (Lotte World Tower)",
+      "name_ko": "시그니엘 서울",
+      "district": "Songpa-gu",
+      "status": "verified",
+      "last_verified": "2026-10-18",
+      "official_source_url": "https://www.lottehotel.com/seoul-signiel/ko/facilities/sauna",
+      "conditions": {
+        "public_access": "No. Fitness club members and in-house hotel guests only.",
+        "restriction": "Strictly limited to Signiel Seoul hotel guests and fitness members (non-guests not admitted).",
+        "booking": "In-house guest or member entry at 85F desk.",
+        "kr_phone": "Not confirmed",
+        "card": "Not confirmed",
+        "english": "Official English hotel facility page available.",
+        "full_price": "Hotel guest sauna admission ₩44,000 per entry (membership fee not shown on page).",
+        "scrub_fee": "Not stated on official page.",
+        "last_entry": "Not confirmed (operating hours 06:00–22:00).",
+        "closures": "Closed last Wednesday of every month.",
+        "age_tattoo_attire": "Age 16+ only · Visitors with tattoos may be restricted from entry (official page)."
+      }
+    },
+    {
+      "slug": "park-hyatt-seoul",
+      "name_en": "Park Hyatt Seoul - Park Club",
+      "name_ko": "파크 하얏트 서울 파크 클럽",
+      "district": "Gangnam-gu",
+      "status": "verified",
+      "last_verified": "2026-10-18",
+      "official_source_url": "https://www.hyatt.com/en-US/spas/Park-Club-Fitness-Centre-and-Spa/about",
+      "conditions": {
+        "public_access": "Not confirmed",
+        "restriction": "Hotel guests and Park Club members (non-guest walk-in eligibility not stated on official page).",
+        "booking": "Not confirmed",
+        "kr_phone": "Not confirmed",
+        "card": "Not confirmed",
+        "english": "Official page published in English (hyatt.com/en-US/spas/Park-Club-Fitness-Centre-and-Spa/about).",
+        "full_price": "Sauna 1-person add-on ₩44,000 incl. 10% VAT (official page).",
+        "scrub_fee": "Not stated on official page.",
+        "last_entry": "Not confirmed (sauna hours 06:00–22:00, spa 10:00–22:00).",
+        "closures": "2026 scheduled maintenance: Sauna & Spa closed Nov 12; Pool & Fitness closed Nov 19.",
+        "age_tattoo_attire": "Age 16+ only · Tattoo and attire rules not stated on official page."
+      }
+    },
+    {
+      "slug": "grand-hyatt-seoul",
+      "name_en": "Grand Hyatt Seoul - The Spa & Club Olympus",
+      "name_ko": "그랜드 하얏트 서울 · 더 스파",
+      "district": "Yongsan-gu",
+      "status": "partial",
+      "last_verified": "2026-10-18",
+      "official_source_url": "https://www.hyatt.com/grand-hyatt/ko-KR/selrs-grand-hyatt-seoul",
+      "conditions": {
+        "public_access": "Not confirmed",
+        "restriction": "Not confirmed on official page (inquiry sent 2026-10-18; awaiting official hotel reply).",
+        "booking": "Not confirmed",
+        "kr_phone": "Not confirmed",
+        "card": "Not confirmed",
+        "english": "Official hotel & spa pages available in English and Korean.",
+        "full_price": "Not confirmed on official page (third-party figures excluded).",
+        "scrub_fee": "Not confirmed",
+        "last_entry": "Not confirmed (The Spa hours 09:30–21:30; standalone sauna hours not stated).",
+        "closures": "Not confirmed",
+        "age_tattoo_attire": "Not confirmed"
+      }
+    },
+    {
+      "slug": "orakai-cheonggyesan",
+      "name_en": "Orakai Cheonggyesan Hotel, BW Premier Collection",
+      "name_ko": "오라카이 청계산 호텔 사우나",
+      "district": "Seocho-gu",
+      "status": "verified",
+      "last_verified": "2026-10-18",
+      "official_source_url": "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp",
+      "conditions": {
+        "public_access": "Yes. Explicitly open to non-guests as well as hotel guests.",
+        "restriction": "Open to general public and hotel guests (hotel guests receive a discounted rate).",
+        "booking": "Walk-in entry; body scrub (세신) is on-site sign-up only.",
+        "kr_phone": "Not required for walk-in ticket purchase at the B1 front desk.",
+        "card": "Not confirmed",
+        "english": "Not confirmed",
+        "full_price": "Adult non-guest ₩24,000 · Hotel guest ₩18,000 · Child (ages 8–13) ₩14,000 (official hotel guide, checked 2026-10-18).",
+        "scrub_fee": "Available on site (walk-in sign-up only, closed Mondays; exact fee not listed on official page).",
+        "last_entry": "20:30 (operating hours 07:00–21:00).",
+        "closures": "Monthly maintenance closures in 2026: Oct 12, Nov 9, Dec 14 (body scrub closed every Monday).",
+        "age_tattoo_attire": "Under age 8 not admitted · Ages 8–16 require an accompanying guardian · Tattoo rule not stated."
+      }
+    },
+    {
+      "slug": "solo-sauna-repo-noryangjin",
+      "name_en": "Solo Sauna Repo Noryangjin",
+      "name_ko": "솔로사우나레포 노량진점",
+      "district": "Dongjak-gu (Noryangjin)",
+      "status": "verified",
+      "last_verified": "2026-10-22",
+      "official_source_url": "https://www.daangn.com/kr/local-profile/%EC%86%94%EB%A1%9C%EC%82%AC%EC%9A%B0%EB%82%98%EB%A0%88%ED%8F%AC-%EB%85%B8%EB%9F%89%EC%A7%84%EC%A0%90-kmkc5iebuf76/",
+      "conditions": {
+        "public_access": "Yes. Open to the general public by advance reservation (private Finnish sauna rooms).",
+        "restriction": "Women's and men's solo rooms (1 person); family room allows up to 2 people.",
+        "booking": "100% advance reservation required (walk-ins without a booking not accepted).",
+        "kr_phone": "Not confirmed",
+        "card": "Not confirmed",
+        "english": "Not confirmed",
+        "full_price": "Solo room (1 person) 60 min ₩45,000~ / 90 min ₩55,000~ · Family room (2 people) 100 min ₩120,000~ (official operator profile, checked 2026-10-22).",
+        "scrub_fee": "Not applicable (private self-löyly Finnish sauna).",
+        "last_entry": "Not confirmed (operating hours 09:00–23:00).",
+        "closures": "Closed 2nd and 4th Monday of every month.",
+        "age_tattoo_attire": "Private room format; specific age or attire rules not stated on official profile."
+      }
+    },
+    {
+      "slug": "ambassador-seoul-pullman",
+      "name_en": "The Ambassador Seoul - A Pullman Hotel",
+      "name_ko": "앰배서더 서울 풀만 사우나",
+      "district": "Jung-gu",
+      "status": "verified",
+      "last_verified": "2026-10-23",
+      "official_source_url": "https://www.ambatel.com/theambassador/seoul/ko/facilitiesView.do?facilities_contents_seq=211",
+      "conditions": {
+        "public_access": "No (members, member-accompanied guests, and hotel guests).",
+        "restriction": "Wellness Center members (free), member-accompanied guests (₩33,000), and hotel guests (₩33,000).",
+        "booking": "In-house guest or member/member-guest check-in at B2 Wellness Center.",
+        "kr_phone": "Not confirmed",
+        "card": "Not confirmed",
+        "english": "Official English facility guide published (ambatel.com/theambassador/seoul/en/facilitiesList.do).",
+        "full_price": "Hotel guests ₩33,000 · Member guests ₩33,000 · Members free (English guide also lists Adults 16+ ₩33,000 / Children 7 and under ₩22,000).",
+        "scrub_fee": "Body clean (세신): Member ₩35,000 / Non-member ₩40,000 · Body oil massage: Member ₩100,000 / Non-member ₩110,000.",
+        "last_entry": "Not confirmed (operating hours 06:00–22:00).",
+        "closures": "Closed 1st Wednesday of every month.",
+        "age_tattoo_attire": "No swimsuits allowed in sauna or baths · No entry after drinking alcohol · Skin disease / public hygiene restrictions apply (English guide notes Adult rate applies age 16+)."
+      }
+    }
+  ]
+}

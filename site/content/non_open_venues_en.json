@@ -1,0 +1,74 @@
+{
+  "orakai-daehakro": {
+    "title": "Orakai Daehakro Hotel Sauna",
+    "location": "Jongno-gu, Seoul · 4F",
+    "price_label": "Price",
+    "summary": "A dry sauna with cold and warm pools. The official page says non-guests can use it for a fee (guest discount).",
+    "facts": [
+      [
+        "Price",
+        "Paid · {price} (no amount on the official page)"
+      ],
+      [
+        "Who can use",
+        "Non-guests welcome (guest discount)"
+      ],
+      [
+        "Status",
+        "Rechecked 2026.10.18: the hours field on the official page still reads 'temporarily closed'. Confirm with the hotel before you go"
+      ]
+    ],
+    "tips": [
+      "The official page says 'temporarily closed'. Confirm with the hotel before you go."
+    ],
+    "unverified": [
+      "Price",
+      "Whether it is open now (marked temporarily closed)"
+    ],
+    "tags": [
+      "Check temporary closure"
+    ]
+  },
+  "sauna-floor": {
+    "title": "SAUNA FLOOR",
+    "location": "Haebangchon, Yongsan-gu, Seoul",
+    "area": "Haebangchon",
+    "price_label": "Price",
+    "summary": "Eight floors. Each with its own heat. A new boutique sauna from Seoul Sauna Club, now taking shape in Haebangchon. Everything here comes from their official Instagram.",
+    "facts": [
+      [
+        "Status",
+        "Opening soon — official Instagram, Oct 21, 2026"
+      ],
+      [
+        "Concept",
+        "Two four-storey buildings, eight floors in all, each with its own temperature and feel"
+      ],
+      [
+        "Location",
+        "Haebangchon, Seoul (exact address not yet announced)"
+      ],
+      [
+        "Opening date",
+        "Not yet announced"
+      ],
+      [
+        "Price",
+        "Not yet announced"
+      ],
+      [
+        "Booking",
+        "Not yet announced"
+      ]
+    ],
+    "tips": [
+      "We'll update this page when the opening date and prices are official."
+    ],
+    "unverified": [
+      "Exact address",
+      "Opening date",
+      "Price",
+      "Booking"
+    ]
+  }
+}

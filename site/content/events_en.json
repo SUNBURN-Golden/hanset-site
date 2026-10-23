@@ -1,20 +1,148 @@
 {
-"urban-wave-throwdown-2026": {"title": "Urban Wave Throwdown 2026", "kind": "Hybrid race (teams of 2)", "city": "Incheon", "venue": "Songdo Convensia Hall 3-4",
- "facts": [["Dates", "10/17 (Sat)–10/18 (Sun)"], ["Venue", "Songdo Convensia Hall 3–4, Incheon"], ["Athlete tickets", "Closed 10/16 · ₩198,000 per person (teams of 2)"], ["Spectator tickets", "Advance ₩15,000 (until 10/16 23:59) · On site ₩20,000"], ["Divisions", "Elite · Rise · Mixed · Age Group"]],
- "note": "Race day is close. Athlete registration is effectively over. Go to watch.", "source_label": "Organizer's official site"},
-"hyrox-seoul-2026": {"title": "AirAsia HYROX Seoul (Season 26/27)", "kind": "HYROX", "city": "Goyang", "venue": "KINTEX",
- "facts": [["Dates", "11/13 (Fri)–11/15 (Sun)"], ["Venue", "KINTEX (217-60 Kintex-ro, Ilsanseo-gu, Goyang-si)"], ["Format", "8×1km run + 8 stations"], ["Divisions", "Open/Pro · Doubles/Doubles Pro · Relay"], ["Registration · fees", "See the official page"]],
- "note": "Registration status and fees weren't in the official page text, so they're not listed.", "source_label": "HYROX Korea official page"},
-"crossfit-open-2027": {"title": "2027 CrossFit Open", "kind": "CrossFit Open (online)", "city": "Online", "venue": "Boxes worldwide · online",
- "facts": [["Dates", "2027/2/18–3/8"], ["Workout releases", "27.1 2/18 · 27.2 2/25 · 27.3 3/4 (Thursday 12 noon PT in the US = Friday 05:00 in Korea)"], ["Score deadline", "Monday 5pm PT (Tuesday 10:00 in Korea)"], ["Fee", "2027 fee not yet announced"]],
- "note": "", "source_label": "CrossFit official page"},
-"hyrox-incheon-2027": {"title": "BYD HYROX Incheon 2027", "kind": "HYROX", "city": "Incheon", "venue": "Songdo Convensia",
- "facts": [["Dates", "2027/5/13 (Thu)–5/16 (Sun)"], ["Venue", "Songdo Convensia, Incheon"], ["Tickets", "Sales opening soon (per official page)"], ["Fee", "Not announced"]],
- "note": "", "source_label": "HYROX official page"},
-"mom3nt-seoul-2026": {"title": "2026 MOM3NT SEOUL", "kind": "Hybrid race", "city": "Goyang", "venue": "KINTEX Hall 1",
- "facts": [["Dates", "11/21 (Sat)–11/22 (Sun)"], ["Venue", "KINTEX 1F Hall 1, Goyang (217-60 Kintex-ro, Ilsanseo-gu)"], ["Divisions", "Single · Double · Triple (divisions differ by day; check the schedule before signing up)"], ["Fee (per person)", "Single ₩96,000 · Double ₩92,000 · Triple ₩90,660 (shown at 20% off, as of the check date)"], ["Spectators", "Festival Pass ₩69,000 (as of the check date)"], ["Stations", "7 stations: hurdle burpee · KB plank transfer · SkiErg · two-way shuttle run · RowErg · forced-change lunge · medicine ball snatch and throw"]],
- "note": "The official page says full refunds ran until 10/16. Heat start times are to be announced, so recheck the official page before you sign up.", "source_label": "Organizer's official sign-up page"},
-"overmax-8k-busan-2026": {"title": "2026 OVERMAX 8K Hybrid Fitness Race (Busan)", "kind": "Hybrid race", "city": "Busan", "venue": "Yeongdo P.ARK",
- "facts": [["Date", "10/31 (Sat)"], ["Venue", "Outdoor arena at P.ARK, Yeongdo, Busan (180 Haeyang-ro 195beon-gil, Yeongdo-gu)"], ["Format", "All-machine hybrid race (official: Korea's first machine hybrid race)"], ["Registration", "First early-bird round closed 9/30 · Check the official page for later status and fees"], ["Race kit", "Event T-shirt · finisher medal · sports towel · welcome gift (official)"]],
- "note": "Fees, divisions and deadlines weren't in the official page text, so they're not listed.", "source_label": "Organizer's official info page"}
+  "hyrox-seoul-2026": {
+    "title": "AirAsia HYROX Seoul (Season 26/27)",
+    "kind": "HYROX",
+    "city": "Goyang",
+    "venue": "KINTEX",
+    "facts": [
+      [
+        "Dates",
+        "11/13 (Fri)–11/15 (Sun)"
+      ],
+      [
+        "Venue",
+        "KINTEX (217-60 Kintex-ro, Ilsanseo-gu, Goyang-si)"
+      ],
+      [
+        "Format",
+        "8×1km run + 8 stations"
+      ],
+      [
+        "Divisions",
+        "Open/Pro · Doubles/Doubles Pro · Relay"
+      ],
+      [
+        "Registration · fees",
+        "See the official page"
+      ]
+    ],
+    "note": "Registration status and fees weren't in the official page text, so they're not listed.",
+    "source_label": "HYROX Korea official page"
+  },
+  "crossfit-open-2027": {
+    "title": "2027 CrossFit Open",
+    "kind": "CrossFit Open (online)",
+    "city": "Online",
+    "venue": "Boxes worldwide · online",
+    "facts": [
+      [
+        "Dates",
+        "2027/2/18–3/8"
+      ],
+      [
+        "Workout releases",
+        "27.1 2/18 · 27.2 2/25 · 27.3 3/4 (Thursday 12 noon PT in the US = Friday 05:00 in Korea)"
+      ],
+      [
+        "Score deadline",
+        "Monday 5pm PT (Tuesday 10:00 in Korea)"
+      ],
+      [
+        "Fee",
+        "2027 fee not yet announced"
+      ]
+    ],
+    "note": "",
+    "source_label": "CrossFit official page"
+  },
+  "hyrox-incheon-2027": {
+    "title": "BYD HYROX Incheon 2027",
+    "kind": "HYROX",
+    "city": "Incheon",
+    "venue": "Songdo Convensia",
+    "facts": [
+      [
+        "Dates",
+        "2027/5/13 (Thu)–5/16 (Sun)"
+      ],
+      [
+        "Venue",
+        "Songdo Convensia, Incheon"
+      ],
+      [
+        "Tickets",
+        "Sales opening soon (per official page)"
+      ],
+      [
+        "Fee",
+        "Not announced"
+      ]
+    ],
+    "note": "",
+    "source_label": "HYROX official page"
+  },
+  "mom3nt-seoul-2026": {
+    "title": "2026 MOM3NT SEOUL",
+    "kind": "Hybrid race",
+    "city": "Goyang",
+    "venue": "KINTEX Hall 1",
+    "facts": [
+      [
+        "Dates",
+        "11/21 (Sat)–11/22 (Sun)"
+      ],
+      [
+        "Venue",
+        "KINTEX 1F Hall 1, Goyang (217-60 Kintex-ro, Ilsanseo-gu)"
+      ],
+      [
+        "Divisions",
+        "Single · Double · Triple (divisions differ by day; check the schedule before signing up)"
+      ],
+      [
+        "Fee (per person)",
+        "Single ₩96,000 · Double ₩92,000 · Triple ₩90,660 (shown at 20% off, as of the check date)"
+      ],
+      [
+        "Spectators",
+        "Festival Pass ₩69,000 (as of the check date)"
+      ],
+      [
+        "Stations",
+        "7 stations: hurdle burpee · KB plank transfer · SkiErg · two-way shuttle run · RowErg · forced-change lunge · medicine ball snatch and throw"
+      ]
+    ],
+    "note": "The official page says full refunds ran until 10/16. Heat start times are to be announced, so recheck the official page before you sign up.",
+    "source_label": "Organizer's official sign-up page"
+  },
+  "overmax-8k-busan-2026": {
+    "title": "2026 OVERMAX 8K Hybrid Fitness Race (Busan)",
+    "kind": "Hybrid race",
+    "city": "Busan",
+    "venue": "Yeongdo P.ARK",
+    "facts": [
+      [
+        "Date",
+        "10/31 (Sat)"
+      ],
+      [
+        "Venue",
+        "Outdoor arena at P.ARK, Yeongdo, Busan (180 Haeyang-ro 195beon-gil, Yeongdo-gu)"
+      ],
+      [
+        "Format",
+        "All-machine hybrid race (official: Korea's first machine hybrid race)"
+      ],
+      [
+        "Registration",
+        "First early-bird round closed 9/30 · Check the official page for later status and fees"
+      ],
+      [
+        "Race kit",
+        "Event T-shirt · finisher medal · sports towel · welcome gift (official)"
+      ]
+    ],
+    "note": "Fees, divisions and deadlines weren't in the official page text, so they're not listed.",
+    "source_label": "Organizer's official info page"
+  }
 }

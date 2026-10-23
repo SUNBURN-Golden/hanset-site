@@ -1,192 +1,160 @@
 {
- "_readme": "Only events verified on an organizer/official page are listed. Aggregator-only events (OVERMAX, Team of Four, MOM3NT, Battle Crew, MINIROX) and placeholders are NOT published until the organizer confirms. Prices from aggregators are never published.",
- "Urban Wave Throwdown 2026": {
-  "slug": "urban-wave-throwdown-2026",
-  "title": "어반웨이브 스로다운 2026",
-  "kind": "하이브리드 레이스 (2인 팀)",
-  "city": "인천",
-  "venue": "송도 컨벤시아 Hall 3-4",
-  "facts": [
-   [
-    "일정",
-    "10/17(토)–10/18(일)"
-   ],
-   [
-    "장소",
-    "인천 송도 컨벤시아 Hall 3–4"
-   ],
-   [
-    "선수 티켓",
-    "10/16 마감 · 1인 ₩198,000 (2인 팀)"
-   ],
-   [
-    "관람권",
-    "사전 ₩15,000(10/16 23:59까지) · 현장 ₩20,000"
-   ],
-   [
-    "디비전",
-    "Elite · Rise · Mixed · Age Group"
-   ]
-  ],
-  "note": "일정이 임박했어요. 지금 선수 등록은 어려워요. 관람 위주로 보세요.",
-  "official_url": "https://urbanwavethrowdown.com/ko",
-  "source_label": "주최측 공식 사이트"
- },
- "HYROX Seoul (AirAsia HYROX Seoul, Season 26/27)": {
-  "slug": "hyrox-seoul-2026",
-  "title": "에어아시아 하이록스 서울 (시즌 26/27)",
-  "kind": "HYROX",
-  "feature": true,
-  "city": "고양",
-  "venue": "KINTEX",
-  "facts": [
-   [
-    "일정",
-    "11/13(금)–11/15(일)"
-   ],
-   [
-    "장소",
-    "KINTEX (217-60 Kintex-ro, Ilsanseo-gu, Goyang-si)"
-   ],
-   [
-    "형식",
-    "8×1km 러닝 + 8개 스테이션"
-   ],
-   [
-    "종목",
-    "Open/Pro · Doubles/Doubles Pro · Relay"
-   ],
-   [
-    "접수·참가비",
-    "공식 페이지에서 확인하세요"
-   ]
-  ],
-  "note": "접수 상태와 참가비는 공식 페이지 본문에서 확인하지 못해 싣지 않았어요.",
-  "official_url": "https://korea.hyrox.com/event/hyrox-seoul-season-26-27-vthaza",
-  "source_label": "HYROX Korea 공식 페이지"
- },
- "2027 CrossFit Open": {
-  "slug": "crossfit-open-2027",
-  "title": "2027 크로스핏 오픈",
-  "kind": "크로스핏 오픈 (온라인)",
-  "city": "온라인",
-  "venue": "전 세계 박스·온라인",
-  "facts": [
-   [
-    "기간",
-    "2027/2/18–3/8"
-   ],
-   [
-    "워크아웃 발표",
-    "27.1 2/18 · 27.2 2/25 · 27.3 3/4 (미국 현지 목요일 낮 12시 PT = 한국 시간 금요일 05:00)"
-   ],
-   [
-    "기록 제출 마감",
-    "월요일 5pm PT (한국 시간 화요일 10:00)"
-   ],
-   [
-    "참가비",
-    "2027년 참가비는 아직 공지되지 않았어요"
-   ]
-  ],
-  "note": "",
-  "official_url": "https://games.crossfit.com/open/overview",
-  "source_label": "CrossFit 공식 페이지"
- },
- "BYD HYROX Incheon 2027": {
-  "slug": "hyrox-incheon-2027",
-  "title": "BYD 하이록스 인천 2027",
-  "kind": "HYROX",
-  "city": "인천",
-  "venue": "송도 컨벤시아",
-  "facts": [
-   [
-    "일정",
-    "2027/5/13(목)–5/16(일)"
-   ],
-   [
-    "장소",
-    "인천 송도 컨벤시아"
-   ],
-   [
-    "티켓",
-    "판매 시작 예정 (공식 페이지 안내)"
-   ],
-   [
-    "참가비",
-    "미공지"
-   ]
-  ],
-  "note": "",
-  "official_url": "https://hyrox.com/event/hyrox-incheon/",
-  "source_label": "HYROX 공식 페이지"
- },
- "2026 MOM3NT IN SEOUL": {
-  "slug": "mom3nt-seoul-2026",
-  "title": "2026 모먼트 서울 (MOM3NT SEOUL)",
-  "kind": "하이브리드 레이스",
-  "city": "고양",
-  "venue": "KINTEX Hall 1",
-  "facts": [
-   [
-    "일정",
-    "11/21(토)–11/22(일)"
-   ],
-   [
-    "장소",
-    "고양 KINTEX 1층 Hall 1 (일산서구 킨텍스로 217-60)"
-   ],
-   [
-    "부문",
-    "싱글 · 더블 · 트리플 (일자별 부문이 달라서 신청 전 일정 확인)"
-   ],
-   [
-    "참가비(1인)",
-    "싱글 ₩96,000 · 더블 ₩92,000 · 트리플 ₩90,660 (20% 할인가 표기, 확인일 기준)"
-   ],
-   [
-    "관람",
-    "Festival Pass ₩69,000 (확인일 기준)"
-   ],
-   [
-    "구성",
-    "7개 스테이션: 허들 버피 · KB 플랭크 트랜스퍼 · 스키에르그 · 투웨이 셔틀런 · 로우에르그 · 포스드 체인지 런지 · 메디신볼 스내치 앤 스로우"
-   ]
-  ],
-  "note": "공식 안내에 100% 환불 기간은 10/16까지로 적혀 있어요. 히트별 출발 시간은 추후 공지 예정이라 신청 전 공식 페이지를 다시 확인하세요.",
-  "official_url": "https://fitchat.co.kr/moment-racing",
-  "source_label": "주최측 공식 신청 페이지"
- },
- "2026 OVERMAX 8K Hybrid Fitness Race": {
-  "slug": "overmax-8k-busan-2026",
-  "title": "2026 오버맥스 8K 하이브리드 피트니스 레이스 (부산)",
-  "kind": "하이브리드 레이스",
-  "city": "부산",
-  "venue": "영도 P.ARK(피아크)",
-  "facts": [
-   [
-    "일정",
-    "10/31(토)"
-   ],
-   [
-    "장소",
-    "부산 영도 피아크(P.ARK) 야외 특설 경기장 (영도구 해양로195번길 180)"
-   ],
-   [
-    "형식",
-    "순수 머신 하이브리드 레이스 (공식 소개: 국내 첫 머신 하이브리드 레이스)"
-   ],
-   [
-    "접수",
-    "1차 얼리버드는 9/30 마감 · 이후 접수 상태와 참가비는 공식 페이지에서 확인하세요"
-   ],
-   [
-    "참가자 구성품",
-    "기념 티셔츠 · 완주 메달 · 스포츠 타월 · 웰컴 기프트 (공식 안내)"
-   ]
-  ],
-  "note": "참가비·종목·마감일은 공식 페이지 본문에서 확인하지 못해 싣지 않았어요.",
-  "official_url": "http://overmax.co.kr/8k",
-  "source_label": "주최측 공식 안내 페이지"
- }
+  "_readme": "Only events verified on an organizer/official page are listed. Aggregator-only events (OVERMAX, Team of Four, MOM3NT, Battle Crew, MINIROX) and placeholders are NOT published until the organizer confirms. Prices from aggregators are never published.",
+  "HYROX Seoul (AirAsia HYROX Seoul, Season 26/27)": {
+    "slug": "hyrox-seoul-2026",
+    "title": "에어아시아 하이록스 서울 (시즌 26/27)",
+    "kind": "HYROX",
+    "feature": true,
+    "city": "고양",
+    "venue": "KINTEX",
+    "facts": [
+      [
+        "일정",
+        "11/13(금)–11/15(일)"
+      ],
+      [
+        "장소",
+        "KINTEX (217-60 Kintex-ro, Ilsanseo-gu, Goyang-si)"
+      ],
+      [
+        "형식",
+        "8×1km 러닝 + 8개 스테이션"
+      ],
+      [
+        "종목",
+        "Open/Pro · Doubles/Doubles Pro · Relay"
+      ],
+      [
+        "접수·참가비",
+        "공식 페이지에서 확인하세요"
+      ]
+    ],
+    "note": "접수 상태와 참가비는 공식 페이지 본문에서 확인하지 못해 싣지 않았어요.",
+    "official_url": "https://korea.hyrox.com/event/hyrox-seoul-season-26-27-vthaza",
+    "source_label": "HYROX Korea 공식 페이지"
+  },
+  "2027 CrossFit Open": {
+    "slug": "crossfit-open-2027",
+    "title": "2027 크로스핏 오픈",
+    "kind": "크로스핏 오픈 (온라인)",
+    "city": "온라인",
+    "venue": "전 세계 박스·온라인",
+    "facts": [
+      [
+        "기간",
+        "2027/2/18–3/8"
+      ],
+      [
+        "워크아웃 발표",
+        "27.1 2/18 · 27.2 2/25 · 27.3 3/4 (미국 현지 목요일 낮 12시 PT = 한국 시간 금요일 05:00)"
+      ],
+      [
+        "기록 제출 마감",
+        "월요일 5pm PT (한국 시간 화요일 10:00)"
+      ],
+      [
+        "참가비",
+        "2027년 참가비는 아직 공지되지 않았어요"
+      ]
+    ],
+    "note": "",
+    "official_url": "https://games.crossfit.com/open/overview",
+    "source_label": "CrossFit 공식 페이지"
+  },
+  "BYD HYROX Incheon 2027": {
+    "slug": "hyrox-incheon-2027",
+    "title": "BYD 하이록스 인천 2027",
+    "kind": "HYROX",
+    "city": "인천",
+    "venue": "송도 컨벤시아",
+    "facts": [
+      [
+        "일정",
+        "2027/5/13(목)–5/16(일)"
+      ],
+      [
+        "장소",
+        "인천 송도 컨벤시아"
+      ],
+      [
+        "티켓",
+        "판매 시작 예정 (공식 페이지 안내)"
+      ],
+      [
+        "참가비",
+        "미공지"
+      ]
+    ],
+    "note": "",
+    "official_url": "https://hyrox.com/event/hyrox-incheon/",
+    "source_label": "HYROX 공식 페이지"
+  },
+  "2026 MOM3NT IN SEOUL": {
+    "slug": "mom3nt-seoul-2026",
+    "title": "2026 모먼트 서울 (MOM3NT SEOUL)",
+    "kind": "하이브리드 레이스",
+    "city": "고양",
+    "venue": "KINTEX Hall 1",
+    "facts": [
+      [
+        "일정",
+        "11/21(토)–11/22(일)"
+      ],
+      [
+        "장소",
+        "고양 KINTEX 1층 Hall 1 (일산서구 킨텍스로 217-60)"
+      ],
+      [
+        "부문",
+        "싱글 · 더블 · 트리플 (일자별 부문이 달라서 신청 전 일정 확인)"
+      ],
+      [
+        "참가비(1인)",
+        "싱글 ₩96,000 · 더블 ₩92,000 · 트리플 ₩90,660 (20% 할인가 표기, 확인일 기준)"
+      ],
+      [
+        "관람",
+        "Festival Pass ₩69,000 (확인일 기준)"
+      ],
+      [
+        "구성",
+        "7개 스테이션: 허들 버피 · KB 플랭크 트랜스퍼 · 스키에르그 · 투웨이 셔틀런 · 로우에르그 · 포스드 체인지 런지 · 메디신볼 스내치 앤 스로우"
+      ]
+    ],
+    "note": "공식 안내에 100% 환불 기간은 10/16까지로 적혀 있어요. 히트별 출발 시간은 추후 공지 예정이라 신청 전 공식 페이지를 다시 확인하세요.",
+    "official_url": "https://fitchat.co.kr/moment-racing",
+    "source_label": "주최측 공식 신청 페이지"
+  },
+  "2026 OVERMAX 8K Hybrid Fitness Race": {
+    "slug": "overmax-8k-busan-2026",
+    "title": "2026 오버맥스 8K 하이브리드 피트니스 레이스 (부산)",
+    "kind": "하이브리드 레이스",
+    "city": "부산",
+    "venue": "영도 P.ARK(피아크)",
+    "facts": [
+      [
+        "일정",
+        "10/31(토)"
+      ],
+      [
+        "장소",
+        "부산 영도 피아크(P.ARK) 야외 특설 경기장 (영도구 해양로195번길 180)"
+      ],
+      [
+        "형식",
+        "순수 머신 하이브리드 레이스 (공식 소개: 국내 첫 머신 하이브리드 레이스)"
+      ],
+      [
+        "접수",
+        "1차 얼리버드는 9/30 마감 · 이후 접수 상태와 참가비는 공식 페이지에서 확인하세요"
+      ],
+      [
+        "참가자 구성품",
+        "기념 티셔츠 · 완주 메달 · 스포츠 타월 · 웰컴 기프트 (공식 안내)"
+      ]
+    ],
+    "note": "참가비·종목·마감일은 공식 페이지 본문에서 확인하지 못해 싣지 않았어요.",
+    "official_url": "http://overmax.co.kr/8k",
+    "source_label": "주최측 공식 안내 페이지"
+  }
 }

@@ -56,10 +56,29 @@ def span(a, b, ref_year):
 
 FOREIGNER = json.loads((ROOT / "content/foreigner.json").read_text(encoding="utf-8"))
 FCHK_KEYS = [("tattoo", "Tattoos"), ("card", "Foreign card payment"), ("english", "English booking / staff"), ("dropin", "Drop-in for visitors")]
+SAUNA_PKG_KEYS = [
+    ("public_access", "General public access"),
+    ("restriction", "Guest / member restriction"),
+    ("booking", "Booking method"),
+    ("kr_phone", "Korean phone number"),
+    ("card", "Foreign card payment"),
+    ("english", "English support / guide"),
+    ("full_price", "Full admission rates"),
+    ("scrub_fee", "Body scrub (세신) fee"),
+    ("last_entry", "Last entry cutoff"),
+    ("closures", "Regular & temp closures"),
+    ("age_tattoo_attire", "Age · tattoo · attire rules"),
+]
+def _is_confirmed(val):
+    return bool(val and val.strip() and val.strip().lower() not in ("not confirmed", "not stated for non-guests.", "확인 중"))
 def fchk(v):
     d = FOREIGNER.get(v["slug"], {})
-    rows = "".join(f'<tr><th>{lab}</th>' + (f'<td>{E(d[k])}</td>' if d.get(k) else '<td class="unk">Not confirmed</td>') + '</tr>' for k, lab in FCHK_KEYS)
-    return f'<h2>Foreigner checklist</h2><table class="facts"><tbody>{rows}</tbody></table><p class="muted">From the official page only, checked {dot(v["last_verified"])}. Not confirmed? Ask the venue before you go.</p>'
+    keys = SAUNA_PKG_KEYS if (v["kind_key"] == "sauna" and "public_access" in d) else FCHK_KEYS
+    rows = "".join(
+        f'<tr><th>{lab}</th>' + (f'<td>{E(d[k])}</td>' if _is_confirmed(d.get(k, "")) else '<td class="unk">Not confirmed</td>') + '</tr>'
+        for k, lab in keys
+    )
+    return f'<h2>Foreigner &amp; visitor access checklist</h2><table class="facts"><tbody>{rows}</tbody></table><p class="muted">From the official source only, checked {dot(v["last_verified"])}. Unstated items remain Not confirmed (확인 중) and are excluded from condition-based recommendations.</p>'
 
 GUIDES = [  # (slug, title, description); page bodies are built in guides()
     ("tattoo-friendly-saunas-korea", "Tattoos and saunas in Korea", "What official pages of Korean hotel saunas and spas say about tattoos. Verified, dated, sourced."),
@@ -69,9 +88,12 @@ GUIDES = [  # (slug, title, description); page bodies are built in guides()
 def guides(site, venues):
     sau = [v for v in venues if v["kind_key"] == "sauna"]; box = [v for v in venues if v["kind_key"] == "box"]
     def tbl(vs, key, head):
-        r = "".join(f'<tr><th><a href="/finder/{v["slug"]}/">{E(v["title"])}</a><br><span class="muted">{E(v["city_ko"])}</span></th>' + (f'<td>{E(FOREIGNER.get(v["slug"],{}).get(key))}</td>' if FOREIGNER.get(v["slug"],{}).get(key) else '<td class="unk">Not confirmed</td>') + f'<td>{dot(v["last_verified"])} · <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></td></tr>' for v in vs)
-        return f'<table class="facts"><thead><tr><th>Venue</th><th>{head}</th><th>Checked · Source</th></tr></thead><tbody>{r}</tbody></table>'
-    note = '<p class="muted">Official pages only. Every line links to its source and check date. Rules change. Confirm with the venue before you go.</p>'
+        confirmed = [v for v in vs if _is_confirmed(FOREIGNER.get(v["slug"], {}).get(key, ""))]
+        excluded_cnt = len(vs) - len(confirmed)
+        r = "".join(f'<tr><th><a href="/finder/{v["slug"]}/">{E(v["title"])}</a><br><span class="muted">{E(v["city_ko"])}</span></th><td>{E(FOREIGNER.get(v["slug"],{}).get(key))}</td><td>{dot(v["last_verified"])} · <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></td></tr>' for v in confirmed)
+        excl_note = f'<p class="muted">{excluded_cnt} open venue(s) where "{head}" is still Not confirmed (확인 중) on the official page are excluded from this table. See each venue page in the <a href="/finder/">Finder</a> for full details.</p>' if excluded_cnt else ""
+        return f'<table class="facts"><thead><tr><th>Venue</th><th>{head}</th><th>Checked · Source</th></tr></thead><tbody>{r}</tbody></table>{excl_note}'
+    note = '<p class="muted">Official pages only. Every line links to its source and check date. Venues where a condition is Not confirmed (확인 중), pre-opening, or temporarily closed are excluded from recommendations below.</p>'
     bodies = {"tattoo-friendly-saunas-korea": "<h1>Tattoos? Read this first.</h1><p class=\"lead\">Some Korean saunas limit entry with tattoos. Here’s exactly what each official page says. Nothing more.</p>" + note + tbl(sau, "tattoo", "Tattoo rule"),
               "hotel-saunas-korea-non-guests": "<h1>No room? Some doors still open.</h1><p class=\"lead\">Hotel saunas in Seoul, Busan and Jeju. Who gets in, straight from the official pages.</p>" + note + tbl(sau, "dropin", "Open to visitors?") + f'<p class="safety">{SAFETY}</p>',
               "crossfit-hyrox-drop-in-korea": "<h1>Traveling? Keep training.</h1><p class=\"lead\">CrossFit and HYROX boxes in Korea. Drop-in and English support, from official pages only.</p>" + note + tbl(box, "dropin", "Drop-in") + "<h2>English support</h2>" + tbl(box, "english", "English")}
@@ -624,7 +646,7 @@ ILLUSTRATIONS = [
 def ics(events):
     def esc(s): return s.replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//HANSET//events//EN", "CALSCALE:GREGORIAN", "X-WR-CALNAME:HANSET Events"]
-    for e in events:
+    for e in [x for x in events if x["end"] >= dt.date.today()]:
         lines += ["BEGIN:VEVENT", f"UID:{e['slug']}@hanset", f"DTSTAMP:{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}",
                   f"DTSTART;VALUE=DATE:{e['start']:%Y%m%d}", f"DTEND;VALUE=DATE:{(e['end'] + dt.timedelta(days=1)):%Y%m%d}",
                   f"SUMMARY:{esc(e['title'])}", f"LOCATION:{esc(e['venue'] + ', ' + e['city'])}", f"URL:{e['url']}",

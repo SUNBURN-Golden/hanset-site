@@ -1,22 +1,209 @@
 {
- "_readme": "Foreigner checklist per venue slug. Only facts already read on the venue's OFFICIAL page (the venue page's source + check date). Venue email replies are NOT used here. Missing key = Not confirmed. Keys: tattoo, card (foreign card payment), english (English booking/staff), dropin (open to visitors without a room/membership).",
- "grand-josun-busan": {"tattoo": "Tattoos 15cm or larger must be covered with a patch. Not coverable = no entry.", "dropin": "Not stated for non-guests."},
- "paradise-hotel-busan": {"dropin": "No. Hotel guests only."},
- "commodore-hotel-busan": {"dropin": "Yes, walk-in rate listed. Adult men only."},
- "shilla-jeju": {"tattoo": "Tattoos may limit entry.", "dropin": "No. Hotel guests only."},
- "fraser-place-central-seoul": {"dropin": "Hotel guests. Non-guest access not stated."},
- "orakai-daehakro": {"dropin": "Yes. Non-guests welcome."},
- "grand-josun-jeju": {"dropin": "Hotel guests. Non-guest access not stated."},
- "crossfit-hannam": {"dropin": "Yes. Drop-in rate listed."},
- "crossfit-zest": {"dropin": "Yes. Drop-in rate listed."},
- "crossfit-super-sapiens": {"dropin": "Yes. Drop-in rate listed."},
- "holis-training-club": {"english": "Bilingual coaches."},
- "heyday-cultures-crossfit": {"english": "English supported."},
- "crossfit-grove-gunja": {"dropin": "Yes. Drop-in request form on its site."},
- "crossfit-kilogram-tribe": {"dropin": "Yes. Drop-in rate listed."},
- "signiel-seoul": {"tattoo": "Tattoos may limit entry.", "dropin": "No. Members and hotel guests only."},
- "signiel-busan": {"dropin": "No. Members and hotel guests only."},
- "lotte-hotel-jeju": {"dropin": "No. Hotel guests only."},
- "orakai-cheonggyesan": {"dropin": "Yes. Open to everyone, room or not."},
- "heosimcheong-busan": {"tattoo": "No entry with tattoos."}
+  "_readme": "Foreigner checklist per venue slug. Only facts already read on the venue's OFFICIAL page (the venue page's source + check date). Venue email replies are NOT used here. Missing key = Not confirmed. Keys: tattoo, card (foreign card payment), english (English booking/staff), dropin (open to visitors without a room/membership).",
+  "grand-josun-busan": {
+    "tattoo": "Tattoos 15cm or larger must be covered with a patch. Not coverable = no entry.",
+    "dropin": "Not confirmed"
+  },
+  "paradise-hotel-busan": {
+    "dropin": "No. Hotel guests only."
+  },
+  "commodore-hotel-busan": {
+    "dropin": "Yes, walk-in rate listed. Adult men only."
+  },
+  "shilla-jeju": {
+    "tattoo": "Tattoos may limit entry.",
+    "dropin": "No. Hotel guests only."
+  },
+  "fraser-place-central-seoul": {
+    "public_access": "No. Hotel guests only.",
+    "restriction": "All in-house hotel guests only (non-guests cannot enter).",
+    "booking": "In-house guest access during stay (room booking required).",
+    "kr_phone": "Not confirmed",
+    "card": "Not confirmed",
+    "english": "Official English sauna guide published (fpcs.co.kr/en/facility-service/sauna).",
+    "full_price": "Included/guest facility; no separate sauna fee listed on the official page.",
+    "scrub_fee": "Not stated on official page.",
+    "last_entry": "Not confirmed (operating hours 06:00–22:00).",
+    "closures": "Closed 1st Wednesday of every month (subject to change on holidays).",
+    "age_tattoo_attire": "Children entering the opposite-gender sauna must be under age 3 · Tattoo rule not stated.",
+    "tattoo": "Not confirmed",
+    "dropin": "No. Hotel guests only."
+  },
+  "grand-josun-jeju": {
+    "dropin": "No. Hotel guests only (included during stay)."
+  },
+  "crossfit-hannam": {
+    "dropin": "Yes. Drop-in rate listed."
+  },
+  "crossfit-zest": {
+    "dropin": "Yes. Drop-in rate listed."
+  },
+  "crossfit-super-sapiens": {
+    "dropin": "Yes. Drop-in rate listed."
+  },
+  "holis-training-club": {
+    "english": "Bilingual coaches."
+  },
+  "heyday-cultures-crossfit": {
+    "english": "English supported."
+  },
+  "crossfit-grove-gunja": {
+    "dropin": "Yes. Drop-in request form on its site."
+  },
+  "crossfit-kilogram-tribe": {
+    "dropin": "Yes. Drop-in rate listed."
+  },
+  "signiel-seoul": {
+    "public_access": "No. Fitness club members and in-house hotel guests only.",
+    "restriction": "Strictly limited to Signiel Seoul hotel guests and fitness members (non-guests not admitted).",
+    "booking": "In-house guest or member entry at 85F desk.",
+    "kr_phone": "Not confirmed",
+    "card": "Not confirmed",
+    "english": "Official English hotel facility page available.",
+    "full_price": "Hotel guest sauna admission ₩44,000 per entry (membership fee not shown on page).",
+    "scrub_fee": "Not stated on official page.",
+    "last_entry": "Not confirmed (operating hours 06:00–22:00).",
+    "closures": "Closed last Wednesday of every month.",
+    "age_tattoo_attire": "Age 16+ only · Visitors with tattoos may be restricted from entry (official page).",
+    "tattoo": "Tattoos may limit entry.",
+    "dropin": "No. Members and hotel guests only."
+  },
+  "signiel-busan": {
+    "dropin": "No. Members and hotel guests only."
+  },
+  "lotte-hotel-jeju": {
+    "dropin": "No. Hotel guests only."
+  },
+  "orakai-cheonggyesan": {
+    "public_access": "Yes. Explicitly open to non-guests as well as hotel guests.",
+    "restriction": "Open to general public and hotel guests (hotel guests receive a discounted rate).",
+    "booking": "Walk-in entry; body scrub (세신) is on-site sign-up only.",
+    "kr_phone": "Not required for walk-in ticket purchase at the B1 front desk.",
+    "card": "Not confirmed",
+    "english": "Not confirmed",
+    "full_price": "Adult non-guest ₩24,000 · Hotel guest ₩18,000 · Child (ages 8–13) ₩14,000 (official hotel guide, checked 2026-10-18).",
+    "scrub_fee": "Available on site (walk-in sign-up only, closed Mondays; exact fee not listed on official page).",
+    "last_entry": "20:30 (operating hours 07:00–21:00).",
+    "closures": "Monthly maintenance closures in 2026: Oct 12, Nov 9, Dec 14 (body scrub closed every Monday).",
+    "age_tattoo_attire": "Under age 8 not admitted · Ages 8–16 require an accompanying guardian · Tattoo rule not stated.",
+    "tattoo": "Not confirmed",
+    "dropin": "Yes. Open to everyone, room or not (adult ₩24,000)."
+  },
+  "heosimcheong-busan": {
+    "tattoo": "No entry with tattoos.",
+    "dropin": "Yes. Open to general public (adult weekday ₩15,000 / weekend ₩18,000)."
+  },
+  "sisu-house": {
+    "public_access": "Yes. Open to the general public by advance reservation (private 1-person rooms).",
+    "restriction": "Strictly 1 person per room (no couples or 2-person shared entry; confirmed by venue 2026-10-18).",
+    "booking": "100% advance booking required via Naver Booking; international visitors can request a booking link via official Instagram DM (@sisuhouse.official), KakaoTalk channel, or email.",
+    "kr_phone": "Naver Booking requires a verified account; visitors without a Korean number can book via Instagram DM, KakaoTalk channel, or email.",
+    "card": "Not confirmed",
+    "english": "Official website headings in English; foreign booking inquiry supported via Instagram DM / email (spoken staff fluency not stated).",
+    "full_price": "Sisu Spa Basic ₩79,000 · Sisu Spa Deep ₩89,000 · Sisu Recovery ₩109,000 (venue reply 2026-10-18).",
+    "scrub_fee": "Not applicable (Finnish dry sauna & ritual touch program; no traditional 세신).",
+    "last_entry": "Not confirmed (operating hours 11:00–21:45).",
+    "closures": "Closed every Tuesday.",
+    "age_tattoo_attire": "Private 1-person room (tattoos are not exposed to other guests); age limit not stated on official page.",
+    "tattoo": "Private 1-person room (no shared bath exposure; official page states no tattoo ban).",
+    "dropin": "Yes, by 100% advance reservation (private 1-person sauna)."
+  },
+  "solo-sauna-repo-noryangjin": {
+    "public_access": "Yes. Open to the general public by advance reservation (private Finnish sauna rooms).",
+    "restriction": "Women's and men's solo rooms (1 person); family room allows up to 2 people.",
+    "booking": "100% advance reservation required (walk-ins without a booking not accepted).",
+    "kr_phone": "Not confirmed",
+    "card": "Not confirmed",
+    "english": "Not confirmed",
+    "full_price": "Solo room (1 person) 60 min ₩45,000~ / 90 min ₩55,000~ · Family room (2 people) 100 min ₩120,000~ (official operator profile, checked 2026-10-22).",
+    "scrub_fee": "Not applicable (private self-löyly Finnish sauna).",
+    "last_entry": "Not confirmed (operating hours 09:00–23:00).",
+    "closures": "Closed 2nd and 4th Monday of every month.",
+    "age_tattoo_attire": "Private room format; specific age or attire rules not stated on official profile.",
+    "tattoo": "Private room format (no shared bath exposure; no tattoo restriction stated).",
+    "dropin": "Yes, by advance reservation (private solo/family rooms)."
+  },
+  "novotel-ambassador-seoul-gangnam": {
+    "public_access": "Not confirmed",
+    "restriction": "Not confirmed whether non-guests without membership or a room may enter.",
+    "booking": "Not confirmed",
+    "kr_phone": "Not confirmed",
+    "card": "Not confirmed",
+    "english": "Official English facility guide published (ambatel.com/novotel/gangnam/en/facilitiesList.do).",
+    "full_price": "Sauna admission fee not listed on official page.",
+    "scrub_fee": "Body clean (세신) ₩35,000 extra (official KR & EN pages).",
+    "last_entry": "Not confirmed (operating hours 06:00–21:50).",
+    "closures": "Closed 1st Monday of every month.",
+    "age_tattoo_attire": "Ages 15 and under restricted (16+ only) · No swimwear allowed in sauna or baths · No entry after alcohol or with skin diseases.",
+    "tattoo": "Not confirmed",
+    "dropin": "Not confirmed"
+  },
+  "banyan-tree-club-seoul": {
+    "public_access": "No. Club members and in-house hotel guests only.",
+    "restriction": "Banyan Tree Club members and hotel guests (guest rate listed at 50% off regular price).",
+    "booking": "Hotel room or club membership required; body scrub/shine last registration 19:20.",
+    "kr_phone": "Not confirmed",
+    "card": "Not confirmed",
+    "english": "Official English sauna guide published (banyantreeclub.com/web/en/facilities/view.asp?idx=4).",
+    "full_price": "Hotel guest rate ₩35,000 (stated as 50% off regular price; membership fee not listed).",
+    "scrub_fee": "Body scrub (세신) 09:00–19:00 & shoe shine until 20:00 (last registration 19:20; separate fee not listed on page).",
+    "last_entry": "Service registration cutoff 19:20 (sauna hours 06:00–22:00, lounge 11:00–20:00).",
+    "closures": "Closed 1st Tuesday of every month.",
+    "age_tattoo_attire": "Tattoos 15 × 15 cm or larger permitted only when covered with a tattoo patch or personal rash guard · Bathrobe and towels provided · No smoking.",
+    "tattoo": "Tattoos 15 × 15 cm or larger permitted only when covered with a patch or personal rash guard.",
+    "dropin": "No. Club members and hotel guests only."
+  },
+  "park-hyatt-seoul": {
+    "public_access": "Not confirmed",
+    "restriction": "Hotel guests and Park Club members (non-guest walk-in eligibility not stated on official page).",
+    "booking": "Not confirmed",
+    "kr_phone": "Not confirmed",
+    "card": "Not confirmed",
+    "english": "Official page published in English (hyatt.com/en-US/spas/Park-Club-Fitness-Centre-and-Spa/about).",
+    "full_price": "Sauna 1-person add-on ₩44,000 incl. 10% VAT (official page).",
+    "scrub_fee": "Not stated on official page.",
+    "last_entry": "Not confirmed (sauna hours 06:00–22:00, spa 10:00–22:00).",
+    "closures": "2026 scheduled maintenance: Sauna & Spa closed Nov 12; Pool & Fitness closed Nov 19.",
+    "age_tattoo_attire": "Age 16+ only · Tattoo and attire rules not stated on official page.",
+    "tattoo": "Not confirmed",
+    "dropin": "Not confirmed"
+  },
+  "grand-hyatt-seoul": {
+    "public_access": "Not confirmed",
+    "restriction": "Not confirmed on official page (inquiry sent 2026-10-18; awaiting official hotel reply).",
+    "booking": "Not confirmed",
+    "kr_phone": "Not confirmed",
+    "card": "Not confirmed",
+    "english": "Official hotel & spa pages available in English and Korean.",
+    "full_price": "Not confirmed on official page (third-party figures excluded).",
+    "scrub_fee": "Not confirmed",
+    "last_entry": "Not confirmed (The Spa hours 09:30–21:30; standalone sauna hours not stated).",
+    "closures": "Not confirmed",
+    "age_tattoo_attire": "Not confirmed",
+    "tattoo": "Not confirmed",
+    "dropin": "Not confirmed"
+  },
+  "ambassador-seoul-pullman": {
+    "public_access": "No (members, member-accompanied guests, and hotel guests).",
+    "restriction": "Wellness Center members (free), member-accompanied guests (₩33,000), and hotel guests (₩33,000).",
+    "booking": "In-house guest or member/member-guest check-in at B2 Wellness Center.",
+    "kr_phone": "Not confirmed",
+    "card": "Not confirmed",
+    "english": "Official English facility guide published (ambatel.com/theambassador/seoul/en/facilitiesList.do).",
+    "full_price": "Hotel guests ₩33,000 · Member guests ₩33,000 · Members free (English guide also lists Adults 16+ ₩33,000 / Children 7 and under ₩22,000).",
+    "scrub_fee": "Body clean (세신): Member ₩35,000 / Non-member ₩40,000 · Body oil massage: Member ₩100,000 / Non-member ₩110,000.",
+    "last_entry": "Not confirmed (operating hours 06:00–22:00).",
+    "closures": "Closed 1st Wednesday of every month.",
+    "age_tattoo_attire": "No swimsuits allowed in sauna or baths · No entry after drinking alcohol · Skin disease / public hygiene restrictions apply (English guide notes Adult rate applies age 16+).",
+    "tattoo": "Not confirmed",
+    "dropin": "No. Hotel guests, members, and member-accompanied guests only."
+  },
+  "termeden-icheon": {
+    "tattoo": "Not confirmed",
+    "dropin": "Yes. Day-pass tickets open to general public (adult full-day ₩49,000; bathhouse-only ₩18,000)."
+  },
+  "spa-haesurang-busan": {
+    "tattoo": "Not confirmed",
+    "dropin": "Yes. Open to general public (adult sauna weekday ₩15,000 / weekend ₩18,000)."
+  }
 }
