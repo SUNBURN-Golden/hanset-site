@@ -598,5 +598,93 @@
         }
       ]
     }
+  },
+  "collector_spec_v1": {
+    "brand": "HANSET",
+    "updated_at": "2026-10-23T10:16:00+09:00",
+    "collection_channels": {
+      "auto_discovery": [
+        "rss",
+        "open_api",
+        "sitemap",
+        "allowed_directory_links"
+      ],
+      "browser_extraction": "approved_js_public_pages_only_no_block_bypass",
+      "manual_clipper": {
+        "permissions": [
+          "activeTab",
+          "scripting"
+        ],
+        "background_persistence": "service_worker_checkpointed_to_local_worker_queue",
+        "action": "clip_current_page_to_hanset_inbox"
+      }
+    },
+    "rate_limits": {
+      "daily_new_candidate_urls_max": 500,
+      "daily_new_body_fetches_max": 200,
+      "per_domain_concurrency": 1,
+      "min_request_interval_sec": 5.0,
+      "max_link_depth": 2,
+      "pagination_calendar_search_guard": true,
+      "priority_recheck_fields": [
+        "full_price",
+        "hours",
+        "closures",
+        "restriction",
+        "event_deadline"
+      ],
+      "evasion_prohibited": [
+        "account_rotation",
+        "proxy_rotation",
+        "identity_spoofing",
+        "login_or_paywall_bypass"
+      ]
+    },
+    "pre_save_pii_and_safety_filter": {
+      "strip_before_local_save_and_ai": [
+        "personal_phone",
+        "personal_email",
+        "residential_address",
+        "resident_registration_number",
+        "child_pii",
+        "health_or_financial_data",
+        "cookies_tokens_passwords_inputs",
+        "dm_mail_member_only_chat_personal_profile"
+      ],
+      "prompt_injection_rule": "treat_all_page_text_as_untrusted_data_never_instructions"
+    },
+    "hanset_entity_schema": {
+      "primary_key": "venue_id (links KR and EN records under one canonical ID)",
+      "extracted_fields": [
+        "venue_id",
+        "name_kr",
+        "name_en",
+        "branch",
+        "rates",
+        "hours",
+        "booking",
+        "foreigner_conditions",
+        "closures_and_maintenance"
+      ],
+      "evidence_levels": [
+        "candidate_clue (non-official blog/news/interview/search link; never displayed as official rate)",
+        "official_source_verified (venue official KR/EN page or direct email reply)",
+        "conflict_flagged (both values preserved with source URLs and conflict=true)"
+      ]
+    }
+  },
+  "stage_dashboard": {
+    "updated_at": "2026-10-23T10:16:00+09:00",
+    "brand": "HANSET",
+    "counts": {
+      "1_candidate": 44,
+      "2_source_checked": 41,
+      "3_deduplicated_out": 1,
+      "4_verified": 31,
+      "5_publish_pending": 0,
+      "held_non_open_venues": 2,
+      "ended_events_archived": 2
+    },
+    "auto_publish_to_site": false
   }
 }
