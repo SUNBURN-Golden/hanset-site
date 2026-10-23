@@ -1,6 +1,6 @@
 {
   "_schema": "HANSET 4-stage inventory queue (2026-10-23). Counting rule: 1 item = 1 verified topic/venue bundle (KO/EN translations, weekday/weekend rate splits, and published copies are never double-counted).",
-  "updated_at": "2026-10-23T10:08:00+09:00",
+  "updated_at": "2026-10-23T13:14:00+09:00",
   "target_waiting_100_plan": {
     "unique_venue_visit_packages": {
       "target": 40,
@@ -674,16 +674,41 @@
     }
   },
   "stage_dashboard": {
-    "updated_at": "2026-10-23T10:16:00+09:00",
+    "updated_at": "2026-10-23T13:14:00+09:00",
     "brand": "HANSET",
+    "approved_sources_config": "/workspace/hanset-collector/approved_sources.json",
+    "approved_origins_count": 54,
+    "sqlite_store_path": "/home/box/.local/state/hanset-collector/collector.sqlite3",
     "counts": {
-      "1_candidate": 44,
-      "2_source_checked": 41,
-      "3_deduplicated_out": 1,
+      "1_candidate": 14,
+      "2_source_checked": 35,
+      "3_deduplicated_out": 7,
       "4_verified": 31,
       "5_publish_pending": 0,
       "held_non_open_venues": 2,
       "ended_events_archived": 2
+    },
+    "sqlite_collector_counts": {
+      "1_candidate": 3,
+      "2_source_checked": 35,
+      "3_deduplicated_out": 7,
+      "4_verified": 11,
+      "5_publish_pending": 0
+    },
+    "sqlite_milestone_counts": {
+      "1_candidate": 56,
+      "2_source_checked": 46,
+      "3_deduplicated_out": 7,
+      "4_verified": 11,
+      "5_publish_pending": 0
+    },
+    "sqlite_quota_usage": {
+      "budget_day": "2026-10-23",
+      "candidates": 56,
+      "new_bodies": 56,
+      "attempts": 56,
+      "accepted": 53,
+      "conflicts_flagged": 6
     },
     "auto_publish_to_site": false
   }

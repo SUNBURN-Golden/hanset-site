@@ -11,7 +11,7 @@ INTERNATIONAL_PHONE = re.compile(r'(?<!\w)(?:\+\d{1,3}[ .-]?(?:\d[ .()-]*){7,12}
 FINANCIAL_NUMBER = re.compile(r'(?<!\d)(?:\d[ -]?){12,18}\d(?!\d)')
 RRN = re.compile(r'(?<!\d)\d{6}[ -]?[1-8]\d{6}(?!\d)')
 SECRET = re.compile(r'(?i)(?:bearer\s+\S+|(?:password|passwd|cookie|token|secret|api[_-]?key|비밀번호)\s*[:=]\s*[^\s,;]+|eyJ[\w-]+\.[\w-]+\.[\w-]+)')
-PRIVATE = re.compile(r'(?i)(?:direct message|private message|members?[-\s]+only\s+(?:conversation|chat|discussion|message|forum)|inbox|개인\s*프로필|쪽지|회원\s*전용\s*(?:대화|채팅|메시지|쪽지|게시판)|주거\s*주소|집\s*주소|자택|주민등록|계좌\s*번호|신용카드\s*번호|진료\s*기록|건강\s*기록|나의\s*진단|아동\s*개인|아이의\s*(?:이름|학교)|my\s*(?:diagnosis|bank account|home address)|child.{0,20}(?:name|school)|\bDM\b)')
+PRIVATE = re.compile(r'(?i)(?:private message|members?[-\s]+only\s+(?:conversation|chat|discussion|message|forum)|개인\s*프로필|쪽지|회원\s*전용\s*(?:대화|채팅|메시지|쪽지|게시판)|주거\s*주소|집\s*주소|자택|주민등록|계좌\s*번호|신용카드\s*번호|진료\s*기록|건강\s*기록|나의\s*진단|아동\s*개인|아이의\s*(?:이름|학교)|my\s*(?:diagnosis|bank account|home address)|child.{0,20}(?:name|school))')
 PRIVATE_DETAILS = re.compile(r'(?i)(?:patient\s*(?:name|record|diagnosis)|medical\s*record|my\s*(?:medication|income|salary|balance)|credit\s*card\s*(?:number|details)|(?:제|저의)\s*(?:병명|진단|복용약|계좌|잔고)|(?:자녀|아동|미성년자).{0,16}(?:이름|학교|생년월일)|\b(?:son|daughter).{0,16}(?:name|school|born))')
 ADDRESS = re.compile(r'(?:[가-힣]+(?:로|길)\s*\d+(?:-\d+)?\s*(?:번지|동|호)|\d+\s+\w+\s+(?:Street|Road|Avenue)\b)', re.I)
 INJECTION = re.compile(r'(?i)(?:ignore\s+(?:all\s+)?(?:previous|prior|system)\s+instructions|이전\s*지시.*무시|이\s*명령을?\s*실행|system\s*prompt|execute\s+(?:this|the following)\s+command)')

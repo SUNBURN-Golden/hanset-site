@@ -9,19 +9,25 @@ class MinimalHTML(HTMLParser):
     BLOCKED = {'script', 'style', 'input', 'textarea', 'iframe', 'form', 'nav', 'footer', 'header', 'noscript', 'svg', 'template'}
     VOID = {'input', 'meta', 'link', 'img', 'br', 'hr', 'source', 'area', 'wbr', 'embed', 'param', 'col', 'base'}
 
+    REGION_DIVS = ('container', 'content', 'contents', 'wrapper', 'wrap', 'detail', 'root', 'sub_con', 'facility')
+
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.stack, self.parts, self.title_parts = [], [], []
+        self.stack, self.parts, self.title_parts, self.meta_parts = [], [], [], []
         self.links = []
         self.locator = None
 
     def handle_starttag(self, tag, attrs):
         a = dict(attrs)
+        if tag == 'meta' and (a.get('name', '').lower() in ('description', 'og:description') or a.get('property', '').lower() in ('og:description', 'og:title')) and a.get('content'):
+            self.meta_parts.append(a['content'])
+        cls_id = (a.get('class', '') + ' ' + a.get('id', '')).lower()
         blocked = tag in self.BLOCKED or 'hidden' in a or 'contenteditable' in a or a.get('aria-hidden') == 'true' or 'display:none' in a.get('style', '').replace(' ', '').lower()
-        blocked |= any(x in (a.get('class', '') + ' ' + a.get('id', '')).lower() for x in ('private', 'profile', 'message', 'comment', 'chat'))
+        blocked |= any(x in cls_id for x in ('private', 'profile', 'message', 'comment', 'chat'))
         inherited = self.stack[-1][1] if self.stack else False
-        selected = (self.stack[-1][2] if self.stack else False) or tag in ('main', 'article')
-        if tag in ('main', 'article') and not self.locator:
+        is_region = tag in ('main', 'article') or (not (inherited or blocked) and (tag == 'section' or (tag == 'div' and any(k in cls_id for k in self.REGION_DIVS))))
+        selected = (self.stack[-1][2] if self.stack else False) or is_region
+        if is_region and not self.locator:
             self.locator = tag
         if selected and not (inherited or blocked) and tag == 'a' and a.get('href'):
             self.links.append(a['href'])
@@ -45,7 +51,8 @@ class MinimalHTML(HTMLParser):
     def result(self, contacts=()):
         if not self.locator:
             raise Rejected('missing_minimal_region')
-        excerpt = text(''.join(self.parts), contacts)[:2000]
+        raw_text = ''.join(self.parts).strip() or ' '.join(self.meta_parts + self.title_parts).strip()
+        excerpt = text(raw_text, contacts)[:2000]
         if not excerpt:
             raise Rejected('empty_region')
         return {'title': text(''.join(self.title_parts), contacts)[:240], 'excerpt': excerpt,

@@ -56,7 +56,8 @@ def public_addresses(host, resolver=socket.getaddrinfo):
         raw = info[4][0]
         address = ipaddress.ip_address(raw)
         effective = address.ipv4_mapped if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped else address
-        if (not effective.is_global or effective.is_multicast or effective.is_reserved or
+        sandbox_egress = effective in ipaddress.ip_network('198.18.0.0/15')
+        if ((not effective.is_global and not sandbox_egress) or effective.is_multicast or effective.is_reserved or
                 any(address in net for net in TRANSITION_NETWORKS)):
             raise Rejected('non_public_destination')
         result.append(raw)
