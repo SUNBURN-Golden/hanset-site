@@ -1,0 +1,109 @@
+{
+  "_schema": "HANSET source collection rules & cadence registry (2026-10-23). Strict compliance: public/official sources and open APIs only; never bypass login walls, paywalls, or technical blocks; never scrape Naver; never copy venue photos.",
+  "brand": "HANSET",
+  "compliance_policy": {
+    "bypass_login_paywall_or_blocks": false,
+    "naver_scraping_or_extension_collection": false,
+    "venue_photo_collection": false,
+    "relist_declined_venues": false,
+    "store_format": "Facts, short evidence notes, check date, and canonical official URL only (never full-text copy)"
+  },
+  "cadence_rules": {
+    "closures_openings_and_ended_events": "daily (08:00 KST pipeline)",
+    "top_10_exposed_venues_price_booking_closures": "twice_weekly (Tue & Fri)",
+    "waiting_inventory_reverification": "monthly (and within 24h before featuring)",
+    "venue_email_reply_check": "4x_daily (09:00, 13:00, 18:00, 22:00 KST)"
+  },
+  "sources": [
+    {
+      "source_id": "seoul-bathhouse-license-open-data",
+      "brand": "HANSET",
+      "name": "서울시 목욕장업 인허가 정보 (Seoul Open Data Plaza OA-16146)",
+      "url": "https://data.seoul.go.kr/dataList/OA-16146/S/1/datasetView.do",
+      "target_fields": [
+        "business_name",
+        "road_address",
+        "license_date",
+        "business_status_code"
+      ],
+      "method": "Open dataset / API (discovery only; 3-day lag means営業 status alone never proves today's open status)",
+      "allowed_terms": "Public open government license (공공누리); discovery stage only",
+      "cadence": "weekly",
+      "last_success_at": "2026-10-22T14:00:00+09:00"
+    },
+    {
+      "source_id": "seoul-hotel-and-boutique-sauna-official-pages",
+      "brand": "HANSET",
+      "name": "Operator Official Facility Pages (Orakai, Ambassador Pullman, Novotel Gangnam, Banyan Tree, Fraser Place, Signiel, Hyatt, Sisu House)",
+      "url": "https://hanset.soulbound.co.kr/finder/",
+      "target_fields": [
+        "public_access",
+        "restriction",
+        "booking",
+        "kr_phone",
+        "card",
+        "english",
+        "full_price",
+        "scrub_fee",
+        "last_entry",
+        "closures",
+        "age_tattoo_attire"
+      ],
+      "method": "Direct HTTP GET of public official KR/EN facility pages (no block/login bypass; no photo downloads)",
+      "allowed_terms": "Publicly accessible official facility information pages; extract factual conditions only",
+      "cadence": "twice_weekly for top 10 exposed Seoul saunas; daily for temporary closure notices",
+      "last_success_at": "2026-10-23T10:03:00+09:00"
+    },
+    {
+      "source_id": "large-spa-official-guides",
+      "brand": "HANSET",
+      "name": "Large Spa & Hot Spring Official Guides (Termeden, Hurshimchung, Spa Haesurang)",
+      "url": "https://termeden.com/poolspa_infomation_use.html",
+      "target_fields": [
+        "seasonal_rates",
+        "operating_hours",
+        "clean_days_and_maintenance",
+        "attire_and_tattoo_rules"
+      ],
+      "method": "Direct HTTP GET of public official guide & notice pages",
+      "allowed_terms": "Publicly accessible official guide pages; facts only",
+      "cadence": "twice_weekly",
+      "last_success_at": "2026-10-23T08:52:00+09:00"
+    },
+    {
+      "source_id": "crossfit-and-hyrox-official-pages",
+      "brand": "HANSET",
+      "name": "CrossFit Official Affiliate List, HYROX Korea Race Pages & Box Official Websites",
+      "url": "https://hyrox.com/event/hyrox-seoul/",
+      "target_fields": [
+        "drop_in_price_krw",
+        "booking_url",
+        "sunday_open",
+        "english_support",
+        "race_dates"
+      ],
+      "method": "Direct HTTP GET of public official pages",
+      "allowed_terms": "Public official event/box pages; facts only",
+      "cadence": "twice_weekly (daily within 7 days of race start)",
+      "last_success_at": "2026-10-23T08:05:00+09:00"
+    },
+    {
+      "source_id": "open-science-wellness-apis",
+      "brand": "HANSET",
+      "name": "PubMed E-utilities, Europe PMC REST API, Crossref Works API",
+      "url": "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/",
+      "target_fields": [
+        "pmid",
+        "doi",
+        "title",
+        "journal",
+        "publication_year",
+        "open_abstract"
+      ],
+      "method": "Public REST API (hourly cron /workspace/fitness-hub/scripts/crawl_wellness_hourly.py)",
+      "allowed_terms": "Free public scientific metadata/abstract APIs (no paywall bypass)",
+      "cadence": "hourly",
+      "last_success_at": "2026-10-23T10:05:01+09:00"
+    }
+  ]
+}

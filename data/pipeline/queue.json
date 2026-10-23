@@ -1,0 +1,602 @@
+{
+  "_schema": "HANSET 4-stage inventory queue (2026-10-23). Counting rule: 1 item = 1 verified topic/venue bundle (KO/EN translations, weekday/weekend rate splits, and published copies are never double-counted).",
+  "updated_at": "2026-10-23T10:08:00+09:00",
+  "target_waiting_100_plan": {
+    "unique_venue_visit_packages": {
+      "target": 40,
+      "scope": "Seoul-first verified saunas & boxes; Gyeonggi day-trips separated"
+    },
+    "condition_comparison_guides": {
+      "target": 25,
+      "scope": "Non-guest access, tattoo rules, body scrub fees, late-night/Sunday hours, solo vs hotel"
+    },
+    "neighborhood_itinerary_routes": {
+      "target": 20,
+      "scope": "District training + recovery pairings (Hannam/Yongsan, Gangnam/Sinsa, Jung-gu, Seocho, Haeundae)"
+    },
+    "first_visit_and_official_programs": {
+      "target": 15,
+      "scope": "First-timer etiquette, self-löyly & ritual guides, verified race-week programs"
+    }
+  },
+  "stage_counts": {
+    "1_discovered": 3,
+    "2_needs_official_check": 41,
+    "3_verified_waiting": 0,
+    "4_published_open_venues": 31,
+    "4_published_upcoming_events": 5,
+    "4_separated_non_open_venues": 2,
+    "4_separated_ended_events": 2,
+    "4_excluded_declined_venues": 1
+  },
+  "stages": {
+    "1_discovered": [
+      {
+        "kind": "sauna",
+        "name": "Alo Wellness Club (Alo Dosan flagship)",
+        "city": "Seoul",
+        "note": "low (single magazine mention)"
+      },
+      {
+        "kind": "sauna",
+        "name": "BadenBaden Spa (private 세신 bath + Finnish sauna)",
+        "city": "Busan",
+        "note": "low (single third-party listing)"
+      },
+      {
+        "kind": "sauna",
+        "name": "Stay Omyo",
+        "city": "Jeju",
+        "note": "low (single magazine mention)"
+      }
+    ],
+    "2_needs_official_check": [
+      {
+        "kind": "sauna",
+        "name": "TOVA",
+        "city": "Seoul",
+        "reason": "Only third-party/magazine or unverified booking link; requires operator official page",
+        "source_url": "https://blog.peacer.co.kr/tova-sauna"
+      },
+      {
+        "kind": "sauna",
+        "name": "Hotel Aquapalace Busan (seawater hot-spring sauna)",
+        "city": "Busan",
+        "reason": "Only third-party/magazine or unverified booking link; requires operator official page",
+        "source_url": "https://booking.naver.com/booking/5/bizes/225795"
+      },
+      {
+        "kind": "sauna",
+        "name": "Jeju Onshim",
+        "city": "Jeju",
+        "reason": "Only third-party/magazine or unverified booking link; requires operator official page",
+        "source_url": "https://www.harpersbazaar.co.kr/article/1898177"
+      },
+      {
+        "kind": "sauna",
+        "name": "Sisaohouse Jeju",
+        "city": "Jeju",
+        "reason": "Only third-party/magazine or unverified booking link; requires operator official page",
+        "source_url": "https://www.stayfolio.com/findstay/sisaohouse-jeju"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Samson",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://cafe.naver.com/crossfitsamson"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit CR",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/affiliate/34545/crossfit-cr"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Higher Gym",
+        "city": "Busan",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/29946/crossfit-higher-gym"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Sasang",
+        "city": "Busan",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/29919/crossfit-sasang"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Baro",
+        "city": "Busan",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/23406/crossfit-baro"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit GLA",
+        "city": "Jeju",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/34159/crossfit-gla"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Rikka",
+        "city": "Jeju",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://cafe.naver.com/crossfitrikka"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Gangnam",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.instagram.com/cfgn_nh"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit KBOX",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/36399/crossfit-kbox"
+      },
+      {
+        "kind": "box",
+        "name": "Muhan CrossFit",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.muhancrossfit.com"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Familiar",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/33903/crossfit-familiar"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Able",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "http://cafe.naver.com/able32th"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Hound",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://cafe.naver.com/crossfithound"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit AID",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/34885/crossfit-aid"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Hound 2nd",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://cafe.naver.com/houndsongpa"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Shot",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/35844/crossfit-shot"
+      },
+      {
+        "kind": "box",
+        "name": "Vibe On CrossFit",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/31803/vibe-on-crossfit"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Geeks",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/31270/crossfit-geeks"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Mullae",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/33004/crossfit-mullae"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Undead",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/35474/crossfit-undead"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Team K Dongnae",
+        "city": "Busan",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/34069/crossfit-team-k-dongnae"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Team H",
+        "city": "Busan",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/34026/crossfit-team-h"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit 0",
+        "city": "Busan",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/30395/crossfit-0"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit ATTI",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/28375/crossfit-atti"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit CSS",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://cafe.naver.com/crossfitseongsu"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit RAON",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/13313/crossfit-raon"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Gunja",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/30513/crossfit-gunja"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit RNL YONGSAN",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "http://www.runandlift.kr"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit RNL Yaksu",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "http://www.runandlift.kr"
+      },
+      {
+        "kind": "box",
+        "name": "We CrossFit Seocho",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/35115/we-crossfit-seocho"
+      },
+      {
+        "kind": "box",
+        "name": "We CrossFit",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/36114/we-crossfit"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Get Knowledge 2",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/31324/crossfit-get-knowledge-2"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit 3BOX",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.instagram.com/cf3box/"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit KTG",
+        "city": "Seoul",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/33979/crossfit-ktg"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Honey Badger",
+        "city": "Busan",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/30508/crossfit-honey-badger"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit Sechan HM",
+        "city": "Busan",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/36089/crossfit-sechan-hm"
+      },
+      {
+        "kind": "box",
+        "name": "CrossFit We Can Do It",
+        "city": "Busan",
+        "reason": "Official drop-in rate, booking method, and English support need direct page read",
+        "source_url": "https://www.crossfit.com/gym/18790/crossfit-we-can-do-it"
+      }
+    ],
+    "3_verified_waiting": [],
+    "4_published_or_expired": {
+      "published_open_venues": [
+        {
+          "name": "Grand Josun Busan",
+          "slug": "grand-josun-busan",
+          "kind": "saunas",
+          "city": "Busan",
+          "status": "verified"
+        },
+        {
+          "name": "Paradise Hotel Busan - Sauna & Cimer Spa",
+          "slug": "paradise-hotel-busan",
+          "kind": "saunas",
+          "city": "Busan",
+          "status": "verified"
+        },
+        {
+          "name": "Commodore Hotel Busan - Palais Royal sauna",
+          "slug": "commodore-hotel-busan",
+          "kind": "saunas",
+          "city": "Busan",
+          "status": "verified"
+        },
+        {
+          "name": "The Shilla Jeju",
+          "slug": "shilla-jeju",
+          "kind": "saunas",
+          "city": "Jeju",
+          "status": "verified"
+        },
+        {
+          "name": "Fraser Place Central Seoul",
+          "slug": "fraser-place-central-seoul",
+          "kind": "saunas",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "Novotel Ambassador Seoul Gangnam",
+          "slug": "novotel-ambassador-seoul-gangnam",
+          "kind": "saunas",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "Banyan Tree Club & Spa Seoul",
+          "slug": "banyan-tree-club-seoul",
+          "kind": "saunas",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "Grand Josun Jeju",
+          "slug": "grand-josun-jeju",
+          "kind": "saunas",
+          "city": "Jeju",
+          "status": "verified"
+        },
+        {
+          "name": "Sisu House",
+          "slug": "sisu-house",
+          "kind": "saunas",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "CrossFit Hannam",
+          "slug": "crossfit-hannam",
+          "kind": "boxes",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "CrossFit Zest",
+          "slug": "crossfit-zest",
+          "kind": "boxes",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "CrossFit Super Sapiens",
+          "slug": "crossfit-super-sapiens",
+          "kind": "boxes",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "HOLIS Training Club",
+          "slug": "holis-training-club",
+          "kind": "boxes",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "Heyday Cultures CrossFit",
+          "slug": "heyday-cultures-crossfit",
+          "kind": "boxes",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "BASALT CrossFit",
+          "slug": "basalt-crossfit",
+          "kind": "boxes",
+          "city": "Jeju",
+          "status": "verified"
+        },
+        {
+          "name": "CrossFit AHN GYM",
+          "slug": "crossfit-ahn-gym",
+          "kind": "boxes",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "CrossFit One (크로스핏원) Daeyeon",
+          "slug": "crossfit-one-daeyeon",
+          "kind": "boxes",
+          "city": "Busan",
+          "status": "verified"
+        },
+        {
+          "name": "CrossFit Grove",
+          "slug": "crossfit-grove-gunja",
+          "kind": "boxes",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "Signiel Seoul (Lotte World Tower)",
+          "slug": "signiel-seoul",
+          "kind": "saunas",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "Signiel Busan",
+          "slug": "signiel-busan",
+          "kind": "saunas",
+          "city": "Busan",
+          "status": "partial"
+        },
+        {
+          "name": "Lotte Hotel Jeju",
+          "slug": "lotte-hotel-jeju",
+          "kind": "saunas",
+          "city": "Jeju",
+          "status": "verified"
+        },
+        {
+          "name": "Park Hyatt Seoul - Park Club",
+          "slug": "park-hyatt-seoul",
+          "kind": "saunas",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "CrossFit Kilogram Tribe",
+          "slug": "crossfit-kilogram-tribe",
+          "kind": "boxes",
+          "city": "Gyeonggi",
+          "status": "verified"
+        },
+        {
+          "name": "Grand Hyatt Seoul - The Spa & Club Olympus",
+          "slug": "grand-hyatt-seoul",
+          "kind": "saunas",
+          "city": "Seoul",
+          "status": "partial"
+        },
+        {
+          "name": "Park Hyatt Busan",
+          "slug": "park-hyatt-busan",
+          "kind": "saunas",
+          "city": "Busan",
+          "status": "partial"
+        },
+        {
+          "name": "Orakai Cheonggyesan Hotel, BW Premier Collection",
+          "slug": "orakai-cheonggyesan",
+          "kind": "saunas",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "Termeden (Icheon)",
+          "slug": "termeden-icheon",
+          "kind": "saunas",
+          "city": "Gyeonggi",
+          "status": "verified"
+        },
+        {
+          "name": "Hurshimchung (Hotel Nongshim)",
+          "slug": "heosimcheong-busan",
+          "kind": "saunas",
+          "city": "Busan",
+          "status": "verified"
+        },
+        {
+          "name": "Spa Haesurang",
+          "slug": "spa-haesurang-busan",
+          "kind": "saunas",
+          "city": "Busan",
+          "status": "verified"
+        },
+        {
+          "name": "Solo Sauna Repo Noryangjin",
+          "slug": "solo-sauna-repo-noryangjin",
+          "kind": "saunas",
+          "city": "Seoul",
+          "status": "verified"
+        },
+        {
+          "name": "The Ambassador Seoul - A Pullman Hotel",
+          "slug": "ambassador-seoul-pullman",
+          "kind": "saunas",
+          "city": "Seoul",
+          "status": "verified"
+        }
+      ],
+      "separated_non_open_venues": [
+        {
+          "name": "Orakai Daehakro Hotel, BW Signature Collection",
+          "slug": "orakai-daehakro",
+          "hold_reason": "temporarily_closed (임시휴업 on official page)",
+          "last_checked": "2026-10-18"
+        },
+        {
+          "name": "SAUNA FLOOR",
+          "slug": "sauna-floor",
+          "hold_reason": "opening_soon (under construction in Haebangchon per official @seoulsaunaclub reel)",
+          "last_checked": "2026-10-22"
+        }
+      ],
+      "separated_ended_events": [
+        {
+          "name": "Urban Wave Throwdown 2026",
+          "slug": "urban-wave-throwdown-2026",
+          "start_date": "2026-10-17",
+          "end_date": "2026-10-18",
+          "status": "ended"
+        },
+        {
+          "name": "2026 UWF x MINIROX",
+          "slug": "uwf-minirox-2026",
+          "start_date": "2026-10-18",
+          "end_date": "2026-10-18",
+          "status": "ended"
+        }
+      ],
+      "excluded_declined_venues": [
+        {
+          "name": "RUNPORT (Butfit Clubhouse)",
+          "slug": "runport-mapo",
+          "reason": "Venue declined magazine publication on 2026-10-19; never re-list without explicit venue consent."
+        }
+      ]
+    }
+  }
+}

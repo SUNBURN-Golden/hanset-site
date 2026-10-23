@@ -153,8 +153,12 @@
     "summary": "A dry sauna in Finnish wood, plus cold and warm pools, connected to the pool and fitness center, per the official page.",
     "facts": [
       [
+        "Who can enter",
+        "All hotel guests (not open to non-guests)"
+      ],
+      [
         "Price",
-        "{price}"
+        "No separate fee listed on the official page"
       ],
       [
         "Hours",
@@ -162,11 +166,19 @@
       ],
       [
         "Closed",
-        "1st Wednesday of every month"
+        "1st Wednesday of every month (may change on holidays)"
       ],
       [
-        "Who can use",
-        "All hotel guests, per the official page"
+        "Facilities",
+        "Finnish-wood dry sauna, hot and cold baths, bath amenities (connected to pool and gym)"
+      ],
+      [
+        "Age & gender rule",
+        "Children entering the opposite-gender sauna must be under age 3"
+      ],
+      [
+        "Official English guide",
+        "Published on official English page (fpcs.co.kr/en/facility-service/sauna)"
       ]
     ],
     "unverified": [
@@ -183,8 +195,12 @@
     "summary": "Finnish-style dry and wet saunas, plus warm and cold pools, per the official page.",
     "facts": [
       [
+        "Location",
+        "3F"
+      ],
+      [
         "Price",
-        "{price} (no entry fee on the page we read · body scrub ₩35,000 is a separate item)"
+        "Admission fee not listed · Body scrub (세신) ₩35,000 extra"
       ],
       [
         "Hours",
@@ -195,8 +211,16 @@
         "1st Monday of every month"
       ],
       [
-        "Who can use",
-        "Access for non-guests is not stated on the official page"
+        "Facilities",
+        "Finnish dry sauna, wet sauna, warm, cold and hot baths, body scrub (paid)"
+      ],
+      [
+        "Age & attire rules",
+        "Ages 15 and under restricted (16+ only) · No swimwear in sauna or baths · No entry after alcohol"
+      ],
+      [
+        "Official English guide",
+        "Published on official English page (ambatel.com/novotel/gangnam/en/facilitiesList.do)"
       ]
     ],
     "unverified": [
@@ -207,59 +231,41 @@
   "banyan-tree-club-seoul": {
     "title": "Banyan Tree Club & Spa Seoul Sauna",
     "location": "Jung-gu, Seoul",
-    "price_label": "Price",
+    "price_label": "Price (hotel guest)",
     "summary": "Warm and cold pools, wet and dry saunas, a sauna lounge and body scrub service (09:00–19:00), per the official page.",
     "facts": [
       [
+        "Location",
+        "The Club 2F"
+      ],
+      [
         "Price",
-        "The official page lists only the hotel-guest rate, ₩35,000 (shown as 50% off the standard rate). Standard rate pending"
+        "Hotel guests {price} (50% off regular rate)"
       ],
       [
         "Hours",
-        "06:00–22:00"
+        "06:00–22:00 (Sauna Lounge 11:00–20:00)"
       ],
       [
         "Closed",
         "1st Tuesday of every month"
       ],
       [
-        "Who can use",
-        "Access for non-members pending"
+        "Facilities & services",
+        "Hot and cold baths, wet and dry saunas, sauna lounge, body scrub (09:00–19:00, fee not listed), shoe shine (last registration 19:20), men's sleeping room, women's rest room"
+      ],
+      [
+        "Tattoo policy",
+        "Tattoos 15 × 15 cm or larger permitted only when covered with a patch or personal rash guard (official KR & EN pages)"
+      ],
+      [
+        "Official English guide",
+        "Published on official English page (banyantreeclub.com/web/en/facilities/view.asp?idx=4)"
       ]
     ],
     "unverified": [
       "Standard rate",
       "Access for non-members"
-    ]
-  },
-  "orakai-daehakro": {
-    "title": "Orakai Daehakro Hotel Sauna",
-    "location": "Jongno-gu, Seoul · 4F",
-    "price_label": "Price",
-    "summary": "A dry sauna with cold and warm pools. The official page says non-guests can use it for a fee (guest discount).",
-    "facts": [
-      [
-        "Price",
-        "Paid · {price} (no amount on the official page)"
-      ],
-      [
-        "Who can use",
-        "Non-guests welcome (guest discount)"
-      ],
-      [
-        "Status",
-        "Rechecked 2026.10.18: the hours field on the official page still reads 'temporarily closed'. Confirm with the hotel before you go"
-      ]
-    ],
-    "tips": [
-      "The official page says 'temporarily closed'. Confirm with the hotel before you go."
-    ],
-    "unverified": [
-      "Price",
-      "Whether it is open now (marked temporarily closed)"
-    ],
-    "tags": [
-      "Check temporary closure"
     ]
   },
   "grand-josun-jeju": {
@@ -1198,48 +1204,6 @@
       "7F open-air bath"
     ]
   },
-  "sauna-floor": {
-    "title": "SAUNA FLOOR",
-    "location": "Haebangchon, Yongsan-gu, Seoul",
-    "area": "Haebangchon",
-    "price_label": "Price",
-    "summary": "Eight floors. Each with its own heat. A new boutique sauna from Seoul Sauna Club, now taking shape in Haebangchon. Everything here comes from their official Instagram.",
-    "facts": [
-      [
-        "Status",
-        "Opening soon — official Instagram, Oct 21, 2026"
-      ],
-      [
-        "Concept",
-        "Two four-storey buildings, eight floors in all, each with its own temperature and feel"
-      ],
-      [
-        "Location",
-        "Haebangchon, Seoul (exact address not yet announced)"
-      ],
-      [
-        "Opening date",
-        "Not yet announced"
-      ],
-      [
-        "Price",
-        "Not yet announced"
-      ],
-      [
-        "Booking",
-        "Not yet announced"
-      ]
-    ],
-    "tips": [
-      "We'll update this page when the opening date and prices are official."
-    ],
-    "unverified": [
-      "Exact address",
-      "Opening date",
-      "Price",
-      "Booking"
-    ]
-  },
   "solo-sauna-repo-noryangjin": {
     "title": "Solo Sauna Repo Noryangjin",
     "location": "Noryangjin, Dongjak-gu, Seoul",
@@ -1278,6 +1242,65 @@
     "unverified": [],
     "tags": [
       "Solo sauna"
+    ]
+  },
+  "ambassador-seoul-pullman": {
+    "title": "The Ambassador Seoul – A Pullman Hotel Sauna",
+    "location": "서울특별시 중구 동호로 287 · 지하 2층 (B2, 287 Dongho-ro, Jung-gu, Seoul)",
+    "area": "Jung-gu, Seoul",
+    "price_label": "Price (guest · member guest)",
+    "summary": "Men's and women's sauna and sleeping rooms on B2 of The Ambassador Seoul – A Pullman in Jangchung-dong. Guest and member-guest rates, body scrub fees, and bathing attire rules are published on the official Korean and English pages.",
+    "facts": [
+      [
+        "Location",
+        "B2 Wellness Center"
+      ],
+      [
+        "Who can enter",
+        "Wellness Center members, member guests, and hotel guests"
+      ],
+      [
+        "Price",
+        "Hotel guests {price} · Member guests ₩33,000 · Members free (English guide also lists Adults 16+ ₩33,000 / Children 7 and under ₩22,000)"
+      ],
+      [
+        "Body scrub (세신)",
+        "Body clean: Member ₩35,000 / Non-member ₩40,000 · Body oil massage: Member ₩100,000 / Non-member ₩110,000"
+      ],
+      [
+        "Hours",
+        "06:00–22:00"
+      ],
+      [
+        "Closed",
+        "1st Wednesday of every month"
+      ],
+      [
+        "Facilities",
+        "Men's and women's saunas, baths, sleeping rooms"
+      ],
+      [
+        "Attire & entry rules",
+        "No swimsuits in the sauna or baths · No entry after drinking alcohol · Skin or public-hygiene restrictions apply"
+      ],
+      [
+        "Official English guide",
+        "Published on official English page (ambatel.com/theambassador/seoul/en/facilitiesList.do)"
+      ]
+    ],
+    "tips": [
+      "Swimsuits are not allowed inside the sauna or baths.",
+      "Body scrub (Body clean) fees are officially listed at ₩35,000 for members and ₩40,000 for non-members."
+    ],
+    "unverified": [
+      "Walk-in access for non-guests without a member",
+      "Last entry cutoff time",
+      "Tattoo policy",
+      "Foreign credit card acceptance on site"
+    ],
+    "tags": [
+      "Guests & members",
+      "Body scrub fee listed"
     ]
   }
 }
