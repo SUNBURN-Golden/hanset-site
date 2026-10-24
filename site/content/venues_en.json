@@ -1305,7 +1305,7 @@
   },
   "ktng-sportera-seoul": {
     "title": "KT&G Sportera (KT&G 스포테라)",
-    "location": "서울 강남구 영동대로 416, KT&G타워 B1–B2 (416 Yeongdong-daero, Gangnam-gu, Seoul)",
+    "location": "서울 강남구 영동대로 416, KT&G타워 지하2층 (416 Yeongdong-daero, Gangnam-gu, Seoul, B2)",
     "area": "Gangnam-gu, Seoul",
     "price_label": "Price",
     "price_caveat": "",
@@ -1321,7 +1321,7 @@
       ],
       [
         "Address",
-        "서울 강남구 영동대로 416, KT&G타워 B1–B2 (416 Yeongdong-daero, Gangnam-gu, Seoul)"
+        "416 Yeongdong-daero, Gangnam-gu, Seoul, KT&G Tower B2 · 262m from Samseong Station (Line 2) Exit 2 — Official Naver listing, confirmed by HANSET editor 2026-10-24"
       ],
       [
         "Hours",
@@ -1334,14 +1334,30 @@
       [
         "Getting there",
         "Between Hwimun High School intersection and Samseong Station, KT&G building B2 — official blog, checked 2026-10-24"
+      ],
+      [
+        "Annual membership",
+        "Gym + golf ₩2,900,000 · Gym only ₩2,200,000 (day passes not confirmed) — Official Naver listing, confirmed by HANSET editor 2026-10-24"
+      ],
+      [
+        "Booking",
+        "Naver reservation available — Official Naver listing, confirmed by HANSET editor 2026-10-24"
+      ],
+      [
+        "Facilities",
+        "Fitness Tera (about 1,300 pyeong gym, Technogym weights, PT) · Golf Tera (31-bay swing analysis, GDR/GTS screen golf, lessons) · Spa & Cafe Tera (Korea Ginseng Corp. products) — Official Naver listing, confirmed by HANSET editor 2026-10-24"
+      ],
+      [
+        "Amenities",
+        "Separate men's and women's restrooms · Wi-Fi · Group use OK — Official Naver listing, confirmed by HANSET editor 2026-10-24"
       ]
     ],
     "tips": [
       "No official website could be confirmed. Ask at the desk before you go."
     ],
     "unverified": [
-      "Prices",
-      "Booking and day-visitor access",
+      "Day-pass prices",
+      "Day-visitor access",
       "Tattoo rules",
       "Rules for foreign visitors"
     ],
