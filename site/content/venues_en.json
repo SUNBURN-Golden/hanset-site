@@ -1365,5 +1365,50 @@
       "Gym + sauna",
       "Samseong Stn."
     ]
+  },
+  "choice-by-vantt-gangdong": {
+    "title": "CHOICE BY VANTT (초이스 바이 반트)",
+    "location": "서울 강동구 고덕비즈밸리로 51 (51 Godeokbizvalley-ro, Gangdong-gu, Seoul), Gangdong I-Park The River rooftop",
+    "area": "Gangdong-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "Hotel Shilla's VANTT sub-brand. A rooftop infinity pool and jacuzzi facing the Han River.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (premium fitness club with rooftop pool). Not a boutique or hotel sauna"
+      ],
+      [
+        "Operator",
+        "Hotel Shilla, VANTT sub-brand launched 2025 — official Shilla page, checked 2026-10-25"
+      ],
+      [
+        "Facilities",
+        "Rooftop infinity pool + jacuzzi facing the Han River and Godeok-Topyeong Bridge — confirmed by HANSET editor 2026-10-25"
+      ],
+      [
+        "Address",
+        "51 Godeokbizvalley-ro, Gangdong-gu, Seoul, Gangdong I-Park The River rooftop — location confirmed by HANSET editor 2026-10-25"
+      ],
+      [
+        "Official channel",
+        "Instagram @choicebyvantt"
+      ]
+    ],
+    "tips": [
+      "Check prices and entry rules on the official channel first."
+    ],
+    "unverified": [
+      "Prices",
+      "Hours",
+      "Day pass",
+      "Booking",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Rooftop pool",
+      "Han River view"
+    ]
   }
 }
