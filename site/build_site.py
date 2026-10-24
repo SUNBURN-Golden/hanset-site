@@ -447,7 +447,7 @@ MAP_DISTRICTS = {
               ("Seocho", "Seocho", 181, 211, [(176, 238), (220, 238)]),
               ("Gangnam", "Gangnam / Sinsa", 248, 155, [(206, 180), (250, 180), (294, 180), (264, 238), (338, 180)]),
               ("Songpa", "Songpa", 337, 220, [(344, 244)]),
-              ("Gangdong", "Gangdong", 350, 103, [(330, 126), (374, 126)])],
+              ("Gangdong", "Gangdong", 350, 103, [(330, 126), (374, 126), (374, 170)])],
     "busan": [("Dongnae", "Dongnae", 153, 35, [(154, 60)]),
               ("Haeundae", "Haeundae", 302, 90, [(264, 116), (308, 116), (352, 116)]),
               ("Nam-gu", "Nam-gu", 224, 151, [(224, 176)]),
@@ -494,7 +494,7 @@ def venue_map(venues):
         drawing = MAP_PATHS[city]
         if city == "all":
             # Regional insets spread pins for readability, not precise locations.
-            slots = {"seoul": [(44 + col * 44, 46 + row * 44) for row in range(3) for col in range(6)],
+            slots = {"seoul": [(44 + col * 44, 46 + row * 44) for row in range(3) for col in range(6)] + [(44 + col * 44, 178) for col in range(4)],
                      "gyeonggi": [(328, 46), (328, 90)],
                      "busan": [(244 + col * 44, 194 + row * 44) for row in range(2) for col in range(4)],
                      "jeju": [(44 + col * 44, 238) for col in range(4)]}
