@@ -1302,5 +1302,41 @@
       "Guests & members",
       "Body scrub fee listed"
     ]
+  },
+  "ktng-sportera-seoul": {
+    "title": "KT&G Sportera (KT&G 스포테라)",
+    "location": "서울 강남구 영동대로 416, KT&G타워 B1–B2 (416 Yeongdong-daero, Gangnam-gu, Seoul)",
+    "area": "Gangnam-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "A gym and sauna complex under KT&G Tower. Licensed as a public bathhouse in Korea's public licence data. Everything else is not confirmed yet.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (gym and sauna complex). Not a boutique or hotel sauna"
+      ],
+      [
+        "Licence",
+        "Public bathhouse, active, licensed 2011-07-07 — Ministry of the Interior and Safety open data, checked 2026-10-24"
+      ],
+      [
+        "Address",
+        "서울 강남구 영동대로 416, KT&G타워 B1–B2 (416 Yeongdong-daero, Gangnam-gu, Seoul)"
+      ]
+    ],
+    "tips": [
+      "No official website could be confirmed. Ask at the desk before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Hours",
+      "Booking and day-visitor access",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Gym + sauna",
+      "Samseong Stn."
+    ]
   }
 }

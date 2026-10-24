@@ -445,7 +445,7 @@ MAP_DISTRICTS = {
               ("Yeongdeungpo", "Yeongdeungpo", 56, 151, [(54, 176)]),
               ("Dongjak", "Dongjak", 109, 191, [(110, 216)]),
               ("Seocho", "Seocho", 181, 211, [(176, 238), (220, 238)]),
-              ("Gangnam", "Gangnam / Sinsa", 248, 155, [(206, 180), (250, 180), (294, 180), (264, 238)]),
+              ("Gangnam", "Gangnam / Sinsa", 248, 155, [(206, 180), (250, 180), (294, 180), (264, 238), (338, 180)]),
               ("Songpa", "Songpa", 337, 220, [(344, 244)]),
               ("Gangdong", "Gangdong", 350, 103, [(330, 126), (374, 126)])],
     "busan": [("Dongnae", "Dongnae", 153, 35, [(154, 60)]),
