@@ -1309,7 +1309,7 @@
     "area": "Gangnam-gu, Seoul",
     "price_label": "Price",
     "price_caveat": "",
-    "summary": "A gym and sauna complex under KT&G Tower. Licensed as a public bathhouse in Korea's public licence data. Everything else is not confirmed yet.",
+    "summary": "A gym and sauna complex under KT&G Tower. Licensed as a public bathhouse. Hours and parking follow the official blog.",
     "facts": [
       [
         "Category",
@@ -1322,6 +1322,18 @@
       [
         "Address",
         "서울 강남구 영동대로 416, KT&G타워 B1–B2 (416 Yeongdong-daero, Gangnam-gu, Seoul)"
+      ],
+      [
+        "Hours",
+        "Weekdays 06:00–23:00 · Saturday 08:00–20:00 · Closed every Sunday — official blog, checked 2026-10-24"
+      ],
+      [
+        "Parking",
+        "Free 4 hrs when using the facilities · 2 hrs free for sauna only — official blog, checked 2026-10-24"
+      ],
+      [
+        "Getting there",
+        "Between Hwimun High School intersection and Samseong Station, KT&G building B2 — official blog, checked 2026-10-24"
       ]
     ],
     "tips": [
@@ -1329,7 +1341,6 @@
     ],
     "unverified": [
       "Prices",
-      "Hours",
       "Booking and day-visitor access",
       "Tattoo rules",
       "Rules for foreign visitors"
