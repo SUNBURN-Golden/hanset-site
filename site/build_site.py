@@ -437,40 +437,56 @@ def venue_card(v):
 
 # Presentation coordinates for schematic regions only, never entrance coordinates.
 # Membership comes solely from existing location/area text. Unknowns are off-map.
-MAP_DISTRICTS = {
-    "seoul": [("Jongno", "Jongno", 130, 23, [(130, 48)]),
-              ("Jung-gu", "Jung-gu", 198, 61, [(154, 84), (198, 84), (242, 84), (198, 40)]),
-              ("Yongsan", "Yongsan / Hannam", 191, 102, [(154, 126), (198, 126), (242, 126)]),
-              ("Gwangjin", "Gwangjin", 293, 61, [(294, 84), (338, 84)]),
-              ("Yeongdeungpo", "Yeongdeungpo", 56, 151, [(54, 176), (98, 176)]),
-              ("Dongjak", "Dongjak", 109, 191, [(110, 216)]),
-              ("Seocho", "Seocho", 181, 211, [(176, 238), (220, 238), (142, 250), (154, 204), (300, 256)]),
-              ("Gangnam", "Gangnam / Sinsa", 248, 155, [(206, 180), (250, 180), (294, 180), (264, 238), (338, 180), (308, 222), (372, 210), (286, 134)]),
-              ("Songpa", "Songpa", 337, 220, [(344, 244)]),
-              ("Gangdong", "Gangdong", 350, 103, [(330, 126), (374, 126), (374, 170)]),
-              ("Mapo", "Mapo", 88, 79, [(66, 102), (110, 102)]),
-              ("Gangseo", "Gangseo", 32, 117, [(32, 140)]),
-              ("Gangbuk", "Gangbuk", 250, 18, [(252, 40)]),
-              ("Gwanak", "Gwanak", 66, 214, [(62, 236), (98, 256)]),
-              ("Nowon", "Nowon", 340, 18, [(342, 40)])],
-    "busan": [("Dongnae", "Dongnae", 153, 35, [(154, 60)]),
-              ("Haeundae", "Haeundae", 302, 90, [(264, 116), (308, 116), (352, 116)]),
-              ("Nam-gu", "Nam-gu", 224, 151, [(224, 176)]),
-              ("Jung-gu", "Jung-gu", 144, 181, [(144, 206)]),
-              ("Seo-gu", "Seo-gu", 71, 174, [(72, 200)]),
-              ("", "District 확인 중 · off-map", 286, 225, [(286, 250)])],
-    "jeju": [("Jeju-si", "Jeju-si", 207, 68, [(208, 94)]),
-             ("Seogwipo", "Seogwipo / Jungmun", 202, 174, [(158, 200), (202, 200), (246, 200)])],
-    "gyeonggi": [("Goyang", "Goyang / Samsong", 98, 54, [(98, 80)]),
-                 ("Icheon", "Icheon", 296, 178, [(296, 204)])],
+# Schematic lattice: pins sit on a 54x66 grid so 52-unit hit areas never overlap
+# (>=44px on a 390px phone) and labels sit in the gap above each row.
+MAP_PITCH_X, MAP_PITCH_Y, MAP_TOP, MAP_LEFT, MAP_HIT = 54, 66, 58, 38, 52
+# Each row: (group key, label or "" for continuation, columns); key None = empty cell.
+MAP_LAYOUT = {
+    "seoul": [[("Gangseo", "Gangseo", 1), ("Mapo", "Mapo", 2), ("Jongno", "Jongno", 1), ("Gangbuk", "Gangbuk", 1), ("Nowon", "Nowon", 1)],
+              [("Yeongdeungpo", "Yeongdeungpo", 2), ("Jung-gu", "Jung-gu", 4), (None, "", 1)],
+              [("Dongjak", "Dongjak", 1), ("Yongsan", "Yongsan / Hannam", 3), ("Gangdong", "Gangdong", 3)],
+              [("Gwanak", "Gwanak", 2), ("Seocho", "Seocho", 5)],
+              [(None, "", 1), ("Gangnam", "Gangnam / Sinsa", 4), ("Gwangjin", "Gwangjin", 2)],
+              [(None, "", 1), ("Gangnam", "", 4), (None, "", 1), ("Songpa", "Songpa", 1)]],
+    "busan": [[("Dongnae", "Dongnae", 1), ("Haeundae", "Haeundae", 3), ("Nam-gu", "Nam-gu", 1), ("Jung-gu", "Jung-gu", 1), ("Seo-gu", "Seo-gu", 1)],
+              [(None, "", 3), ("", "District 확인 중 · off-map", 1)]],
+    "jeju": [[("Jeju-si", "Jeju-si", 2), (None, "", 2), ("Seogwipo", "Seogwipo / Jungmun", 3)]],
+    "gyeonggi": [[("Goyang", "Goyang / Samsong", 3), (None, "", 1), ("Icheon", "Icheon", 2)]],
+    "all": [[("seoul", "Seoul", 7)], [("seoul", "", 7)], [("seoul", "", 7)], [("seoul", "", 7)], [("seoul", "", 7)],
+            [("gyeonggi", "Gyeonggi", 2), ("busan", "Busan", 5)],
+            [("jeju", "Jeju", 4), ("busan", "", 3)]],
 }
-MAP_PATHS = {
-    "all": '<path class="map-land" d="M201 10 280 20 305 54 286 86 321 126 366 163 381 202 346 255 306 247 268 218 230 217 206 181 173 173 157 132 171 92 153 59Z"/><path class="map-zone" d="M20 22H286V153H20Z"/><path class="map-zone" d="M300 22H356V112H300Z"/><path class="map-zone" d="M222 168H398V261H222Z"/><path class="map-land" d="M18 241Q47 211 120 216T201 241Q142 275 53 262Z"/>',
-    "seoul": '<path class="map-land" d="M32 121 69 69 111 62 119 15 209 27 241 47 296 29 340 71 386 107 381 171 363 258 286 266 241 253 167 270 121 253 92 225 24 207Z"/><path class="map-river" d="M10 133C66 118 79 191 127 169S185 142 230 151 272 167 290 139 344 153 398 155"/><text class="river-label" x="59" y="122">Han River</text>',
-    "busan": '<path class="map-land" d="M41 34 136 15 207 42 248 26 352 55 390 126 345 157 310 145 275 188 238 201 199 239 165 236 144 260 113 234 73 246 29 209Z"/><path class="map-river" d="M22 210Q85 254 139 263T240 224 309 173 398 159"/>',
-    "jeju": '<path class="map-land" d="M26 139C45 95 111 65 189 60S338 68 375 111 348 183 294 215 145 238 66 207 15 170 26 139Z"/><path class="map-contour" d="M88 150Q199 78 309 141 230 205 88 150Z"/>',
-    "gyeonggi": '<path class="map-land" d="M37 45 119 14 182 48 218 27 267 60 348 89 375 155 352 236 281 263 222 240 161 263 96 213 27 157Z"/><path class="map-river" d="M7 121Q101 161 168 128T304 162 400 174"/><path class="map-contour" d="M139 95 204 90 230 136 182 170 136 147Z"/><text class="map-label" x="178" y="135">Seoul</text>',
-}
+
+
+def map_lattice(city):
+    """Return (labels, slots per key, unknown-box cells, viewBox height)."""
+    labels, slots, unknown = [], {}, []
+    rows = MAP_LAYOUT[city]
+    for r, row in enumerate(rows):
+        y, col = MAP_TOP + r * MAP_PITCH_Y, 0
+        for key, label, cols in row:
+            xs = [MAP_LEFT + (col + i) * MAP_PITCH_X for i in range(cols)]
+            col += cols
+            if key is None:
+                continue
+            slots.setdefault(key, []).extend((x, y) for x in xs)
+            if label:
+                labels.append((label, (xs[0] + xs[-1]) / 2, y - 23))
+            if key == "":
+                unknown.append((xs[0], y))
+        if col > 7:
+            raise ValueError(f'{city} map row {r} has {col} columns; max 7')
+    return labels, slots, unknown, MAP_TOP + (len(rows) - 1) * MAP_PITCH_Y + 34
+
+
+MAP_DISTRICTS = {city: [key for row in rows for key, label, _ in row if key is not None and (label or key == "")]
+                 for city, rows in MAP_LAYOUT.items() if city != "all"}
+def map_drawing(city, h):
+    land = f'<rect class="map-land" x="8" y="8" width="384" height="{h-16}" rx="28"/>'
+    if city == "seoul":
+        y = MAP_TOP + 2 * MAP_PITCH_Y + 33  # between the north and south rows
+        land += f'<path class="map-river" d="M8 {y}C80 {y-10} 140 {y+10} 200 {y}S320 {y-10} 392 {y}"/><text class="river-label" x="322" y="{y+4}">Han River</text>'
+    return land
 
 
 def city_tabs(map_header=False):
@@ -489,45 +505,37 @@ def map_pin(v, x, y, label):
     return (f'<g class="map-pin map-pin-{v["kind_key"]}" role="button" tabindex="0" '
             f'aria-label="{E(v["title"])} · {E(label)} · {E(v["kind"])}" aria-pressed="false" aria-controls="map-preview" '
             f'data-pin="{v["slug"]}" transform="translate({x} {y})"><title>{E(v["title"])}</title>'
-            f'<rect class="pin-target" x="-22" y="-22" width="44" height="44"/>{pin_glyph(v["kind_key"])}</g>')
+            f'<rect class="pin-target" x="-26" y="-26" width="52" height="52"/>{pin_glyph(v["kind_key"])}</g>')
 
 
 def venue_map(venues):
     panels = []
     city_venues = {city: sorted((v for v in venues if v["city_key"] == city), key=lambda v: v["order"]) for city in MAP_DISTRICTS}
     for city in ("all", *MAP_DISTRICTS):
-        drawing = MAP_PATHS[city]
+        labels, slots, unknown, h = map_lattice(city)
+        drawing = map_drawing(city, h)
+        for x, y in unknown:
+            drawing += f'<rect class="map-unknown" x="{x-27}" y="{y-40}" width="54" height="68" rx="8"/>'
+        for label, x, y in labels:
+            drawing += f'<text class="map-label" x="{x:g}" y="{y}">{E(label)}</text>'
         if city == "all":
-            # Regional insets spread pins for readability, not precise locations.
-            slots = {"seoul": [(34 + col * 34, 40 + row * 34) for row in range(4) for col in range(8)] + [(34 + col * 34, 176) for col in range(5)],
-                     "gyeonggi": [(328, 46), (328, 90)],
-                     "busan": [(244 + col * 44, 194 + row * 44) for row in range(2) for col in range(4)],
-                     "jeju": [(44 + col * 44, 238) for col in range(4)]}
-            for region, items in city_venues.items():
-                if len(items) > len(slots[region]):
-                    raise ValueError(f'Expand schematic slots for {region}; never overlap pins')
-                for v, (x, y) in zip(items, slots[region]):
-                    drawing += map_pin(v, x, y, region.title() + " · schematic region only")
-            for label, x, y in (("Seoul", 106, 23), ("Gyeonggi", 328, 23), ("Busan", 307, 171), ("Jeju", 105, 211)):
-                drawing += f'<text class="map-label" x="{x}" y="{y}">{label}</text>'
+            groups = city_venues
         else:
-            groups = {key: [] for key, *_ in MAP_DISTRICTS[city]}
+            groups = {key: [] for key in MAP_DISTRICTS[city]}
             for v in city_venues[city]:
                 location = (v["location"] + " " + v["area"]).lower()
                 key = next((key for key in groups if key and key.lower() in location), "")
                 if key not in groups:
                     raise ValueError(f'Unknown region for {v["slug"]}; add an off-map area')
                 groups[key].append(v)
-            for key, label, lx, ly, slots in MAP_DISTRICTS[city]:
-                drawing += f'<text class="map-label" x="{lx}" y="{ly}">{E(label)}</text>'
-                if not key:
-                    drawing += '<path class="map-unknown" d="M251 232H321V275H251Z"/>'
-                if len(groups[key]) > len(slots):
-                    raise ValueError(f'Expand schematic slots for {city}/{key}; never overlap pins')
-                for v, (x, y) in zip(groups[key], slots):
-                    drawing += map_pin(v, x, y, label)
+        for key, items in groups.items():
+            if len(items) > len(slots.get(key, [])):
+                raise ValueError(f'Expand schematic slots for {city}/{key}; never overlap pins')
+            place = (key.title() + " · schematic region only") if city == "all" else next(l for l, *_ in labels if l.split(" /")[0].startswith(key or "District")) if key else "District 확인 중 · off-map"
+            for v, (x, y) in zip(items, slots[key]):
+                drawing += map_pin(v, x, y, place)
         label = "All Korea" if city == "all" else city.title()
-        panels.append(f'<svg class="district-map" data-map-city="{city}" viewBox="0 0 400 280" role="group" '
+        panels.append(f'<svg class="district-map" data-map-city="{city}" viewBox="0 0 400 {h}" role="group" '
                       f'aria-label="{label} schematic venue map"' + (' hidden="hidden"' if city != "all" else '') + f'>{drawing}</svg>')
     boxes = sum(v["kind_key"] == "box" for v in venues)
     legend = "".join(f'<span><svg viewBox="-20 -20 40 40" class="legend-pin map-pin-{kind}" aria-hidden="true">{pin_glyph(kind)}</svg>{label} ({count})</span>' for kind, label, count in (("box", "Box", boxes), ("sauna", "Sauna", len(venues)-boxes)))

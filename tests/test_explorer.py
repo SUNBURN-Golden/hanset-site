@@ -72,7 +72,9 @@ class Explorer(unittest.TestCase):
         self.assertEqual({m.attrib['data-map-city'] for m in maps}, {'all', 'seoul', 'busan', 'jeju', 'gyeonggi'})
         self.assertEqual([m.attrib['data-map-city'] for m in maps if 'hidden' not in m.attrib], ['all'])
         for canvas in maps:
-            self.assertEqual(canvas.attrib['viewBox'], '0 0 400 280')
+            vb = [int(n) for n in canvas.attrib['viewBox'].split()]
+            self.assertEqual(vb[:3], [0, 0, 400])
+            height = vb[3]
             city = canvas.attrib['data-map-city']
             pins = [n for n in canvas.iter('g') if 'data-pin' in n.attrib]
             expected = {v['slug'] for v in self.venues if city == 'all' or v['city_key'] == city}
@@ -86,11 +88,15 @@ class Explorer(unittest.TestCase):
                 self.assertEqual(pin.attrib['aria-controls'], 'map-preview')
                 self.assertIn(self.by_slug[slug]['title'], pin.attrib['aria-label'])
                 target = pin.find("rect[@class='pin-target']")
-                self.assertGreaterEqual(int(target.attrib['width']), 44)
+                hit = int(target.attrib['width'])
+                self.assertEqual(hit, int(target.attrib['height']))
+                # 390px phone: map is ~356px wide for a 400-unit viewBox, so hit >= 44px.
+                self.assertGreaterEqual(hit * 356 / 400, 44)
                 x, y = map(float, re.findall(r'[\d.]+', pin.attrib['transform']))
-                self.assertTrue(22 <= x <= 378 and 22 <= y <= 258)
+                self.assertTrue(hit/2 <= x <= 400-hit/2 and hit/2 <= y <= height-hit/2)
                 for px, py in points:
                     self.assertGreaterEqual(((x-px)**2 + (y-py)**2)**0.5, 32)
+                    self.assertTrue(abs(x-px) >= hit or abs(y-py) >= hit, f'{city}: hit areas overlap')
                 points.append((x, y))
             self.assertIn('map-land', ET.tostring(canvas, encoding='unicode'))
         self.assertIn('Han River', markup)
@@ -102,8 +108,8 @@ class Explorer(unittest.TestCase):
     def test_css_bounds_canvas_and_compacts_mobile_hero(self):
         css = (ROOT / 'site/static/css/site.css').read_text()
         canvas = re.search(r'\.district-map\{([^}]+)', css)[1]
-        self.assertIn('height:clamp(230px, 58vw, 320px)', canvas)
-        self.assertIn('min-height:260px', canvas)
+        self.assertIn('height:auto', canvas)
+        self.assertIn('max-width:460px', canvas)
         self.assertIn('[hidden]{display:none!important}', css)
         mobile = css[css.rindex('@media(max-width:719px)'):]
         self.assertIn('.home-hero{padding:14px 16px;margin:10px 0 8px}', mobile)
