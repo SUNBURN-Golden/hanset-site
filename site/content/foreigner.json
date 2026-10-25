@@ -218,5 +218,11 @@
   },
   "ktng-sportera-seoul": {
     "dropin": "Yes. Day pass ₩20,000 (operator profile)."
+  },
+  "seian-yeonnam-seoul": {
+    "english": "Official Instagram (@seian_spa) posts in English and Japanese; bookings by Instagram DM (spoken staff fluency not stated). Checked 2026-10-25.",
+    "booking": "By reservation via Instagram DM (@seian_spa).",
+    "card": "Not confirmed",
+    "tattoo": "Not confirmed (private one-to-one room)."
   }
 }
