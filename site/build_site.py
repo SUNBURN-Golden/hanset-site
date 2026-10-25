@@ -444,13 +444,16 @@ MAP_RIVER_ROW = 2  # Seoul: the Han River runs just above this row
 MAP_RIVER_Y = MAP_TOP + MAP_RIVER_ROW * MAP_PITCH_Y - 33
 # Each row: (group key, label or "" for continuation, columns); key None = empty cell.
 MAP_LAYOUT = {
-    # Rows 0-1 are north of the Han River, rows 2+ south (MAP_RIVER_ROW); west to east in each row.
-    "seoul": [[("Mapo", "Mapo", 2), ("Jongno", "Jongno", 1), ("Gangbuk", "Gangbuk", 1), ("Nowon", "Nowon", 1), ("Gwangjin", "Gwangjin", 2)],
-              [("Yongsan", "Yongsan / Hannam", 3), ("Jung-gu", "Jung-gu", 4)],
-              [("Gangseo", "Gangseo", 1), ("Yeongdeungpo", "Yeongdeungpo", 2), ("Dongjak", "Dongjak", 1), ("Gangdong", "Gangdong", 3)],
-              [("Gwanak", "Gwanak", 2), ("Seocho", "Seocho", 5)],
-              [(None, "", 1), ("Gangnam", "Gangnam / Sinsa", 4), ("Songpa", "Songpa", 1)],
-              [(None, "", 1), ("Gangnam", "", 4)]],
+    # Schematic, not to scale. Rows 0-1 sit north of the Han River, rows 2-5 south (MAP_RIVER_ROW).
+    # Columns follow rough real west-to-east order (district-office longitude); a district's mean
+    # pin x is what tests rank. Only districts that currently have venues get a slot; add a slot
+    # here when a venue opens in a new district (tests know all 25 districts' side and longitude).
+    "seoul": [[("Mapo", "Mapo", 2), ("Yongsan", "Yongsan", 1), ("Jung-gu", "Jung-gu", 1), ("Gangbuk", "Gangbuk", 1), ("Nowon", "Nowon", 1)],
+              [(None, "", 1), ("Yongsan", "", 1), ("Jung-gu", "", 3), ("Gwangjin", "Gwangjin", 2)],
+              [("Gangseo", "Gangseo", 1), ("Dongjak", "Dongjak", 1), (None, "", 1), ("Seocho", "Seocho", 3), ("Gangdong", "Gangdong", 1)],
+              [("Yeongdeungpo", "Yeongdeungpo", 2), ("Gangnam", "", 1), (None, "", 1), ("Seocho", "", 2), ("Gangdong", "", 1)],
+              [(None, "", 1), ("Gwanak", "Gwanak", 1), (None, "", 1), ("Gangnam", "Gangnam / Sinsa", 3), ("Gangdong", "", 1)],
+              [(None, "", 1), ("Gwanak", "", 1), ("Gangnam", "", 4), ("Songpa", "Songpa", 1)]],
     "busan": [[("Dongnae", "Dongnae", 1), ("Haeundae", "Haeundae", 3), ("Nam-gu", "Nam-gu", 1), ("Jung-gu", "Jung-gu", 1), ("Seo-gu", "Seo-gu", 1)],
               [(None, "", 3), ("", "District 확인 중 · off-map", 1)]],
     "jeju": [[("Jeju-si", "Jeju-si", 2), (None, "", 2), ("Seogwipo", "Seogwipo / Jungmun", 3)]],
@@ -474,7 +477,7 @@ def map_lattice(city):
                 continue
             slots.setdefault(key, []).extend((x, y) for x in xs)
             if label:
-                labels.append((label, (xs[0] + xs[-1]) / 2, y - 23))
+                labels.append((label, (xs[0] + xs[-1]) / 2, y - 23, key))
             if key == "":
                 unknown.append((xs[0], y))
         if col > 7:
@@ -488,7 +491,7 @@ def map_drawing(city, h):
     land = f'<rect class="map-land" x="8" y="8" width="384" height="{h-16}" rx="28"/>'
     if city == "seoul":
         y = MAP_RIVER_Y  # between the north and south rows
-        land += f'<path class="map-river" d="M8 {y}C80 {y-10} 140 {y+10} 200 {y}S320 {y-10} 392 {y}"/><text class="river-label" x="322" y="{y+4}">Han River</text>'
+        land += f'<path class="map-river" d="M8 {y}C80 {y-10} 140 {y+10} 200 {y}S320 {y-10} 392 {y}"/><text class="river-label" x="173" y="{y-9}" text-anchor="middle">Han River</text>'
     return land
 
 
@@ -519,8 +522,6 @@ def venue_map(venues):
         drawing = map_drawing(city, h)
         for x, y in unknown:
             drawing += f'<rect class="map-unknown" x="{x-27}" y="{y-40}" width="54" height="68" rx="8"/>'
-        for label, x, y in labels:
-            drawing += f'<text class="map-label" x="{x:g}" y="{y}">{E(label)}</text>'
         if city == "all":
             groups = city_venues
         else:
@@ -531,6 +532,9 @@ def venue_map(venues):
                 if key not in groups:
                     raise ValueError(f'Unknown region for {v["slug"]}; add an off-map area')
                 groups[key].append(v)
+        for label, x, y, key in labels:
+            if city == "all" or key == "" or groups.get(key):  # only districts with venues are drawn
+                drawing += f'<text class="map-label" x="{x:g}" y="{y}">{E(label)}</text>'
         for key, items in groups.items():
             if len(items) > len(slots.get(key, [])):
                 raise ValueError(f'Expand schematic slots for {city}/{key}; never overlap pins')
