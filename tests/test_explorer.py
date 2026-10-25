@@ -117,6 +117,30 @@ class Explorer(unittest.TestCase):
                 # pin visual radius 11 must stay clear of the river line
                 self.assertTrue(y + 11 < B.MAP_RIVER_Y if key in north else y - 11 > B.MAP_RIVER_Y, key)
 
+    # Approximate district-office longitudes for all 25 Seoul districts.
+    SEOUL_LON = {'Gangseo': 126.850, 'Yangcheon': 126.866, 'Guro': 126.888, 'Geumcheon': 126.896, 'Yeongdeungpo': 126.896,
+                 'Dongjak': 126.940, 'Gwanak': 126.952, 'Seocho': 127.033, 'Gangnam': 127.047, 'Songpa': 127.106,
+                 'Gangdong': 127.124, 'Eunpyeong': 126.929, 'Mapo': 126.902, 'Seodaemun': 126.937, 'Jongno': 126.979,
+                 'Jung-gu': 126.998, 'Yongsan': 126.990, 'Seongbuk': 127.017, 'Gangbuk': 127.026, 'Seongdong': 127.037,
+                 'Dongdaemun': 127.040, 'Dobong': 127.047, 'Nowon': 127.057, 'Jungnang': 127.093, 'Gwangjin': 127.082}
+
+    def test_seoul_pins_follow_real_west_to_east_order(self):
+        self.assertEqual(len(self.SEOUL_LON), 25)
+        _, slots, _, _ = B.map_lattice('seoul')
+        self.assertLessEqual(set(slots), set(self.SEOUL_LON))
+        canvas = re.search(r'<svg class="district-map" data-map-city="seoul".*?</svg>', B.venue_map(self.venues))[0]
+        xs = {}
+        for slug, tx in re.findall(r'data-pin="([^"]+)" transform="translate\(([\d.]+) ', canvas):
+            v = self.by_slug[slug]
+            loc = (v['location'] + ' ' + v['area']).lower()
+            key = next(k for k in slots if k.lower() in loc)
+            xs.setdefault(key, []).append(float(tx))
+        mean = {k: sum(v) / len(v) for k, v in xs.items()}
+        for a in mean:
+            for b in mean:
+                if self.SEOUL_LON[b] - self.SEOUL_LON[a] > 0.03:
+                    self.assertLess(mean[a], mean[b], f'{a} should be west of {b}')
+
     def test_css_bounds_canvas_and_compacts_mobile_hero(self):
         css = (ROOT / 'site/static/css/site.css').read_text()
         canvas = re.search(r'\.district-map\{([^}]+)', css)[1]
