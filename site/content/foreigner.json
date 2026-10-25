@@ -205,5 +205,18 @@
   "spa-haesurang-busan": {
     "tattoo": "Not confirmed",
     "dropin": "Yes. Open to general public (adult sauna weekday ₩15,000 / weekend ₩18,000)."
+  },
+  "riverside-hotel-medi-spa": {
+    "tattoo": "No entry with tattoos (official page).",
+    "dropin": "Yes. Walk-in day ₩28,000 / night ₩35,000. Men only."
+  },
+  "bori-women-bulhanjeungmak-samseong": {
+    "dropin": "Yes. Entry from ₩23,000 (10h). Women only."
+  },
+  "seoul-oncheon-sauna-hagye": {
+    "dropin": "Yes. Adult from ₩10,000."
+  },
+  "ktng-sportera-seoul": {
+    "dropin": "Yes. Day pass ₩20,000 (operator profile)."
   }
 }
