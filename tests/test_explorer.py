@@ -105,6 +105,18 @@ class Explorer(unittest.TestCase):
         templates = [a['id'] for tag, a in Elements(markup).elements if tag == 'template']
         self.assertEqual(set(templates), {'preview-' + s for s in self.by_slug})
 
+    def test_seoul_districts_sit_on_their_side_of_the_han_river(self):
+        north = {'Jongno', 'Jung-gu', 'Yongsan', 'Mapo', 'Seodaemun', 'Eunpyeong', 'Seongdong', 'Gwangjin', 'Dongdaemun',
+                 'Jungnang', 'Seongbuk', 'Gangbuk', 'Dobong', 'Nowon'}
+        south = {'Gangseo', 'Yangcheon', 'Guro', 'Geumcheon', 'Yeongdeungpo', 'Dongjak', 'Gwanak', 'Seocho', 'Gangnam',
+                 'Songpa', 'Gangdong'}
+        _, slots, _, _ = B.map_lattice('seoul')
+        for key, points in slots.items():
+            self.assertIn(key, north | south)
+            for _, y in points:
+                # pin visual radius 11 must stay clear of the river line
+                self.assertTrue(y + 11 < B.MAP_RIVER_Y if key in north else y - 11 > B.MAP_RIVER_Y, key)
+
     def test_css_bounds_canvas_and_compacts_mobile_hero(self):
         css = (ROOT / 'site/static/css/site.css').read_text()
         canvas = re.search(r'\.district-map\{([^}]+)', css)[1]
