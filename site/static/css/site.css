@@ -323,7 +323,7 @@ table.t th{background:var(--surface-2);font-size:.82rem}
 .map-zone{fill:var(--surface);fill-opacity:.8;stroke:var(--muted);stroke-dasharray:3 3;rx:8px}
 .map-contour{fill:none;stroke:var(--line);stroke-width:2}
 .map-river{fill:none;stroke:#ABC9CE;stroke-width:10;stroke-linecap:round}
-.river-label{fill:#193E45;font:400 10px var(--font)}
+.river-label{fill:var(--ink);font:600 10px var(--font);paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
 .map-label{fill:var(--ink);font:700 10px var(--font);text-anchor:middle;paint-order:stroke;stroke:var(--surface);stroke-width:3px;stroke-linejoin:round}
 .map-unknown{fill:var(--surface);stroke:var(--muted);stroke-dasharray:3 3}
 .map-pin{cursor:pointer;outline:none}

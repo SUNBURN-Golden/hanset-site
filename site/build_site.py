@@ -440,14 +440,17 @@ def venue_card(v):
 # Schematic lattice: pins sit on a 54x66 grid so 52-unit hit areas never overlap
 # (>=44px on a 390px phone) and labels sit in the gap above each row.
 MAP_PITCH_X, MAP_PITCH_Y, MAP_TOP, MAP_LEFT, MAP_HIT = 54, 66, 58, 38, 52
+MAP_RIVER_ROW = 2  # Seoul: the Han River runs just above this row
+MAP_RIVER_Y = MAP_TOP + MAP_RIVER_ROW * MAP_PITCH_Y - 33
 # Each row: (group key, label or "" for continuation, columns); key None = empty cell.
 MAP_LAYOUT = {
-    "seoul": [[("Gangseo", "Gangseo", 1), ("Mapo", "Mapo", 2), ("Jongno", "Jongno", 1), ("Gangbuk", "Gangbuk", 1), ("Nowon", "Nowon", 1)],
-              [("Yeongdeungpo", "Yeongdeungpo", 2), ("Jung-gu", "Jung-gu", 4), (None, "", 1)],
-              [("Dongjak", "Dongjak", 1), ("Yongsan", "Yongsan / Hannam", 3), ("Gangdong", "Gangdong", 3)],
+    # Rows 0-1 are north of the Han River, rows 2+ south (MAP_RIVER_ROW); west to east in each row.
+    "seoul": [[("Mapo", "Mapo", 2), ("Jongno", "Jongno", 1), ("Gangbuk", "Gangbuk", 1), ("Nowon", "Nowon", 1), ("Gwangjin", "Gwangjin", 2)],
+              [("Yongsan", "Yongsan / Hannam", 3), ("Jung-gu", "Jung-gu", 4)],
+              [("Gangseo", "Gangseo", 1), ("Yeongdeungpo", "Yeongdeungpo", 2), ("Dongjak", "Dongjak", 1), ("Gangdong", "Gangdong", 3)],
               [("Gwanak", "Gwanak", 2), ("Seocho", "Seocho", 5)],
-              [(None, "", 1), ("Gangnam", "Gangnam / Sinsa", 4), ("Gwangjin", "Gwangjin", 2)],
-              [(None, "", 1), ("Gangnam", "", 4), (None, "", 1), ("Songpa", "Songpa", 1)]],
+              [(None, "", 1), ("Gangnam", "Gangnam / Sinsa", 4), ("Songpa", "Songpa", 1)],
+              [(None, "", 1), ("Gangnam", "", 4)]],
     "busan": [[("Dongnae", "Dongnae", 1), ("Haeundae", "Haeundae", 3), ("Nam-gu", "Nam-gu", 1), ("Jung-gu", "Jung-gu", 1), ("Seo-gu", "Seo-gu", 1)],
               [(None, "", 3), ("", "District 확인 중 · off-map", 1)]],
     "jeju": [[("Jeju-si", "Jeju-si", 2), (None, "", 2), ("Seogwipo", "Seogwipo / Jungmun", 3)]],
@@ -484,7 +487,7 @@ MAP_DISTRICTS = {city: [key for row in rows for key, label, _ in row if key is n
 def map_drawing(city, h):
     land = f'<rect class="map-land" x="8" y="8" width="384" height="{h-16}" rx="28"/>'
     if city == "seoul":
-        y = MAP_TOP + 2 * MAP_PITCH_Y + 33  # between the north and south rows
+        y = MAP_RIVER_Y  # between the north and south rows
         land += f'<path class="map-river" d="M8 {y}C80 {y-10} 140 {y+10} 200 {y}S320 {y-10} 392 {y}"/><text class="river-label" x="322" y="{y+4}">Han River</text>'
     return land
 
