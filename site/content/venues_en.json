@@ -1417,5 +1417,629 @@
       "Rooftop pool",
       "Han River view"
     ]
+  },
+  "tova-bangbae-seoul": {
+    "title": "TOVA (토바)",
+    "location": "서울 서초구 방배동 901-10 (901-10 Bangbae-dong, Seocho-gu, Seoul)",
+    "area": "Seocho-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "A private sauna, one guest at a time. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Boutique Sauna (private, one person)"
+      ],
+      [
+        "Address",
+        "901-10 Bangbae-dong, Seocho-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "09:00–20:40. Closed Mondays — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Private one-person sauna — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Private",
+      "Solo"
+    ]
+  },
+  "seian-yeonnam-seoul": {
+    "title": "SEIAN Yeonnam (세이안 연남)",
+    "location": "서울 마포구 연남동 252-15 (252-15 Yeonnam-dong, Mapo-gu, Seoul)",
+    "area": "Mapo-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "A one-person sauna, with care on the side. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Boutique Sauna (private, one person)"
+      ],
+      [
+        "Address",
+        "252-15 Yeonnam-dong, Mapo-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Daily 07:00–22:00 — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "One-person sauna and care — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Solo",
+      "Yeonnam"
+    ]
+  },
+  "venue-g-aqua-gangseo": {
+    "title": "Venue G Aqua (베뉴지아쿠아)",
+    "location": "서울 강서구 화곡동 1095 (1095 Hwagok-dong, Gangseo-gu, Seoul)",
+    "area": "Gangseo-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "A big jjimjilbang and spa in Gangseo. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "1095 Hwagok-dong, Gangseo-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Open 24 hours. Closed every 3rd Wednesday — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Large jjimjilbang and spa — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Jjimjilbang",
+      "24 hours"
+    ]
+  },
+  "the-park-spaland-dangsan": {
+    "title": "The Park Spaland (더파크 스파랜드)",
+    "location": "서울 영등포구 당산동3가 558-3 (558-3 Dangsan-dong 3-ga, Yeongdeungpo-gu, Seoul)",
+    "area": "Yeongdeungpo-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "Dangsan, open all night. Four hot baths, one cold. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "558-3 Dangsan-dong 3-ga, Yeongdeungpo-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Open 24 hours — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Dry and wet saunas. Four hot baths, one cold — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "24 hours",
+      "Cold bath"
+    ]
+  },
+  "sparex-goodmorning-city": {
+    "title": "Sparex Goodmorning City (스파렉스 굿모닝시티)",
+    "location": "서울 중구 을지로6가 18-21 (18-21 Euljiro 6-ga, Jung-gu, Seoul)",
+    "area": "Jung-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "Six big baths at Dongdaemun, open 24 hours. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "18-21 Euljiro 6-ga, Jung-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Open 24 hours — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Six large baths — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "24 hours",
+      "Dongdaemun"
+    ]
+  },
+  "chinjeong-forest-bulhanjeungmak": {
+    "title": "Chinjeong Forest Bulhanjeungmak (친정숲 불한증막)",
+    "location": "서울 마포구 창전동 437 (437 Changjeon-dong, Mapo-gu, Seoul)",
+    "area": "Mapo-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "A women-only kiln sauna. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "437 Changjeon-dong, Mapo-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Open 24 hours — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Women only. Fire-heated kiln sauna — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Women only",
+      "Kiln sauna"
+    ]
+  },
+  "samho-palace-sauna-yangjae": {
+    "title": "Samho Palace Sauna (삼호궁전사우나)",
+    "location": "서울 서초구 양재동 275-6 (275-6 Yangjae-dong, Seocho-gu, Seoul)",
+    "area": "Seocho-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "An oak-fired kiln sauna in Yangjae. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "275-6 Yangjae-dong, Seocho-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Daily 00:00–21:00 — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Oak-fired kiln sauna — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Kiln sauna",
+      "Oak fire"
+    ]
+  },
+  "uiryeong-bulgama-sauna-gangbuk": {
+    "title": "Uiryeong Bulgama Jusuim Sauna (우이령불가마주쉼사우나)",
+    "location": "서울 강북구 우이동 246 (246 Ui-dong, Gangbuk-gu, Seoul)",
+    "area": "Gangbuk-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "A kiln sauna at the foot of Bukhansan. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "246 Ui-dong, Gangbuk-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Open 24 hours, all year — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Kiln sauna with a Bukhansan view — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Kiln sauna",
+      "Bukhansan"
+    ]
+  },
+  "ssukgogae-sauna-sillim": {
+    "title": "Ssukgogae Sauna (쑥고개사우나)",
+    "location": "서울 관악구 신림동 94-208 (94-208 Sillim-dong, Gwanak-gu, Seoul)",
+    "area": "Gwanak-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "Freshly renovated. Open 24 hours. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "94-208 Sillim-dong, Gwanak-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Open 24 hours — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Recently renovated — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "24 hours",
+      "Renovated"
+    ]
+  },
+  "olympia-sauna-yeoksam": {
+    "title": "Olympia Sauna (올림피아 사우나)",
+    "location": "서울 강남구 역삼동 828-10 (828-10 Yeoksam-dong, Gangnam-gu, Seoul)",
+    "area": "Gangnam-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "Yeoksam, open 24 hours. With a sleep room. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "828-10 Yeoksam-dong, Gangnam-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Open 24 hours — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Sleep room and event baths — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "24 hours",
+      "Sleep room"
+    ]
+  },
+  "woori-sulfur-hot-spring-jayang": {
+    "title": "Woori Sulfur Hot Spring (우리유황온천)",
+    "location": "서울 광진구 자양동 663-21 (663-21 Jayang-dong, Gwangjin-gu, Seoul)",
+    "area": "Gwangjin-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "Sulfur hot spring water from 1,040m down. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "663-21 Jayang-dong, Gwangjin-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Daily 05:30–21:00, all year — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Natural sulfur hot spring from 1,040m. Footbath — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Hot spring",
+      "Footbath"
+    ]
+  },
+  "bongil-hot-spring-bongcheon": {
+    "title": "Bongil Hot Spring (봉일온천)",
+    "location": "서울 관악구 봉천동 951-25 (951-25 Bongcheon-dong, Gwanak-gu, Seoul)",
+    "area": "Gwanak-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "An alkaline hot spring in Bongcheon. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "951-25 Bongcheon-dong, Gwanak-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Daily 05:00–23:00 — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Natural alkaline hot spring — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Hot spring",
+      "Alkaline"
+    ]
+  },
+  "prima-spa-cheongdam": {
+    "title": "Prima Spa (프리마스파)",
+    "location": "서울 강남구 청담동 56-17 (56-17 Cheongdam-dong, Gangnam-gu, Seoul)",
+    "area": "Gangnam-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "A large spa in Cheongdam. Open 24 hours. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "56-17 Cheongdam-dong, Gangnam-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Open 24 hours — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Large spa and sauna — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "24 hours",
+      "Cheongdam"
+    ]
+  },
+  "riverside-hotel-medi-spa": {
+    "title": "The Riverside Hotel The Medi Spa (더 리버사이드 호텔 더 메디스파)",
+    "location": "서울 서초구 잠원동 6-1, 더 리버사이드 호텔 (The Riverside Hotel, 6-1 Jamwon-dong, Seocho-gu, Seoul)",
+    "area": "Seocho-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "A men-only hotel sauna, open 24 hours. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Hotel Sauna (men only)"
+      ],
+      [
+        "Address",
+        "The Riverside Hotel, 6-1 Jamwon-dong, Seocho-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Open 24 hours — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Men only. Event, open-air and hot baths — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Men only",
+      "Open-air bath"
+    ]
+  },
+  "bori-women-bulhanjeungmak-samseong": {
+    "title": "Bori Women's Bulhanjeungmak (보리여성불한증막)",
+    "location": "서울 강남구 삼성동 7-3 (7-3 Samseong-dong, Gangnam-gu, Seoul)",
+    "area": "Gangnam-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "A women-only kiln sauna in Samseong. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "7-3 Samseong-dong, Gangnam-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "Open 24 hours — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Women-only kiln sauna — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Women only",
+      "Kiln sauna"
+    ]
+  },
+  "seoul-oncheon-sauna-hagye": {
+    "title": "Seoul Oncheon Sauna (서울온천사우나)",
+    "location": "서울 노원구 하계동 251-7 (251-7 Hagye-dong, Nowon-gu, Seoul)",
+    "area": "Nowon-gu, Seoul",
+    "price_label": "Price",
+    "price_caveat": "",
+    "summary": "A germanium hot spring sauna in Nowon. From a third-party roundup. Check before you go.",
+    "facts": [
+      [
+        "Category",
+        "Large Spa · Hot Spring (neighbourhood sauna). Not a boutique or hotel sauna"
+      ],
+      [
+        "Address",
+        "251-7 Hagye-dong, Nowon-gu, Seoul — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Hours",
+        "06:30–21:00. Closed 1st and 3rd Thursdays — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ],
+      [
+        "Features",
+        "Germanium hot spring — third-party Instagram roundup (@realtime.seoul, Oct 17), shared by HANSET editor 2026-10-25"
+      ]
+    ],
+    "tips": [
+      "Third-party info. Confirm on site before you go."
+    ],
+    "unverified": [
+      "Prices",
+      "Day pass",
+      "Tattoo rules",
+      "Rules for foreign visitors"
+    ],
+    "tags": [
+      "Hot spring",
+      "Nowon"
+    ]
   }
 }
