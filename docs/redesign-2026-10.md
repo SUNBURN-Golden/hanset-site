@@ -27,3 +27,13 @@ PR3 review fixes: removed redundant trailing semicolons from the filter label, f
 Home: remove the English hero kicker. Shared CSS: remove positive letter spacing and forced uppercase from brand/eyebrow/filter/fact/verified-feed labels. Korean strings stay unchanged.
 
 Validation: release build — PASS, 69 pages / 49 venues / 5 events / 2 verified-feed events / 2 creators; leak check OK. Full unit suite — PASS (85 tests). Foreground browser review — PASS at mobile/desktop in light/dark; loaded fonts, no overflow/errors/external requests. Screenshots: `hanset-pr3/home-{390,1440}-{light,dark}.png`. An extra full-page capture exceeded Chrome’s timeout on the long explorer page; the required viewport captures were rerun successfully. Diff phone/email/secret scan — PASS.
+
+## PR4 — home wayfinding layout
+
+Home and shared header: flat hero, count board, city links and proportional count strip, footer-only Instagram, and three price rows from the explorer’s existing default order. The map and full explorer follow the prices. City/type totals are computed from published venues. Price labels, Korean venue names, caveats, dates, official source links and stale labels are retained; these make price rows taller than the mockup. The hand-drawn section stays last above the footer, with compact mobile thumbnails. The two old home markup/CSS assertions are updated in this PR, plus a regression for order/counts/price provenance.
+
+Validation: release build — PASS, 69 pages / 49 venues / 5 events / 2 verified-feed events / 2 creators; leak check OK. Full unit suite — PASS (86 tests). Foreground browser review — PASS: home at 320/360/390/768/1024/1440/1920 in light/dark, no horizontal overflow, new controls at least 44×44px; city/type deep links, map selection and reduced motion work. Generated internal links/assets and full-page Hangul font coverage — PASS. The initial browser expectation for Jeju+sauna was corrected to the existing three saunas (Jeju also has one box), then the check passed. Mobile/desktop Finder/detail/archive smoke renders — PASS. Diff phone/email/secret scan — PASS. No CSV, content JSON, verified.py or illustration source changes.
+
+Screenshots: `hanset-pr4/home-{390,1440}-{light,dark}.png`, `prices-390.png`, `illustrations-390.png`, and `{finder,detail,archive}-{390,1440}.png`. Proposed Korean-name removal and optional check-label translation are deferred in `/workspace/rd-wt/logs/hanset-copy-todo.md`.
+
+Accepted exceptions: the required hand-drawn art stays at the bottom of home and on guide/archive pages; the mandated Korean term keeps its middle dot. PR6 Finder/detail/archive structural redesign is follow-up work, outside this stack.
