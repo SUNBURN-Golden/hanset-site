@@ -55,6 +55,13 @@ def span(a, b, ref_year):
     return f(a) if a == b else f"{f(a)}–{f(b)}"
 
 FOREIGNER = json.loads((ROOT / "content/foreigner.json").read_text(encoding="utf-8"))
+CLOSED = {k: c for k, c in json.loads((ROOT / "content/closed_days.json").read_text(encoding="utf-8")).items() if not k.startswith("_")}
+CLOSED_CHECK = "Check before you go"
+def closed_row(v):
+    c = CLOSED.get(v["slug"])
+    if not c: return f'<tr><th>Closed on</th><td class="unk">{CLOSED_CHECK}</td></tr>'
+    return (f'<tr><th>Closed on</th><td>{E(c["closed"])}<br><small class="fact-source">{E(c["source"])} · checked {dot(ymd(c["checked"]))} · '
+            f'<a href="{E(c["url"])}" rel="noopener noreferrer">{E(host(c["url"]))}</a></small></td></tr>')
 FCHK_KEYS = [("tattoo", "Tattoos"), ("card", "Foreign card payment"), ("english", "English booking / staff"), ("dropin", "Drop-in for visitors")]
 SAUNA_PKG_KEYS = [
     ("public_access", "General public access"),
@@ -83,7 +90,8 @@ def fchk(v):
 GUIDES = [  # (slug, title, description); page bodies are built in guides()
     ("tattoo-friendly-saunas-korea", "Tattoos and saunas in Korea", "What official pages of Korean hotel saunas and spas say about tattoos. Verified, dated, sourced."),
     ("hotel-saunas-korea-non-guests", "Hotel saunas in Korea: can non-guests get in?", "Which Korean hotel saunas are open to visitors without a room, per their official pages."),
-    ("crossfit-hyrox-drop-in-korea", "CrossFit & HYROX drop-in in Korea", "CrossFit and HYROX boxes in Korea that list drop-ins or English support on their official pages.")]
+    ("crossfit-hyrox-drop-in-korea", "CrossFit & HYROX drop-in in Korea", "CrossFit and HYROX boxes in Korea that list drop-ins or English support on their official pages."),
+    ("closed-days-korea", "Closed days: saunas and gyms in Korea", "Confirmed closed days for Korean saunas, spas and CrossFit boxes. Each with its source and check date.")]
 
 def guides(site, venues):
     sau = [v for v in venues if v["kind_key"] == "sauna"]; box = [v for v in venues if v["kind_key"] == "box"]
@@ -97,6 +105,14 @@ def guides(site, venues):
     bodies = {"tattoo-friendly-saunas-korea": "<h1>Tattoos? Read this first.</h1><p class=\"lead\">Some Korean saunas limit entry with tattoos. Here’s exactly what each official page says. Nothing more.</p>" + note + tbl(sau, "tattoo", "Tattoo rule"),
               "hotel-saunas-korea-non-guests": "<h1>No room? Some doors still open.</h1><p class=\"lead\">Hotel saunas in Seoul, Busan and Jeju. Who gets in, straight from the official pages.</p>" + note + tbl(sau, "dropin", "Open to visitors?") + f'<p class="safety">{SAFETY}</p>',
               "crossfit-hyrox-drop-in-korea": "<h1>Traveling? Keep training.</h1><p class=\"lead\">CrossFit and HYROX boxes in Korea. Drop-in and English support, from official pages only.</p>" + note + tbl(box, "dropin", "Drop-in") + "<h2>English support</h2>" + tbl(box, "english", "English")}
+    by_slug = {v["slug"]: v for v in venues}
+    crow = "".join(f'<tr><th><a href="/finder/{k}/">{E(by_slug[k]["title"])}</a><br><span class="muted">{E(by_slug[k]["city_ko"])}</span></th><td>{E(c["closed"])}</td>'
+                   f'<td>{dot(ymd(c["checked"]))} · <a href="{E(c["url"])}" rel="noopener noreferrer">{E(c["source"])}</a></td></tr>'
+                   for k, c in sorted(CLOSED.items(), key=lambda kc: (by_slug[kc[0]]["city_key"] != "seoul", by_slug[kc[0]]["city_key"], by_slug[kc[0]]["title"])) if k in by_slug)
+    bodies["closed-days-korea"] = ('<h1>Closed today? Check first.</h1><p class="lead">Some Korean saunas and gyms close one day a month. Others close every week. Here are the ones we’ve confirmed.</p>'
+        '<p class="muted">Only places we’ve confirmed are listed, each with its source and check date. Not on the list? Check before you go. Holidays can change hours.</p>'
+        f'<table class="facts"><thead><tr><th>Venue</th><th>Closed on</th><th>Checked · Source</th></tr></thead><tbody>{crow}</tbody></table>'
+        '<p class="muted">Every other venue in the <a href="/finder/">Finder</a> shows “Check before you go” until its closed day is confirmed.</p>')
     G = [(s, t, d, bodies[s]) for s, t, d in GUIDES]
     links = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _, _ in G)
     for s, t, d, b in G:
@@ -763,7 +779,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <section class="detail-glance" aria-labelledby="glance-heading"><h2 id="glance-heading">At a glance</h2>
 <div class="glance-grid"><div><h3>Price</h3>{price_html(v)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v)}</div>' for label, values in fact_groups(v))}</div>
 <p class="meta">확인일 {dot(v["last_verified"])} · Official reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></p></section>
-<table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{offrows}</tbody></table>
+<table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{closed_row(v)}{offrows}</tbody></table>
 {tips}{unv}{fchk(v)}{arch_blk}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong></p><p>Source: {" · ".join(srcs)}</p>
 <p>Something's off? Tell us via <a href="/corrections/">Corrections</a>. Prices and closing days change.</p></div>
