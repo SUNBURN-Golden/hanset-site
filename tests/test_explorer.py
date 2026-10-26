@@ -49,10 +49,34 @@ class Explorer(unittest.TestCase):
             self.assertIn('Select a pin to preview.', selection)
             self.assertNotIn('selected-venue', selection)
             self.assertIn('/assets/js/finder.js?v=', page)
-        self.assertIn(f'Explore {len(self.venues)} boxes &amp; saunas', home)
+        self.assertIn(f'<span class="num">{len(self.venues)}</span> <span>boxes &amp; saunas</span>', home)
         self.assertNotIn('<section', home[home.index('See every drawing ›</a></p></section>') + len('See every drawing ›</a></p></section>'):home.index('</main>')])
         self.assertIn('id="pictures"', self.site.pages['/guide/'])
         self.assertNotIn('/ads/', self.site.pages)
+
+    def test_home_boards_use_live_counts_default_order_and_provenance(self):
+        home = self.site.pages['/']
+        self.assertLess(home.index('class="number-board"'), home.index('class="home-prices"'))
+        self.assertLess(home.index('class="home-prices"'), home.index('<section class="venue-map"'))
+        self.assertNotIn('class="ig"', home[:home.index('</header>')])
+        for city, count in self.site.city_counts.items():
+            self.assertEqual(count, sum(v['city_key'] == city for v in self.venues))
+            self.assertIn(f'href="/finder/?city={city}"', home)
+        expected = sorted(self.venues, key=lambda v: (not v['ad'], not bool(v['price']), v['status'] != 'verified', -len(v['facts']), v['order']))
+        expected = [v for v in expected if B.home_price_confirmed(v)][:3]
+        self.assertEqual(re.findall(r'data-price-slug="([^"]+)"', home), [v['slug'] for v in expected])
+        board = home[home.index('<ul class="home-prices"'):home.index('<section class="sec home-results"')]
+        for venue in expected:
+            for key in ('title', 'price', 'price_label', 'price_caveat', 'source'):
+                if venue[key]:
+                    self.assertIn(B.E(venue[key]), board)
+            self.assertIn(B.dot(venue['last_verified']), board)
+        reply_price = self.by_slug['sisu-house']
+        self.assertFalse(B.home_price_confirmed(reply_price))
+        self.assertNotIn('data-price-slug="sisu-house"', board)
+        stale = dict(expected[0], stale=True)
+        _, board = B.home_boards([stale], [stale], {stale['city_key']: 1})
+        self.assertIn('오래됨 (outdated)', board)
 
     def test_advanced_filters_closed_and_basic_fields_outside_details(self):
         page = self.site.pages['/finder/']
@@ -147,8 +171,9 @@ class Explorer(unittest.TestCase):
         self.assertIn('height:auto', canvas)
         self.assertIn('max-width:460px', canvas)
         self.assertIn('[hidden]{display:none!important}', css)
-        mobile = css[css.rindex('@media(max-width:719px)'):]
-        self.assertIn('.home-hero{padding:14px 16px;margin:10px 0 8px}', mobile)
+        mobile = css[css.rindex('@media(max-width:900px)'):]
+        self.assertIn('.home-top{grid-template-columns:minmax(0,1fr);gap:28px;padding:32px 0 0}', mobile)
+        self.assertIn('.home-hero{margin:0;padding:0;background:transparent', css)
         self.assertNotIn('.map-regions{grid-template-columns:', css)
 
     def test_default_order_prioritizes_price_then_verification(self):

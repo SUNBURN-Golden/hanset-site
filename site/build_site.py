@@ -221,6 +221,7 @@ class Site:
         self.pages = {}  # path -> html
         self.noindex = set()  # pages kept out of canonical/sitemap even in release (e.g. /join/welcome/)
         self.creators = False
+        self.city_counts = {}
 
     def head(self, title, desc, path, noindex=False):
         full = title if title.startswith(BRAND_EN) else f"{title} · {BRAND_EN}"
@@ -242,11 +243,17 @@ class Site:
 
     def nav(self, active):
         def cur(k): return ' aria-current="page"' if active == k else ""
-        return (f'<a class="skip" href="#main">Skip to content</a><header class="site-header"><div class="wrap">'
-                f'<div class="hrow"><a class="brand" href="/"><i></i>{BRAND_EN}<small lang="ko">{BRAND_KO}</small></a>'
-                f'<div class="hact"><a class="pin" href="/finder/"{cur("finder")}>{FINDER_LABEL}</a><a class="ig" {IG_ATTRS}>{IG_SVG}</a></div></div>'
+        total = sum(self.city_counts.values())
+        x, strips = 0, []
+        for city, count in self.city_counts.items():
+            strips.append(f'<rect class="line-{city}" x="{x}" width="{count}" height="8"/>')
+            x += count
+        strip = (f'<svg class="city-strip" viewBox="0 0 {total} 8" preserveAspectRatio="none" aria-hidden="true">{"".join(strips)}</svg>' if total else "")
+        return (f'<a class="skip" href="#main">Skip to content</a><header class="site-header"><div class="wrap hrow">'
+                f'<a class="brand" href="/">{BRAND_EN}<small lang="ko">{BRAND_KO}</small></a>'
                 f'<nav class="nav" aria-label="Main menu"><a href="/"{cur("home")}>Home</a>'
-                f'{MAG_NAV(cur) if ARTICLES else ""}<a href="/guide/"{cur("guide")}>Guide</a><a href="/guides/"{cur("visitors")}>Visitors</a></nav></div></header>')
+                f'{MAG_NAV(cur) if ARTICLES else ""}<a href="/guide/"{cur("guide")}>Guide</a><a href="/guides/"{cur("visitors")}>Visitors</a></nav>'
+                f'<div class="hact"><a class="pin" href="/finder/"{cur("finder")}>{FINDER_LABEL}</a></div></div>{strip}</header>')
 
     def foot(self, active):
         return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_EN}</strong> · Train. Sweat. One set.'
@@ -260,7 +267,7 @@ class Site:
         if noindex: self.noindex.add(path)
         sc = "".join(f'<script src="/assets/js/{s}?v={asset_ver("js/"+s)}" defer></script>' for s in scripts)
         out_path = path
-        self.pages[out_path] = (self.head(title, desc, path, noindex) + f'<body>{self.nav(active)}<main id="main" class="wrap">{body}</main>{self.foot(active)}{sc}</body></html>')
+        self.pages[out_path] = (self.head(title, desc, path, noindex) + f'<body>{self.nav(active)}<main id="main" class="wrap{" home-main" if path == "/" else ""}">{body}</main>{self.foot(active)}{sc}</body></html>')
 
 def clip(t, n=160):
     """Meta description: never cut inside a word or number; prefer a sentence end."""
@@ -548,11 +555,48 @@ def venue_map(venues):
     boxes = sum(v["kind_key"] == "box" for v in venues)
     legend = "".join(f'<span><svg viewBox="-20 -20 40 40" class="legend-pin map-pin-{kind}" aria-hidden="true">{pin_glyph(kind)}</svg>{label} ({count})</span>' for kind, label, count in (("box", "Box", boxes), ("sauna", "Sauna", len(venues)-boxes)))
     templates = "".join(f'<template id="preview-{v["slug"]}"><article class="selected-venue">{venue_contents(v, preview=True)}</article></template>' for v in venues)
-    return (f'<section class="venue-map" aria-labelledby="map-heading"><div class="map-header"><h2 id="map-heading">Explore the map <span id="map-view">All Korea</span></h2>'
+    return (f'<section class="venue-map" aria-labelledby="map-heading"><div class="map-header"><h2 id="map-heading">Explore the map</h2><span id="map-view">All Korea</span>'
             f'{city_tabs(True)}<div class="map-legend" aria-label="Map legend">{legend}</div></div>'
             f'<div class="map-regions">{"".join(panels)}</div>'
             '<p class="map-disclaimer">Schematic regions, not exact entrances. Pins are spaced within confirmed city/district groups. District 확인 중 pins sit off-map. Use the venue’s map link for directions.</p></section>'
             '<div id="map-selection" class="map-selection"><div id="map-preview" aria-live="polite" aria-atomic="true"><p>Select a pin to preview.</p></div></div>' + templates)
+
+
+def home_pic(kind):
+    return (f'<svg class="home-pic map-pin-{kind}" viewBox="-12 -12 24 24" width="22" height="22" aria-hidden="true" focusable="false">'
+            f'{pin_glyph(kind)}</svg>')
+
+
+def home_price_confirmed(v):
+    """New home price hints require an official-page citation, never a reply."""
+    prices = [value for key, value in v["facts"] if key.startswith(("Price", "Drop-in")) and value.strip()]
+    return bool(v["price"] and v["source"] and prices and
+                all("Official source" in fact_provenance(v, value) for value in prices))
+
+
+def home_boards(venues, ordered, city_counts):
+    """Present existing published values; the full explorer remains below."""
+    types = "".join(f'<li><a href="/finder/?type={kind}">{home_pic(kind)}{label} '
+                    f'<span class="num">{sum(v["kind_key"] == kind for v in venues)}</span></a></li>'
+                    for kind, label in (("box", "Box"), ("sauna", "Sauna")))
+    cities = "".join(f'<li><a href="/finder/?city={city}"><i class="line-bar line-{city}" aria-hidden="true"></i>'
+                     f'<span class="name">{city.title()}</span><span class="num">{count}</span></a></li>'
+                     for city, count in city_counts.items())
+    board = (f'<section class="number-board" aria-labelledby="home-count"><h2 id="home-count">'
+             f'<span class="num">{sum(city_counts.values())}</span> <span>boxes &amp; saunas</span></h2>'
+             f'<ul class="home-types">{types}</ul><ul class="city-lines">{cities}</ul></section>')
+    rows = []
+    for v in [v for v in ordered if home_price_confirmed(v)][:3]:
+        caveat = f'<span class="home-price-note">{E(v["price_caveat"])}</span>' if v["price_caveat"] else ""
+        stale = '<span class="badge badge-old">오래됨 (outdated)</span>' if v["stale"] else ""
+        rows.append(f'<li data-price-slug="{v["slug"]}"><a class="home-price-link" href="/finder/{v["slug"]}/">'
+                    f'<span class="home-price-city"><i class="line-bar line-{v["city_key"]}" aria-hidden="true"></i>{E(v["city_ko"])}</span>'
+                    f'<span class="home-price-venue">{home_pic(v["kind_key"])}<b>{E(v["title"])}</b></span>'
+                    f'<span class="home-price-label">{E(v["price_label"])}</span>'
+                    f'<span class="home-price-num num">{E(v["price"])}</span>'
+                    f'<span class="home-price-check"><span lang="ko">확인일</span> <time datetime="{v["last_verified"].isoformat()}">{dot(v["last_verified"])}</time>{stale}</span>'
+                    f'{caveat}</a><a class="home-price-source" href="{E(v["source"])}" rel="noopener noreferrer">Official source<span class="vh"> for {E(v["title"])}</span></a></li>')
+    return board, '<ul class="home-prices" aria-label="Prices from each official page">' + "".join(rows) + '</ul>'
 
 
 def mini_card(v):
@@ -638,6 +682,7 @@ def article_html(a):
 
 def build(site, venues, events, today, vevents=(), creators=()):
     by_slug = {v["slug"]: v for v in venues}
+    site.city_counts = {city: sum(v["city_key"] == city for v in venues) for city in ("seoul", "busan", "jeju", "gyeonggi")}
     feat = next(e for e in events if e["feature"])
     upcoming = [e for e in events if e["end"] >= today]
     ordered = sorted(venues, key=lambda v: (not v["ad"], not bool(v["price"]), v["status"] != "verified", -len(v["facts"]), v["order"]))
@@ -678,14 +723,15 @@ def build(site, venues, events, today, vevents=(), creators=()):
                       f'</div>')
     home_mag = (f'''<section class="sec home-mag"><div class="sec-h"><h2>Read first. Every claim cited.</h2><a href="/magazine/">All articles ›</a></div>
 <div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))}{"" if a.get("lang") == "en" else " · Article in Korean"}</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>''' if ARTICLES else '')
+    number_board, price_board = home_boards(venues, ordered, site.city_counts)
     guide_rows = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _ in GUIDES)
     body = f'''
-<section class="hero home-hero"><h1>Can I go?</h1>
-<p class="lead">CrossFit and HYROX drop-ins, boutique saunas and hotel saunas across Korea. Tattoo rules, non-guest access and drop-in, from each official page.</p>
+<div class="home-top"><section class="hero home-hero" aria-labelledby="home-heading"><h1 id="home-heading">Can I go?</h1>
+<p class="lead">CrossFit and HYROX drop-ins, boutique saunas and hotel saunas across Korea.</p>
 <div class="hero-ctas"><a class="btn btn-ghost" href="/guides/">Visitors guide</a></div></section>
-
-<section class="sec home-results"><h2>Explore {len(venues)} boxes &amp; saunas</h2>
-{explorer}</section>
+{number_board}</div>
+{price_board}
+<section class="sec home-results" aria-label="Venue explorer">{explorer}</section>
 
 <section class="sec home-guides"><h2>Visitors guide</h2>
 <ul class="guide-list">{guide_rows}</ul></section>
