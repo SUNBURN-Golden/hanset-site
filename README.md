@@ -26,7 +26,8 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # fonttools
 python3 -m http.server 8765 --directory dist --bind 127.0.0.1          # http://127.0.0.1:8765/
 ```
 - The preview build (no `--release`) adds `noindex` — local look only, never deploy.
-- Without fonttools the builder still builds (falls back to system fonts) but fonts will differ.
+- Fonts: self-hosted Archivo semi-condensed headings and tabular numbers, Source Sans 3 body, and a build-specific Pretendard Regular subset for Korean and missing glyphs (SIL OFL licences included). fonttools + brotli are required; builds fail if unavailable.
+- Superseded 2026-10-26 (owner approved): the optional-fonttools/system-font build policy. The release now requires the licensed font pipeline above.
 - The build ends with a leak check (phones, forbidden terms, third-party source names, trackers) and fails if it trips. A clean run prints e.g. `built 44 pages, 31 venues (10 boxes, 21 saunas), 6 events` and `leak check OK`.
 - Automated checks: `python3 -m unittest discover -s tests -p 'test_*.py'`. Site verification also requires the release build + leak check + opening affected pages (mobile + desktop widths) + internal link check.
 - Illustrations: `cd illustrations && python3 make_all.py && ./render_png.sh` (needs Chrome headless for PNG; fonts in `_fonts/`, SIL OFL). Copy updated SVGs into `site/static/img/{guide,archive}/`.
