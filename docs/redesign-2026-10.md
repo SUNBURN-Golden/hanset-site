@@ -39,3 +39,31 @@ Validation: release build — PASS, 69 pages / 49 venues / 5 events / 2 verified
 Screenshots: `hanset-pr4/home-{390,1440}-{light,dark}.png`, `prices-390.png`, `illustrations-390.png`, and `{finder,detail,archive}-{390,1440}.png`. Proposed Korean-name removal and optional check-label translation are deferred in `/workspace/rd-wt/logs/hanset-copy-todo.md`.
 
 Accepted exceptions: the required hand-drawn art stays at the bottom of home and on guide/archive pages; the mandated Korean term keeps its middle dot. PR6 Finder/detail/archive structural redesign is follow-up work, outside this stack.
+
+## PR5 — metadata separators and arrow suffixes
+
+Venue cards/previews and fact-source lines, home race strip, home magazine metadata and the footer use separate cells. Specified English link suffixes lose their arrows. The English large-spa label uses a comma in both badges and the matching filter. Provenance tests now check the preserved reply/date words rather than decorative punctuation; official/reply source distinctions remain covered. Source links, shortened section links and footer links retain 44px targets.
+
+Validation: release build — PASS:
+
+```text
+built 69 pages, 49 venues (10 boxes, 39 saunas), 5 events, 2 verified-feed events, 2 creators -> /workspace/rd-wt/hanset/site/dist  (13839 KB total)
+leak check OK (no owner credentials / third-party-source names / trackers)
+```
+
+Full unit suite — PASS (87 tests). Foreground browser review — PASS at mobile/desktop, light/dark; responsive 320–1920 checks, new 44px targets, filter deep links, map preview, reduced motion, generated links/assets, loaded fonts and Hangul coverage — PASS. Representative Finder/detail/archive renders — PASS. Screenshots: `hanset-pr5/home-{390,1440}-{light,dark}.png`, `prices-390.png`, `illustrations-390.png`, `{finder,detail,archive}-{390,1440}.png`; the illustration capture waits for lazy image decoding. Diff phone/email/secret scan — PASS.
+
+Korean text-token inventory is unchanged from the base builder. CSVs, content JSON, verified.py and illustrations/handdraw.py are unchanged across the whole stack. Middle dots inside existing fact values, names and the mandated Korean terminology remain verbatim. Remaining Finder/detail/archive structural and copy cleanup belongs to the out-of-scope PR6 follow-up.
+
+## Release output and final audit
+
+Every stage emitted the same page-count prefix and leak-check line below (PR1/PR2/PR3/PR4/PR5 artifact totals: 13807/13814/13814/13812/13839 KB):
+
+```text
+built 69 pages, 49 venues (10 boxes, 39 saunas), 5 events, 2 verified-feed events, 2 creators
+leak check OK (no owner credentials / third-party-source names / trackers)
+```
+
+After the official-price eligibility correction, PR4 passed its 86-test suite, release build and mobile/desktop browser checks again. PR5 was rebased onto that correction, then passed the 87-test suite, release build and browser checks again. Final checks passed for stacked ancestry, the complete diff phone/email/secret scan, unchanged Korean text inventory and source data, release indexing, real-page sitemap, /ads/ absence, 404 and Search Console verification. No push, remote PR creation, merge or deployment was performed.
+
+Whitespace audit: source changes pass `git diff --check origin/main` when the two supplied OFL text files are excluded. The unmodified Archivo licence contains one trailing space, and Source Sans 3 uses upstream CRLF line endings; those licence-only warnings are retained to preserve the supplied files byte for byte.

@@ -26,7 +26,7 @@ FINDER_LABEL = "Drop-in & Sauna Finder"
 CITY_KO = {"Seoul": "서울", "Busan": "부산", "Jeju": "제주", "Gyeonggi": "경기"}
 CITY_EN = {"Seoul": "Seoul", "Busan": "Busan", "Jeju": "Jeju", "Gyeonggi": "Gyeonggi"}
 MON = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-KIND_EN = {"호텔 사우나": "Hotel Sauna", "부티크 사우나": "Boutique Sauna", "대형 스파·온천": "Large Spa · Hot Spring", "크로스핏 박스": "CrossFit Box",
+KIND_EN = {"호텔 사우나": "Hotel Sauna", "부티크 사우나": "Boutique Sauna", "대형 스파·온천": "Large Spa, Hot Spring", "크로스핏 박스": "CrossFit Box",
            "HYROX·스트렝스 짐": "HYROX · Strength Gym", "호텔·클럽 사우나": "Hotel · Club Sauna"}
 PENDING = "확인 중 (not confirmed)"
 CITY_KEY = {"Seoul": "seoul", "Busan": "busan", "Jeju": "jeju", "Gyeonggi": "gyeonggi"}
@@ -256,7 +256,7 @@ class Site:
                 f'<div class="hact"><a class="pin" href="/finder/"{cur("finder")}>{FINDER_LABEL}</a></div></div>{strip}</header>')
 
     def foot(self, active):
-        return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_EN}</strong> · Train. Sweat. One set.'
+        return (f'<footer class="site-footer"><div class="wrap"><div class="footer-sign"><strong>{BRAND_EN}</strong> <span>Train. Sweat. One set.</span></div>'
                 f'<div class="flinks"><a href="/join/">Join</a><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a>{CREATORS_LINK if self.creators else ""}<a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
                 f'<a href="/privacy/">Privacy</a></div>'
                 f'<p class="fsocial"><a class="ig ig-f" {IG_ATTRS}>{IG_SVG}<span>@hanset.mag</span></a></p>'
@@ -382,8 +382,8 @@ def fact_provenance(v, value):
                  re.findall(r"\b20\d{2}[-.]\d{2}[-.]\d{2}\b|\b\d{1,2}/\d{1,2}\b", citation)]
         if dates or not any(c.lower().startswith("(official page and ") for c in citations):
             checked = ", ".join(dict.fromkeys(dates)) if dates else "확인일 확인 중"
-            return f'<small class="fact-source">Venue reply · {E(checked)} · Public source: {UNKNOWN}</small>'
-    return (f'<small class="fact-source">확인일 {dot(v["last_verified"])} · '
+            return f'<small class="fact-source"><span>Venue reply</span> <span>{E(checked)}</span> <span>Public source: {UNKNOWN}</span></small>'
+    return (f'<small class="fact-source"><span>확인일 {dot(v["last_verified"])}</span> '
             f'<a href="{E(v["source"])}" rel="noopener noreferrer">Official source</a></small>')
 
 
@@ -430,11 +430,11 @@ def venue_facts(v, preview=False):
 
 def venue_contents(v, preview=False):
     title = E(v["title"]) if preview else f'<a href="/finder/{v["slug"]}/">{E(v["title"])}</a>'
-    footer = (f'<div class="meta">확인일 {dot(v["last_verified"])} · Official reference '
+    footer = (f'<div class="meta meta-parts"><span>확인일 {dot(v["last_verified"])}</span> <span>Official reference</span> '
               f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></div>')
-    actions = (f'<div class="btnrow"><a class="btn btn-d" href="/finder/{v["slug"]}/">View full details →</a>'
-               f'<a class="btn map-link" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map ↗</a></div>' if preview else
-               f'<a class="card-details" href="/finder/{v["slug"]}/">Details &amp; facts →</a>')
+    actions = (f'<div class="btnrow"><a class="btn btn-d" href="/finder/{v["slug"]}/">View full details</a>'
+               f'<a class="btn map-link" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map</a></div>' if preview else
+               f'<a class="card-details" href="/finder/{v["slug"]}/">Details &amp; facts</a>')
     return (f'{v_badges(v)}<h3>{title}</h3><div class="loc">{E(v["location"])}</div>{price_html(v)}'
             f'{venue_facts(v, preview=preview)}{footer}{actions}')
 
@@ -695,7 +695,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
  <div class="fgroup"><span>Type</span>{seg("type", [("", "All"), ("box", "CrossFit · HYROX boxes"), ("sauna", "Saunas")])}</div>
  <div class="fgroup"><label for="f-q">Search name or area</label><input id="f-q" type="search" placeholder="e.g. Hannam, Busan, hotel" autocomplete="off"></div>
  <details class="more-filters"><summary>More filters <span id="f-more-count"></span></summary><div class="more-filter-fields">
- <div class="fgroup"><label for="f-sub">Sauna type</label><select id="f-sub"><option value="">All</option><option value="hotel">Hotel Saunas</option><option value="boutique">Boutique Saunas</option><option value="spa">Large Spa · Hot Spring</option></select></div>
+ <div class="fgroup"><label for="f-sub">Sauna type</label><select id="f-sub"><option value="">All</option><option value="hotel">Hotel Saunas</option><option value="boutique">Boutique Saunas</option><option value="spa">Large Spa, Hot Spring</option></select></div>
  <div class="fgroup"><label for="f-sort">Sort</label><select id="f-sort"><option value="">Default</option><option value="date">Recently checked</option><option value="name">A–Z</option></select></div>
  <div class="fgroup"><label for="f-sunday">Sunday</label><select id="f-sunday"><option value="">All</option><option value="yes">Open (verified)</option><option value="no">Closed (verified)</option><option value="unk">확인 중 (not confirmed)</option></select></div>
  <div class="fgroup"><span>Price</span><label class="chk"><input id="f-price" type="checkbox"> Price confirmed only</label></div>
@@ -716,13 +716,13 @@ def build(site, venues, events, today, vevents=(), creators=()):
         btxt = "Live now" if started else ("D-DAY" if d == 0 else f"D-{d}")
         ds = f'{feat["start"].month}/{feat["start"].day}~{feat["end"].month}/{feat["end"].day}'
         race_strip = (f'<div class="race-strip" data-end="{feat["end"].isoformat()}">'
-                      f'<a class="race-strip-link race-strip-narrow" href="/hyrox-seoul/"><span>HYROX Seoul</span><span>·</span>'
-                      f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>Guide ›</span></a>'
-                      f'<a class="race-strip-link race-strip-wide" href="/hyrox-seoul/"><span>HYROX Seoul</span><span>·</span>'
-                      f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>KINTEX</span><span>·</span><span>Guide ›</span></a>'
+                      f'<a class="race-strip-link race-strip-narrow" href="/hyrox-seoul/"><span>HYROX Seoul</span> '
+                      f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b> <span>{ds}</span> <span>Guide</span></a>'
+                      f'<a class="race-strip-link race-strip-wide" href="/hyrox-seoul/"><span>HYROX Seoul</span> '
+                      f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b> <span>{ds}</span> <span>KINTEX</span> <span>Guide</span></a>'
                       f'</div>')
-    home_mag = (f'''<section class="sec home-mag"><div class="sec-h"><h2>Read first. Every claim cited.</h2><a href="/magazine/">All articles ›</a></div>
-<div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))}{"" if a.get("lang") == "en" else " · Article in Korean"}</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>''' if ARTICLES else '')
+    home_mag = (f'''<section class="sec home-mag"><div class="sec-h"><h2>Read first. Every claim cited.</h2><a href="/magazine/">All articles</a></div>
+<div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3><div class="meta meta-parts"><span>{BYLINE}</span> <span>{dot(dt.date.fromisoformat(a["date"]))}</span>{"" if a.get("lang") == "en" else " <span>Article in Korean</span>"}</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>''' if ARTICLES else '')
     number_board, price_board = home_boards(venues, ordered, site.city_counts)
     guide_rows = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _ in GUIDES)
     body = f'''
@@ -742,10 +742,10 @@ def build(site, venues, events, today, vevents=(), creators=()):
 {home_mag}
 
 <div class="slot" data-slot="kix-ticketing" hidden></div>
-<section class="sec"><div class="sec-h"><h2>See it from above.</h2><a href="/archive/">Archive ›</a></div>
+<section class="sec"><div class="sec-h"><h2>See it from above.</h2><a href="/archive/">Archive</a></div>
 <p class="muted">Floors and zones from official guides, redrawn by hand. Layouts are conceptual. May differ from the actual venue.</p>
-<div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>View ›</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
-<p><a class="btn btn-d" href="/archive/">See every drawing ›</a></p></section>'''
+<div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>View</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
+<p><a class="btn btn-d" href="/archive/">See every drawing</a></p></section>'''
     site.add("/", f"{BRAND_EN} — CrossFit, HYROX & Sauna Wellness Magazine in Korea", "CrossFit, HYROX, hotel and boutique saunas in Korea. A drop-in and sauna finder plus race dates. Every entry with an official source and check date.", body, "home", ("dday.js", "finder.js"))
 
     # ---- finder
