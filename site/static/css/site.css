@@ -446,7 +446,6 @@ table.t th{background:var(--surface-2);font-size:.82rem}
 
 /* Metadata fields use their own cells; fact text remains verbatim. */
 .meta-parts,.fact-source,.footer-sign{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 12px}
-.card .meta-parts{display:flex}
 .fact-source a{display:inline-flex;align-items:center;min-height:44px;min-width:44px}
 .meta-parts>a{display:inline-flex;align-items:center;min-height:44px;min-width:44px}
 .race-strip-link{gap:12px;flex-wrap:wrap;line-height:1.4;white-space:normal}
