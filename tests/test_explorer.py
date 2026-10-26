@@ -305,10 +305,20 @@ class Explorer(unittest.TestCase):
                         if B._is_confirmed(B.FOREIGNER[v['slug']][key]):
                             self.assertIn(B.fact_provenance(v, value), output)
 
+    def test_closed_days_expire(self):
+        import datetime as _dt
+        before = B.active_closed(_dt.date(2026, 10, 28))
+        self.assertIn('termeden-icheon', before); self.assertIn('park-hyatt-seoul', before)
+        after = B.active_closed(_dt.date(2026, 10, 29))
+        self.assertNotIn('termeden-icheon', after); self.assertIn('park-hyatt-seoul', after)
+        later = B.active_closed(_dt.date(2026, 11, 13))
+        self.assertNotIn('park-hyatt-seoul', later); self.assertIn('grand-josun-busan', later)
+        self.assertNotIn('orakai-cheonggyesan', B.active_closed(_dt.date(2026, 12, 15)))
+
     def test_closed_on_field_and_guide(self):
         slugs = {v['slug'] for v in self.venues}
         self.assertTrue(set(B.CLOSED) <= slugs)
-        self.assertNotIn('grand-josun-busan', B.CLOSED)
+        self.assertIn('grand-josun-busan', B.CLOSED_ALL)
         for c in B.CLOSED.values():
             self.assertTrue(c['closed'] and c['url'].startswith('http') and c['source'])
             B.ymd(c['checked'])
