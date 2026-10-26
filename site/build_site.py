@@ -441,7 +441,7 @@ def venue_card(v):
 # (>=44px on a 390px phone) and labels sit in the gap above each row.
 MAP_PITCH_X, MAP_PITCH_Y, MAP_TOP, MAP_LEFT, MAP_HIT = 54, 66, 58, 38, 52
 MAP_RIVER_ROW = 2  # Seoul: the Han River runs just above this row
-MAP_RIVER_Y = MAP_TOP + MAP_RIVER_ROW * MAP_PITCH_Y - 33
+MAP_RIVER_Y = MAP_TOP + MAP_RIVER_ROW * MAP_PITCH_Y - 35
 # Each row: (group key, label or "" for continuation, columns); key None = empty cell.
 MAP_LAYOUT = {
     # Schematic, not to scale. Rows 0-1 sit north of the Han River, rows 2-5 south (MAP_RIVER_ROW).
@@ -477,7 +477,9 @@ def map_lattice(city):
                 continue
             slots.setdefault(key, []).extend((x, y) for x in xs)
             if label:
-                labels.append((label, (xs[0] + xs[-1]) / 2, y - 23, key))
+                # Seoul row just south of the river: drop labels 7 units so the river line clears them.
+                drop = 7 if city == "seoul" and r == MAP_RIVER_ROW else 0
+                labels.append((label, (xs[0] + xs[-1]) / 2, y - 23 + drop, key))
             if key == "":
                 unknown.append((xs[0], y))
         if col > 7:
@@ -491,7 +493,7 @@ def map_drawing(city, h):
     land = f'<rect class="map-land" x="8" y="8" width="384" height="{h-16}" rx="28"/>'
     if city == "seoul":
         y = MAP_RIVER_Y  # between the north and south rows
-        land += f'<path class="map-river" d="M8 {y}C80 {y-10} 140 {y+10} 200 {y}S320 {y-10} 392 {y}"/><text class="river-label" x="173" y="{y-9}" text-anchor="middle">Han River</text>'
+        land += f'<path class="map-river" d="M8 {y}C80 {y-10} 140 {y+10} 200 {y}S320 {y-10} 392 {y}"/><text class="river-label" x="56" y="{y-9}" text-anchor="middle">Han River</text>'
     return land
 
 
