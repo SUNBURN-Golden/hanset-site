@@ -1,6 +1,6 @@
 # HANSET / 한셋 — static site source
 
-(Historical note: the site is now live at https://hanset.soulbound.co.kr. This repo contains source only; deploys are done by the HANSET operations bot. See ../README.md and ../AGENTS.md.) No trackers, no external requests (fonts are self-hosted Pretendard, OFL).
+(Historical note: the site is now live at https://hanset.soulbound.co.kr. This repo contains source only; deploys are done by the HANSET operations bot. See ../README.md and ../AGENTS.md.) No trackers, no external requests (fonts are self-hosted Archivo, Source Sans 3 and Pretendard Regular, SIL OFL).
 
 ## Build / run
     cd site
@@ -8,7 +8,7 @@
     python3 -m http.server 8765 --directory dist --bind 127.0.0.1   # http://127.0.0.1:8765/
     .venv/bin/python build_site.py --release  # indexable build: canonical + sitemap for hanset.soulbound.co.kr
     .venv/bin/python build_site.py --ads some_ads.json --out /tmp/x   # test 광고 labels without touching dist/
-(.venv = fonttools+brotli only, for font subsetting; stdlib python3 also builds, falling back to system fonts.)
+(fonttools+brotli are required for all builds, including the regular Korean subset. The old optional subsetting/system-font fallback policy was superseded by owner approval on 2026-10-26.)
 Restart the http.server after a rebuild (dist/ is recreated).
 
 ## Source of truth

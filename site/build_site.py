@@ -3,7 +3,7 @@
 
 Reads ../boxes.csv ../saunas.csv ../events.csv (single source of truth for numbers, dates, URLs) and
 content/venues.json + content/events.json (Korean copy for entries cleared to publish) and writes ./dist.
-Only stdlib required; fonttools+brotli (in .venv) are used to subset Pretendard into small woff2 files.
+fonttools+brotli are required to subset the self-hosted Archivo, Source Sans 3 and Pretendard fonts.
 Nothing is deployed, nothing is sent. No trackers, no external requests.
 
   .venv/bin/python build_site.py                 # preview build (noindex)
@@ -236,6 +236,8 @@ class Site:
         return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
                 f'<title>{E(full)}</title><meta name="description" content="{E(desc)}">\n{robots}{canon}{og}'
                 f'<meta name="msvalidate.01" content="5986AEB0A3C1E9F1E558DA5CA02E1CE0" /><meta name="theme-color" content="#F5F2EC"><link rel="icon" href="/favicon.svg" type="image/svg+xml">'
+                f'<link rel="preload" href="/assets/fonts/archivo-sc-latin.woff2" as="font" type="font/woff2" crossorigin>'
+                f'<link rel="preload" href="/assets/fonts/sourcesans3-latin.woff2" as="font" type="font/woff2" crossorigin>'
                 f'<link rel="preload" href="/assets/fonts/Pretendard-Regular.subset.woff2" as="font" type="font/woff2" crossorigin>'
                 f'<link rel="stylesheet" href="/assets/css/site.css?v={asset_ver("css/site.css")}"></head>')
 
@@ -884,22 +886,25 @@ def ics(events):
     return "\r\n".join(lines) + "\r\n"
 
 def subset_fonts(dist):
-    try:
-        from fontTools import subset
-        from fontTools.ttLib import TTFont
-    except ImportError:
-        print("WARN: fonttools not installed; skipping font subsetting (site falls back to system fonts). Use .venv/bin/python.")
-        return
+    from fontTools import subset
+    from fontTools.ttLib import TTFont
+
+    # Prepared Latin sources are already instanced: Archivo wdth=87,
+    # wght=600..800; Source Sans 3 wght=400..600. Keep those variable axes.
     text = "".join(p.read_text(encoding="utf-8") for p in dist.rglob("*.html"))
     text += "".join(p.read_text(encoding="utf-8") for p in (dist / "assets/js").glob("*.js"))
-    chars = "".join(sorted(set(text + "".join(chr(c) for c in range(0x20, 0x7F)) + "₩–—·→›×℃™…“”‘’")))
+    chars = "".join(sorted(set(html.unescape(text) + "".join(chr(c) for c in range(0x20, 0x7F)) + "₩–—·→›×℃™…“”‘’")))
     out = dist / "assets/fonts"; out.mkdir(parents=True, exist_ok=True)
-    for w in ("Regular", "Bold"):
+    sources = (("archivo-sc-latin.woff2", "archivo-sc-latin.woff2"),
+               ("sourcesans3-latin.woff2", "sourcesans3-latin.woff2"),
+               ("Pretendard-Regular.otf", "Pretendard-Regular.subset.woff2"))
+    for source, target in sources:
         opts = subset.Options(); opts.flavor = "woff2"; opts.layout_features = ["*"]; opts.name_IDs = ["*"]; opts.notdef_outline = True
-        f = TTFont(ROOT / f"static/fonts/Pretendard-{w}.otf")
-        s = subset.Subsetter(opts); s.populate(text=chars); s.subset(f)
-        f.flavor = "woff2"; f.save(out / f"Pretendard-{w}.subset.woff2")
-    shutil.copy(ROOT / "static/fonts/Pretendard-OFL-LICENSE.txt", out / "Pretendard-OFL-LICENSE.txt")
+        font = TTFont(ROOT / "static/fonts" / source)
+        sub = subset.Subsetter(opts); sub.populate(text=chars); sub.subset(font)
+        font.flavor = "woff2"; font.save(out / target)
+    for license in ("OFL-Archivo.txt", "OFL-SourceSans3.txt", "Pretendard-OFL-LICENSE.txt"):
+        shutil.copy(ROOT / "static/fonts" / license, out / license)
 
 def leak_check(dist):
     bad = []
