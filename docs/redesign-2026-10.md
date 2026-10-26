@@ -39,3 +39,47 @@ Validation: release build — PASS, 69 pages / 49 venues / 5 events / 2 verified
 Screenshots: `hanset-pr4/home-{390,1440}-{light,dark}.png`, `prices-390.png`, `illustrations-390.png`, and `{finder,detail,archive}-{390,1440}.png`. Proposed Korean-name removal and optional check-label translation are deferred in `/workspace/rd-wt/logs/hanset-copy-todo.md`.
 
 Accepted exceptions: the required hand-drawn art stays at the bottom of home and on guide/archive pages; the mandated Korean term keeps its middle dot. PR6 Finder/detail/archive structural redesign is follow-up work, outside this stack.
+
+## PR5 — metadata separators and arrow suffixes
+
+PR5 review fixes: removed the redundant card metadata display rule. The two other English badge labels (`HYROX · Strength Gym`, `Hotel · Club Sauna`) remain verbatim because only the large-spa label was approved for this PR; comma-separated alternatives are in the external copy todo. Remaining detail/archive arrows and the external-link markers on event/creator cards are explicitly deferred to the out-of-scope PR6 screen work. FIX validation: release build (69 pages, leak check OK), 87 unit tests and mobile/desktop light/dark browser checks passed; screenshots: `hanset-fix-pr5/{home,finder,guide,archive}-{390,1440}-{light,dark}.png` and guide/archive image captures. Responsive 320–1920px checks, deep links, map selection and anchor clearance passed. One concurrent screenshot run timed out; an isolated rerun passed.
+
+Venue cards/previews and fact-source lines, home race strip, home magazine metadata and the footer use separate cells. Specified English link suffixes lose their arrows. The English large-spa label uses a comma in both badges and the matching filter. Provenance tests now check the preserved reply/date words rather than decorative punctuation; official/reply source distinctions remain covered. Source links, shortened section links and footer links retain 44px targets.
+
+Validation: release build — PASS:
+
+```text
+built 69 pages, 49 venues (10 boxes, 39 saunas), 5 events, 2 verified-feed events, 2 creators -> /workspace/rd-wt/hanset/site/dist  (13839 KB total)
+leak check OK (no owner credentials / third-party-source names / trackers)
+```
+
+Full unit suite — PASS (87 tests). Foreground browser review — PASS at mobile/desktop, light/dark; responsive 320–1920 checks, new 44px targets, filter deep links, map preview, reduced motion, generated links/assets, loaded fonts and Hangul coverage — PASS. Representative Finder/detail/archive renders — PASS. Screenshots: `hanset-pr5/home-{390,1440}-{light,dark}.png`, `prices-390.png`, `illustrations-390.png`, `{finder,detail,archive}-{390,1440}.png`; the illustration capture waits for lazy image decoding. Diff phone/email/secret scan — PASS.
+
+Korean text-token inventory is unchanged from the base builder. CSVs, content JSON, verified.py and illustrations/handdraw.py are unchanged across the whole stack. Middle dots inside existing fact values, names and the mandated Korean terminology remain verbatim. Remaining Finder/detail/archive structural and copy cleanup belongs to the out-of-scope PR6 follow-up.
+
+## Release output and final audit
+
+Every stage emitted the same page-count prefix and leak-check line below (PR1/PR2/PR3/PR4/PR5 artifact totals: 13807/13814/13814/13812/13839 KB):
+
+```text
+built 69 pages, 49 venues (10 boxes, 39 saunas), 5 events, 2 verified-feed events, 2 creators
+leak check OK (no owner credentials / third-party-source names / trackers)
+```
+
+After the official-price eligibility correction, PR4 passed its 86-test suite, release build and mobile/desktop browser checks again. PR5 was rebased onto that correction, then passed the 87-test suite, release build and browser checks again. Final checks passed for stacked ancestry, the complete diff phone/email/secret scan, unchanged Korean text inventory and source data, release indexing, real-page sitemap, /ads/ absence, 404 and Search Console verification. No push, remote PR creation, merge or deployment was performed.
+
+Whitespace audit: source changes pass `git diff --check origin/main` when the two supplied OFL text files are excluded. The unmodified Archivo licence contains one trailing space, and Source Sans 3 uses upstream CRLF line endings; those licence-only warnings are retained to preserve the supplied files byte for byte.
+
+
+## FIX review follow-up — 2026-10-26
+
+All review findings are resolved by source fixes or explicit documentation/deferral in the owning PR. PR1 through PR5 remain locally stacked; each descendant was rebased onto its fixed parent. Required release builds passed on all five branches, each emitting:
+
+```text
+built 69 pages, 49 venues (10 boxes, 39 saunas), 5 events, 2 verified-feed events, 2 creators
+leak check OK (no owner credentials / third-party-source names / trackers)
+```
+
+`TMPDIR=/tmp python3 -m unittest discover -s tests -p 'test_*.py'` passed with 85/85/85/86/87 tests for PR1/PR2/PR3/PR4/PR5. The initial invocation without an explicit external temp directory hit the collector's `state_inside_repository` guard; external temporary state resolved that environment issue without code changes. `python3` remains the available interpreter. Foreground browser runs shut down their local servers before exit. Fresh screenshots live in `/workspace/rd-wt/logs/hanset-fix-prN/`.
+
+Final audit passed on every branch: original Korean builder word counts unchanged relative to its original branch tip, no new Korean words relative to base, locked source data and hand-drawn sources unchanged, no undefined CSS tokens, and phone/email/secret diff scans clean. Local stacked ancestry, generated links/assets, public-page indexing, real-page sitemap, Search Console verification, 404 and `/ads/` absence passed. The existing private `/join/welcome/` confirmation page remains intentionally excluded from indexing and the sitemap. The inherited OFL whitespace exceptions documented above remain unchanged. No push, remote Git operation, merge or deployment was performed.

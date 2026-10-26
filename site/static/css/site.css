@@ -443,3 +443,12 @@ table.t th{background:var(--surface-2);font-size:.82rem}
 }
 @media(max-width:359px){.brand small{display:none}.pin{font-size:.875rem;padding:0 10px}.number-board h2{flex-wrap:wrap}}
 @media(prefers-reduced-motion:reduce){.line-bar{transition:none}.city-lines a:hover .line-bar,.home-price-link:hover .line-bar{transform:none}}
+
+/* Metadata fields use their own cells; fact text remains verbatim. */
+.meta-parts,.fact-source,.footer-sign{display:flex;flex-wrap:wrap;align-items:baseline;gap:2px 12px}
+.fact-source a{display:inline-flex;align-items:center;min-height:44px;min-width:44px}
+.meta-parts>a{display:inline-flex;align-items:center;min-height:44px;min-width:44px}
+.race-strip-link{gap:12px;flex-wrap:wrap;line-height:1.4;white-space:normal}
+
+.sec-h>a{display:inline-flex;align-items:center;min-width:44px;min-height:44px}
+.flinks a{min-width:44px}

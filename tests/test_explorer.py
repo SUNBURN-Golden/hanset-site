@@ -20,10 +20,14 @@ class Elements(HTMLParser):
     def __init__(self, markup):
         super().__init__()
         self.elements = []
+        self.text = []
         self.feed(markup)
 
     def handle_starttag(self, tag, attrs):
         self.elements.append((tag, dict(attrs)))
+
+    def handle_data(self, data):
+        self.text.append(data)
 
 
 class Explorer(unittest.TestCase):
@@ -50,7 +54,7 @@ class Explorer(unittest.TestCase):
             self.assertNotIn('selected-venue', selection)
             self.assertIn('/assets/js/finder.js?v=', page)
         self.assertIn(f'<span class="num">{len(self.venues)}</span> <span>boxes &amp; saunas</span>', home)
-        self.assertNotIn('<section', home[home.index('See every drawing ›</a></p></section>') + len('See every drawing ›</a></p></section>'):home.index('</main>')])
+        self.assertNotIn('<section', home[home.index('See every drawing</a></p></section>') + len('See every drawing</a></p></section>'):home.index('</main>')])
         self.assertIn('id="pictures"', self.site.pages['/guide/'])
         self.assertNotIn('/ads/', self.site.pages)
 
@@ -77,6 +81,27 @@ class Explorer(unittest.TestCase):
         stale = dict(expected[0], stale=True)
         _, board = B.home_boards([stale], [stale], {stale['city_key']: 1})
         self.assertIn('오래됨 (outdated)', board)
+
+    def test_metadata_separators_preserve_words_and_provenance(self):
+        home = self.site.pages['/']
+        race = home[home.index('<div class="race-strip"'):home.index('<p class="safety-line"')]
+        self.assertNotIn('·', race)
+        self.assertNotIn('›', race)
+        self.assertIn('HYROX Seoul', race)
+        self.assertIn('KINTEX', race)
+        footer = self.site.foot('home')
+        self.assertNotIn('·', footer)
+        self.assertIn('Train. Sweat. One set.', footer)
+        self.assertIn('hanset.mag', footer)
+        venue = self.by_slug['termeden-icheon']
+        contents = B.venue_contents(venue, preview=True)
+        self.assertIn('View full details</a>', contents)
+        self.assertIn('Open in map</a>', contents)
+        self.assertIn(venue['price_caveat'], ''.join(Elements(contents).text))
+        source = B.fact_provenance(venue, 'Confirmed on the official page')
+        self.assertNotIn('·', source)
+        self.assertIn('확인일 ' + B.dot(venue['last_verified']), source)
+        self.assertIn(B.E(venue['source']), source)
 
     def test_advanced_filters_closed_and_basic_fields_outside_details(self):
         page = self.site.pages['/finder/']
@@ -263,7 +288,7 @@ class Explorer(unittest.TestCase):
                 with self.subTest(venue=slug, fact=key):
                     self.assertIn(f'— venue reply, {checked}', value)
                     note = B.fact_provenance(v, value)
-                    self.assertIn(f'Venue reply · {checked} ·', note)
+                    self.assertIn(f'Venue reply {checked} Public source:', ''.join(Elements(note).text))
                     self.assertNotIn('Official source', note)
                     self.assertNotIn('href=', note)
                     for output in outputs:
@@ -288,7 +313,7 @@ class Explorer(unittest.TestCase):
         for value, checked in cases:
             with self.subTest(value=value):
                 note = B.fact_provenance(v, value)
-                self.assertIn(f'Venue reply · {checked}', note)
+                self.assertIn(f'Venue reply {checked}', ''.join(Elements(note).text))
                 self.assertNotIn('10/28', note)
                 self.assertNotIn('10/20', note)
                 self.assertNotIn('Official source', note)
