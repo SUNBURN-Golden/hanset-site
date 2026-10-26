@@ -238,7 +238,6 @@ class Site:
                 f'<meta name="msvalidate.01" content="5986AEB0A3C1E9F1E558DA5CA02E1CE0" /><meta name="theme-color" content="#F5F2EC"><link rel="icon" href="/favicon.svg" type="image/svg+xml">'
                 f'<link rel="preload" href="/assets/fonts/archivo-sc-latin.woff2" as="font" type="font/woff2" crossorigin>'
                 f'<link rel="preload" href="/assets/fonts/sourcesans3-latin.woff2" as="font" type="font/woff2" crossorigin>'
-                f'<link rel="preload" href="/assets/fonts/Pretendard-Regular.subset.woff2" as="font" type="font/woff2" crossorigin>'
                 f'<link rel="stylesheet" href="/assets/css/site.css?v={asset_ver("css/site.css")}"></head>')
 
     def nav(self, active):
