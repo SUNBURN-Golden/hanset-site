@@ -171,7 +171,7 @@ class Explorer(unittest.TestCase):
         self.assertIn('height:auto', canvas)
         self.assertIn('max-width:460px', canvas)
         self.assertIn('[hidden]{display:none!important}', css)
-        mobile = css[css.rindex('@media(max-width:719px)'):]
+        mobile = css[css.rindex('@media(max-width:900px)'):]
         self.assertIn('.home-top{grid-template-columns:minmax(0,1fr);gap:28px;padding:32px 0 0}', mobile)
         self.assertIn('.home-hero{margin:0;padding:0;background:transparent', css)
         self.assertNotIn('.map-regions{grid-template-columns:', css)

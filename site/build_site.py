@@ -267,7 +267,7 @@ class Site:
         if noindex: self.noindex.add(path)
         sc = "".join(f'<script src="/assets/js/{s}?v={asset_ver("js/"+s)}" defer></script>' for s in scripts)
         out_path = path
-        self.pages[out_path] = (self.head(title, desc, path, noindex) + f'<body>{self.nav(active)}<main id="main" class="wrap">{body}</main>{self.foot(active)}{sc}</body></html>')
+        self.pages[out_path] = (self.head(title, desc, path, noindex) + f'<body>{self.nav(active)}<main id="main" class="wrap{" home-main" if path == "/" else ""}">{body}</main>{self.foot(active)}{sc}</body></html>')
 
 def clip(t, n=160):
     """Meta description: never cut inside a word or number; prefer a sentence end."""
@@ -583,7 +583,7 @@ def home_boards(venues, ordered, city_counts):
                      f'<span class="name">{city.title()}</span><span class="num">{count}</span></a></li>'
                      for city, count in city_counts.items())
     board = (f'<section class="number-board" aria-labelledby="home-count"><h2 id="home-count">'
-             f'<span class="num">{len(venues)}</span> <span>boxes &amp; saunas</span></h2>'
+             f'<span class="num">{sum(city_counts.values())}</span> <span>boxes &amp; saunas</span></h2>'
              f'<ul class="home-types">{types}</ul><ul class="city-lines">{cities}</ul></section>')
     rows = []
     for v in [v for v in ordered if home_price_confirmed(v)][:3]:
