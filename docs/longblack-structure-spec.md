@@ -9,5 +9,8 @@ Measured 2026-10-20 01:40 KST with Playwright on public longblack.co pages, 1440
 | Section title | 26px/32px 700 | 22px/28px |
 ## HANSET
 - Article layout only on magazine articles and /finder/<slug>/ venue detail pages.
-- Home and /finder/ keep their finder structure; color tokens only.
-- Neutral paper background + one accent (#E4572E, text #B83C1A). Status badges stay (they carry meaning), tokenized.
+- **Superseded 2026-10-26, owner approved:** Home and /finder/ keep their finder structure; color tokens only. Home now follows the approved station-wayfinding hero, count board and price rows (redesign PR4). The interactive map stays below the price board. Finder/detail/archive structural redesign is deferred to PR6.
+- **Superseded 2026-10-26, owner approved:** Neutral paper background + one accent (#E4572E, text #B83C1A).
+- Current HANSET palette: light background #E4EFEC, surface #F1F7F5, text #10241F, muted #3E5A53, border #688C83, accent #0A6A5A; dark background #0E211E, surface #15302B, text #E2EFEB, muted #9DBDB5, border #5A8379, accent #62D2B9. Dark mode follows the user preference. Status badges retain meaning and use tokens.
+- Heading and numbers: self-hosted Archivo (width 87, weights 600–800); body: Source Sans 3; Korean: build-specific Pretendard Regular. SIL OFL licences ship with the fonts.
+- Two radii: 2px line bars, 4px panels and controls. City line colours are bars only; names remain in the readable text colour. No purple hues (245–320).
