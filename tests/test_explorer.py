@@ -63,7 +63,7 @@ class Explorer(unittest.TestCase):
             self.assertEqual(count, sum(v['city_key'] == city for v in self.venues))
             self.assertIn(f'href="/finder/?city={city}"', home)
         expected = sorted(self.venues, key=lambda v: (not v['ad'], not bool(v['price']), v['status'] != 'verified', -len(v['facts']), v['order']))
-        expected = [v for v in expected if v['price']][:3]
+        expected = [v for v in expected if B.home_price_confirmed(v)][:3]
         self.assertEqual(re.findall(r'data-price-slug="([^"]+)"', home), [v['slug'] for v in expected])
         board = home[home.index('<ul class="home-prices"'):home.index('<section class="sec home-results"')]
         for venue in expected:
@@ -71,6 +71,9 @@ class Explorer(unittest.TestCase):
                 if venue[key]:
                     self.assertIn(B.E(venue[key]), board)
             self.assertIn(B.dot(venue['last_verified']), board)
+        reply_price = self.by_slug['sisu-house']
+        self.assertFalse(B.home_price_confirmed(reply_price))
+        self.assertNotIn('data-price-slug="sisu-house"', board)
         stale = dict(expected[0], stale=True)
         _, board = B.home_boards([stale], [stale], {stale['city_key']: 1})
         self.assertIn('오래됨 (outdated)', board)

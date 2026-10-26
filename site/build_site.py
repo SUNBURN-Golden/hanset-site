@@ -567,6 +567,13 @@ def home_pic(kind):
             f'{pin_glyph(kind)}</svg>')
 
 
+def home_price_confirmed(v):
+    """New home price hints require an official-page citation, never a reply."""
+    prices = [value for key, value in v["facts"] if key.startswith(("Price", "Drop-in")) and value.strip()]
+    return bool(v["price"] and v["source"] and prices and
+                all("Official source" in fact_provenance(v, value) for value in prices))
+
+
 def home_boards(venues, ordered, city_counts):
     """Present existing published values; the full explorer remains below."""
     types = "".join(f'<li><a href="/finder/?type={kind}">{home_pic(kind)}{label} '
@@ -579,7 +586,7 @@ def home_boards(venues, ordered, city_counts):
              f'<span class="num">{len(venues)}</span> <span>boxes &amp; saunas</span></h2>'
              f'<ul class="home-types">{types}</ul><ul class="city-lines">{cities}</ul></section>')
     rows = []
-    for v in [v for v in ordered if v["price"]][:3]:
+    for v in [v for v in ordered if home_price_confirmed(v)][:3]:
         caveat = f'<span class="home-price-note">{E(v["price_caveat"])}</span>' if v["price_caveat"] else ""
         stale = '<span class="badge badge-old">오래됨 (outdated)</span>' if v["stale"] else ""
         rows.append(f'<li data-price-slug="{v["slug"]}"><a class="home-price-link" href="/finder/{v["slug"]}/">'
