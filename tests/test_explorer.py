@@ -305,6 +305,26 @@ class Explorer(unittest.TestCase):
                         if B._is_confirmed(B.FOREIGNER[v['slug']][key]):
                             self.assertIn(B.fact_provenance(v, value), output)
 
+    def test_closed_on_field_and_guide(self):
+        slugs = {v['slug'] for v in self.venues}
+        self.assertTrue(set(B.CLOSED) <= slugs)
+        self.assertNotIn('grand-josun-busan', B.CLOSED)
+        for c in B.CLOSED.values():
+            self.assertTrue(c['closed'] and c['url'].startswith('http') and c['source'])
+            B.ymd(c['checked'])
+            self.assertNotIn('naver', c['url'])
+        guide = self.site.pages['/guides/closed-days-korea/']
+        table = guide.split('<tbody>', 1)[1].split('</tbody>', 1)[0]
+        self.assertIn('Only places we’ve confirmed', guide)
+        for v in self.venues:
+            page = self.site.pages[f"/finder/{v['slug']}/"]
+            self.assertIn('<th>Closed on</th>', page)
+            self.assertEqual(f'href="/finder/{v["slug"]}/"' in table, v['slug'] in B.CLOSED, v['slug'])
+            if v['slug'] in B.CLOSED:
+                self.assertIn(B.dot(B.ymd(B.CLOSED[v['slug']]['checked'])), page)
+            else:
+                self.assertIn('Check before you go', page)
+
     def test_upstream_checklists_and_guides_exclude_unconfirmed_conditions(self):
         for v in self.venues:
             values = B.FOREIGNER.get(v['slug'], {})

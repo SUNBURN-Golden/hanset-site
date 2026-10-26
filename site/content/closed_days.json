@@ -1,0 +1,105 @@
+{
+  "_doc": "Confirmed closed days only (official page, operator-run profile or venue reply). Venues not listed show 'Check before you go'. Maintained by the HANSET operations bot.",
+  "banyan-tree-club-seoul": {
+    "closed": "1st Tuesday of every month",
+    "url": "https://www.banyantreeclub.com/web/kr/facilities/view.asp?idx=4",
+    "source": "Official page",
+    "checked": "2026-10-23"
+  },
+  "fraser-place-central-seoul": {
+    "closed": "1st Wednesday of every month (may change around holidays)",
+    "url": "https://fpcs.co.kr/facility-service/sauna",
+    "source": "Official page",
+    "checked": "2026-10-23"
+  },
+  "novotel-ambassador-seoul-gangnam": {
+    "closed": "1st Monday of every month",
+    "url": "https://www.ambatel.com/novotel/gangnam/ko/facilitiesView.do?facilities_contents_seq=36",
+    "source": "Official page",
+    "checked": "2026-10-23"
+  },
+  "ambassador-seoul-pullman": {
+    "closed": "1st Wednesday of every month",
+    "url": "https://www.ambatel.com/theambassador/seoul/ko/facilitiesView.do?facilities_contents_seq=211",
+    "source": "Official page",
+    "checked": "2026-10-23"
+  },
+  "signiel-seoul": {
+    "closed": "Last Wednesday of every month",
+    "url": "https://www.lottehotel.com/seoul-signiel/ko/facilities/sauna",
+    "source": "Official page",
+    "checked": "2026-10-18"
+  },
+  "park-hyatt-seoul": {
+    "closed": "Sauna & spa closed Nov 12, 2026 for maintenance",
+    "url": "https://www.hyatt.com/en-US/spas/Park-Club-Fitness-Centre-and-Spa/about",
+    "source": "Official page",
+    "checked": "2026-10-18"
+  },
+  "sisu-house": {
+    "closed": "Every Tuesday",
+    "url": "http://sisu.house/",
+    "source": "Venue reply",
+    "checked": "2026-10-18"
+  },
+  "solo-sauna-repo-noryangjin": {
+    "closed": "2nd and 4th Monday of every month",
+    "url": "https://www.daangn.com/kr/local-profile/%EC%86%94%EB%A1%9C%EC%82%AC%EC%9A%B0%EB%82%98%EB%A0%88%ED%8F%AC-%EB%85%B8%EB%9F%89%EC%A7%84%EC%A0%90-kmkc5iebuf76/",
+    "source": "Operator-run profile",
+    "checked": "2026-10-22"
+  },
+  "choice-by-vantt-gangdong": {
+    "closed": "2nd Wednesday of every month",
+    "url": "https://www.instagram.com/choicebyvantt",
+    "source": "Official Instagram",
+    "checked": "2026-10-25"
+  },
+  "crossfit-super-sapiens": {
+    "closed": "Sundays and public holidays",
+    "url": "https://crossfitsupersapiens.com/reservation",
+    "source": "Official page",
+    "checked": "2026-10-18"
+  },
+  "crossfit-one-daeyeon": {
+    "closed": "Sundays and public holidays",
+    "url": "http://www.fitnessclubone.com/",
+    "source": "Official page",
+    "checked": "2026-10-18"
+  },
+  "orakai-cheonggyesan": {
+    "closed": "2026: Oct 12, Nov 9, Dec 14",
+    "url": "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp",
+    "source": "Official page",
+    "checked": "2026-10-18"
+  },
+  "termeden-icheon": {
+    "closed": "Clean days every Tue & Wed through Oct 28, 2026 (all facilities closed)",
+    "url": "https://termeden.com/poolspa_infomation_use.html",
+    "source": "Official page",
+    "checked": "2026-10-23"
+  },
+  "paradise-hotel-busan": {
+    "closed": "Spa facilities: 4th Wednesday of every month (Oct 28 in October)",
+    "url": "https://www.busanparadisehotel.co.kr/front/facility/spaparasauna?language=KO",
+    "source": "Official page",
+    "checked": "2026-10-18"
+  },
+  "commodore-hotel-busan": {
+    "closed": "1st Monday of every month · Lunar New Year and Chuseok days",
+    "url": "https://www.commodore.co.kr/html/05_facilities/01_02.php",
+    "source": "Official page",
+    "checked": "2026-10-18"
+  },
+  "lotte-hotel-jeju": {
+    "closed": "1st Tuesday of every month (may change)",
+    "url": "https://www.lottehotel.com/jeju-hotel/ko/facilities/sauna",
+    "source": "Official page",
+    "checked": "2026-10-18"
+  },
+  "shilla-jeju": {
+    "closed": "Last Wednesday of every month: opens from 18:00",
+    "url": "https://www.shillahotels.com/ko/theshilla/jeju/facilities/fitness/sauna.do",
+    "source": "Official page",
+    "checked": "2026-10-18"
+  }
+}
