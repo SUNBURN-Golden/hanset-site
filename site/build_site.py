@@ -56,6 +56,10 @@ def span(a, b, ref_year):
 
 FOREIGNER = json.loads((ROOT / "content/foreigner.json").read_text(encoding="utf-8"))
 CLOSED = {k: c for k, c in json.loads((ROOT / "content/closed_days.json").read_text(encoding="utf-8")).items() if not k.startswith("_")}
+CLOSED_ALL = CLOSED
+def active_closed(today):
+    return {k: c for k, c in CLOSED_ALL.items() if not c.get("until") or ymd(c["until"]) >= today}
+CLOSED = active_closed(dt.datetime.now(ZoneInfo("Asia/Seoul")).date())  # expired date-bound closures hide at build time
 CLOSED_CHECK = "Check before you go"
 def closed_row(v):
     c = CLOSED.get(v["slug"])
@@ -948,6 +952,7 @@ def main():
     ap.add_argument("--verified-examples", action="store_true", help="preview only: render fake data from data/verified/examples")
     a = ap.parse_args()
     today = ymd(a.today) if a.today else dt.datetime.now(ZoneInfo("Asia/Seoul")).date()
+    global CLOSED; CLOSED = active_closed(today)
     dist = Path(a.out)
     venues, events, skipped, ev_skipped = load(today, a.ads)
     if a.verified_examples and a.release: sys.exit("ERROR: --verified-examples is preview-only; never with --release")
