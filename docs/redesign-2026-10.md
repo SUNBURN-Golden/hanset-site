@@ -19,3 +19,11 @@ PR2 review fixes: illustration image backgrounds use the defined `--surface` tok
 All screens: approved mint/teal palette, four city bar tokens, 2px/4px radii, visible focus, matching light/dark browser theme colours and favicon. Existing map glyphs inherit theme tokens. The old paper/terracotta and home-colour-only decisions remain explicitly marked superseded in `docs/longblack-structure-spec.md`, including its former line 13. No HANSET `DESIGN.md` or `DECISIONS` file exists in this worktree.
 
 Validation: release build — PASS, 69 pages / 49 venues / 5 events / 2 verified-feed events / 2 creators; leak check OK. Full unit suite — PASS (85 tests). Palette hue and text/UI contrast checks — PASS (AA text, 3:1 borders). Foreground browser review — PASS at mobile/desktop, light/dark, no overflow/errors/external requests. Screenshots: `hanset-pr2/home-{390,1440}-{light,dark}.png` and full-page counterparts. Diff phone/email/secret scan — PASS.
+
+## PR3 — labels
+
+PR3 review fixes: removed redundant trailing semicolons from the filter label, fact heading and creator initial rules, and normalized the mobile lead rule indentation. FIX validation: release build (69 pages, leak check OK), 85 unit tests and mobile/desktop light/dark browser checks passed; screenshots: `hanset-fix-pr3/{home,finder,guide,archive}-{390,1440}-{light,dark}.png`.
+
+Home: remove the English hero kicker. Shared CSS: remove positive letter spacing and forced uppercase from brand/eyebrow/filter/fact/verified-feed labels. Korean strings stay unchanged.
+
+Validation: release build — PASS, 69 pages / 49 venues / 5 events / 2 verified-feed events / 2 creators; leak check OK. Full unit suite — PASS (85 tests). Foreground browser review — PASS at mobile/desktop in light/dark; loaded fonts, no overflow/errors/external requests. Screenshots: `hanset-pr3/home-{390,1440}-{light,dark}.png`. An extra full-page capture exceeded Chrome’s timeout on the long explorer page; the required viewport captures were rerun successfully. Diff phone/email/secret scan — PASS.
