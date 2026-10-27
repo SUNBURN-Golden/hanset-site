@@ -143,6 +143,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
                     try:
                         executor.execute(task)
                     except BudgetExhausted:
+                        if os.environ.get('HANSET_ACTIVE_DEBUG'): print('BUDGET', task['kind'], task['url'], executor.requests, max_requests, clock.monotonic()-deadline)
                         with db: db.execute("UPDATE tasks SET state='pending',lease_until=NULL WHERE task_id=?",(task['task_id'],))
                         state = 'budget_reached'
                         break

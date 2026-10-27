@@ -287,7 +287,7 @@ class Executor:
         elif kind == 'directory':
             directories.discover(self.context,payload)
         else:
-            result = self.context.get(task['url'])
+            result = self.get(task['url'])
             if result is None or result.outcome == 'cap_reached': raise BudgetExhausted()
             if not result.ok:
                 self.documents[task['url']] = dict(url=task['url'],outcome=result.outcome,text='')
