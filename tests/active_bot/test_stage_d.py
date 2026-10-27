@@ -236,3 +236,11 @@ def test_registered_directory_xml_does_not_bypass_slug_filter(bot,server):
     rows=bot.db.execute("SELECT url FROM tasks WHERE kind='trial'").fetchall()
     assert [r[0] for r in rows]==[server.base+'/spa/silver']
     assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='candidates'").fetchone()[0]==1
+
+
+def test_malformed_href_and_none_pii_do_not_fail_page():
+    from hanset_active.extract import html
+    from hanset_active.util.pii import strip_pii
+    doc = html.extract('<html><body><p>hello world sauna</p><a href="http://[bad/">x</a><a href="/ok">ok</a></body></html>', 'https://venue-a.test/')
+    assert any(l['url'].endswith('/ok') for l in doc['links'])
+    assert strip_pii(None) == ''

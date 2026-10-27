@@ -19,9 +19,13 @@ def extract(html: str | bytes, url: str = '') -> dict:
     title = soup.title.get_text(' ',strip=True) if soup.title else ''
     links=[]
     for a in soup.select('a[href], link[rel], img[src]'):
-        href = urljoin(url, a.get('href') or a.get('src',''))
-        if urlsplit(href).scheme not in ('http','https'):
-            continue
+        try:
+            href = urljoin(url, a.get('href') or a.get('src',''))
+            if urlsplit(href).scheme not in ('http','https'):
+                continue
+            urlsplit(href).hostname
+        except ValueError:
+            continue  # malformed href (e.g. bad IPv6 literal): skip the link, never fail the page
         anchor = a.get_text(' ',strip=True) or a.get('alt','')
         domain = registrable_domain(href)
         kind = 'internal' if urlsplit(href).hostname == urlsplit(url).hostname else 'external'

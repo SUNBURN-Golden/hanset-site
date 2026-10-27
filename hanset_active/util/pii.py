@@ -7,6 +7,7 @@ _SECRET = re.compile(r'(?i)(\b(?:api[_-]?key|token|secret|session|sid|auth)[\"\'
 _PHONE = re.compile(r'(?<!\w)(?:\+\d{1,3}[ .-]?)?(?:\(?0\d{1,2}\)?[ .-]?\d{3,4}[ .-]?\d{4}|1\d{3}[ .-]\d{4}|\+\d[\d .()-]{7,}\d)(?!\w)')
 
 def strip_pii(value: str | bytes) -> str | bytes:
+    if value is None: return ''
     binary = isinstance(value, bytes)
     text = value.decode('utf-8', errors='replace') if binary else value
     text = unquote(text)

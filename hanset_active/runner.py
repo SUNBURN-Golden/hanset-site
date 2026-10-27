@@ -1,3 +1,4 @@
+import os
 """Bounded, restartable single-process collection runs."""
 import json
 import math
@@ -146,6 +147,8 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
                         state = 'budget_reached'
                         break
                     except Exception as error:
+                        if os.environ.get('HANSET_ACTIVE_DEBUG'):
+                            import traceback; traceback.print_exc()
                         fail_task(db,task,error,clock=clock)
                     else:
                         with db:
