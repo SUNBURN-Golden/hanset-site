@@ -1,8 +1,5 @@
 # Active collector operations
 
-This is the draft for `docs/active-bot/RUNBOOK.md`. Installation at that path
-requires resolving the task's file-scope restriction.
-
 Run from the checkout with Python 3.11 or later. Dependencies are requests,
 beautifulsoup4, lxml, Pillow, and pytest for tests. Install `pdftotext` and
 `tesseract` with English/Korean language data for attachment extraction.
@@ -47,8 +44,7 @@ Run limits can lower consumption; persisted daily caps remain enforced.
 
 ## Cron
 
-Install the reviewed wrapper as `scripts/run_active_cron.sh` and make it
-executable. It finds its checkout, validates the external data directory,
+The wrapper `scripts/run_active_cron.sh` (executable) finds its checkout, validates the external data directory,
 uses a cron flock in addition to the collector's own flock/DB lease, and
 appends each output line with a KST timestamp. For example, schedule it at
 minutes 0 and 30 in a local crontab using the absolute checkout path:
