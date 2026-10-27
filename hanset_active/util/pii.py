@@ -15,6 +15,6 @@ def strip_pii(value: str | bytes) -> str | bytes:
     text = re.sub(r'(?i)Bearer\s+[^\s<>"\']+', 'Bearer [token]', text)
     text = _SECRET.sub(lambda m: m[1] + '[token]', text)
     text = re.sub(r'\beyJ[\w-]+\.[\w-]+\.[\w-]+\b', '[token]', text)
-    text = re.sub(r'(?<![\w])(?:[A-Za-z0-9_+/=-]{32,})(?![\w])', '[token]', text)
+    text = re.sub(r'(?<![\w])(?!(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})(?![\w]))(?=[A-Za-z0-9_+=-]*\d)(?=[A-Za-z0-9_+=-]*[A-Za-z])[A-Za-z0-9_+=-]{32,}(?![\w])', '[token]', text)  # long mixed alnum runs; '/' excluded so URL paths survive, UUID ids kept
     text = _PHONE.sub('[phone]', text)
     return text.encode() if binary else text

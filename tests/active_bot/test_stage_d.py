@@ -244,3 +244,11 @@ def test_malformed_href_and_none_pii_do_not_fail_page():
     doc = html.extract('<html><body><p>hello world sauna</p><a href="http://[bad/">x</a><a href="/ok">ok</a></body></html>', 'https://venue-a.test/')
     assert any(l['url'].endswith('/ok') for l in doc['links'])
     assert strip_pii(None) == ''
+
+
+def test_long_url_paths_are_not_mistaken_for_tokens():
+    from hanset_active.util.pii import strip_pii
+    url = 'https://korean.visitseoul.net/sitemap/entertainment_kr_sitemap.xml'
+    assert strip_pii(url) == url
+    assert strip_pii('x ' + 'aB3' * 14) == 'x [token]'
+    assert '[token]' in strip_pii('key=' + 'a1' * 20)
