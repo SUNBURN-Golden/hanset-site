@@ -1,0 +1,669 @@
+{
+  "regions": [
+    {
+      "id": "seoul",
+      "ko": "서울",
+      "en": "Seoul",
+      "aliases": [
+        "서울",
+        "Seoul"
+      ],
+      "osm_city": "Seoul"
+    },
+    {
+      "id": "busan",
+      "ko": "부산",
+      "en": "Busan",
+      "aliases": [
+        "부산",
+        "Busan"
+      ],
+      "osm_city": "Busan"
+    },
+    {
+      "id": "jeju",
+      "ko": "제주",
+      "en": "Jeju",
+      "aliases": [
+        "제주",
+        "Jeju"
+      ],
+      "osm_city": "Jeju"
+    },
+    {
+      "id": "incheon",
+      "ko": "인천",
+      "en": "Incheon",
+      "aliases": [
+        "인천",
+        "Incheon"
+      ],
+      "osm_city": "Incheon"
+    },
+    {
+      "id": "gyeonggi",
+      "ko": "경기",
+      "en": "Gyeonggi",
+      "aliases": [
+        "경기",
+        "Gyeonggi"
+      ],
+      "osm_city": "Gyeonggi"
+    },
+    {
+      "id": "suwon",
+      "ko": "수원",
+      "en": "Suwon",
+      "aliases": [
+        "수원",
+        "Suwon"
+      ],
+      "osm_city": "Suwon"
+    },
+    {
+      "id": "seongnam",
+      "ko": "성남",
+      "en": "Seongnam",
+      "aliases": [
+        "성남",
+        "Seongnam"
+      ],
+      "osm_city": "Seongnam"
+    },
+    {
+      "id": "goyang",
+      "ko": "고양",
+      "en": "Goyang",
+      "aliases": [
+        "고양",
+        "Goyang"
+      ],
+      "osm_city": "Goyang"
+    },
+    {
+      "id": "yongin",
+      "ko": "용인",
+      "en": "Yongin",
+      "aliases": [
+        "용인",
+        "Yongin"
+      ],
+      "osm_city": "Yongin"
+    },
+    {
+      "id": "bucheon",
+      "ko": "부천",
+      "en": "Bucheon",
+      "aliases": [
+        "부천",
+        "Bucheon"
+      ],
+      "osm_city": "Bucheon"
+    },
+    {
+      "id": "daegu",
+      "ko": "대구",
+      "en": "Daegu",
+      "aliases": [
+        "대구",
+        "Daegu"
+      ],
+      "osm_city": "Daegu"
+    },
+    {
+      "id": "daejeon",
+      "ko": "대전",
+      "en": "Daejeon",
+      "aliases": [
+        "대전",
+        "Daejeon"
+      ],
+      "osm_city": "Daejeon"
+    },
+    {
+      "id": "gwangju",
+      "ko": "광주",
+      "en": "Gwangju",
+      "aliases": [
+        "광주",
+        "Gwangju"
+      ],
+      "osm_city": "Gwangju"
+    },
+    {
+      "id": "ulsan",
+      "ko": "울산",
+      "en": "Ulsan",
+      "aliases": [
+        "울산",
+        "Ulsan"
+      ],
+      "osm_city": "Ulsan"
+    },
+    {
+      "id": "gangwon",
+      "ko": "강원",
+      "en": "Gangwon",
+      "aliases": [
+        "강원",
+        "Gangwon"
+      ],
+      "osm_city": "Gangwon"
+    },
+    {
+      "id": "chungbuk",
+      "ko": "충북",
+      "en": "Chungcheongbuk-do",
+      "aliases": [
+        "충북",
+        "Chungcheongbuk-do"
+      ],
+      "osm_city": "Chungcheongbuk-do"
+    },
+    {
+      "id": "chungnam",
+      "ko": "충남",
+      "en": "Chungcheongnam-do",
+      "aliases": [
+        "충남",
+        "Chungcheongnam-do"
+      ],
+      "osm_city": "Chungcheongnam-do"
+    },
+    {
+      "id": "jeonbuk",
+      "ko": "전북",
+      "en": "Jeonbuk",
+      "aliases": [
+        "전북",
+        "Jeonbuk"
+      ],
+      "osm_city": "Jeonbuk"
+    },
+    {
+      "id": "jeonnam",
+      "ko": "전남",
+      "en": "Jeollanam-do",
+      "aliases": [
+        "전남",
+        "Jeollanam-do"
+      ],
+      "osm_city": "Jeollanam-do"
+    },
+    {
+      "id": "gyeongbuk",
+      "ko": "경북",
+      "en": "Gyeongsangbuk-do",
+      "aliases": [
+        "경북",
+        "Gyeongsangbuk-do"
+      ],
+      "osm_city": "Gyeongsangbuk-do"
+    },
+    {
+      "id": "gyeongnam",
+      "ko": "경남",
+      "en": "Gyeongsangnam-do",
+      "aliases": [
+        "경남",
+        "Gyeongsangnam-do"
+      ],
+      "osm_city": "Gyeongsangnam-do"
+    },
+    {
+      "id": "sejong",
+      "ko": "세종",
+      "en": "Sejong",
+      "aliases": [
+        "세종",
+        "Sejong"
+      ],
+      "osm_city": "Sejong"
+    }
+  ],
+  "venue_types": [
+    {
+      "id": "sauna",
+      "ko_terms": [
+        "사우나"
+      ],
+      "en_terms": [
+        "sauna"
+      ],
+      "osm_tags": [
+        "leisure=sauna"
+      ]
+    },
+    {
+      "id": "jjimjilbang",
+      "ko_terms": [
+        "찜질방"
+      ],
+      "en_terms": [
+        "jjimjilbang",
+        "bathhouse"
+      ],
+      "osm_tags": [
+        "leisure=sauna",
+        "amenity=public_bath"
+      ]
+    },
+    {
+      "id": "hotel_spa",
+      "ko_terms": [
+        "호텔 사우나",
+        "호텔 스파"
+      ],
+      "en_terms": [
+        "hotel sauna",
+        "hotel spa"
+      ],
+      "osm_tags": [
+        "tourism=hotel",
+        "leisure=spa"
+      ]
+    },
+    {
+      "id": "boutique_sauna",
+      "ko_terms": [
+        "부티크 사우나"
+      ],
+      "en_terms": [
+        "boutique sauna"
+      ],
+      "osm_tags": [
+        "leisure=sauna"
+      ]
+    },
+    {
+      "id": "crossfit_box",
+      "ko_terms": [
+        "크로스핏",
+        "박스"
+      ],
+      "en_terms": [
+        "CrossFit",
+        "crossfit box"
+      ],
+      "osm_tags": [
+        "leisure=fitness_centre",
+        "sport=crossfit"
+      ]
+    },
+    {
+      "id": "hyrox_box",
+      "ko_terms": [
+        "하이록스"
+      ],
+      "en_terms": [
+        "HYROX",
+        "hyrox gym"
+      ],
+      "osm_tags": [
+        "leisure=fitness_centre",
+        "sport=fitness"
+      ]
+    }
+  ],
+  "languages": [
+    "ko",
+    "en"
+  ],
+  "query_templates": [
+    "{type_term} {region_term}",
+    "{type_term} {region_term} {field_term}",
+    "{region_term} {type_term} {event_term}"
+  ],
+  "event_terms": [
+    "오픈",
+    "이전",
+    "폐업",
+    "요금",
+    "드롭인",
+    "2026"
+  ],
+  "fields": [
+    {
+      "id": "price_day_pass",
+      "importance": 1,
+      "refresh_days": 3,
+      "applies_to": [
+        "sauna",
+        "jjimjilbang",
+        "hotel_spa",
+        "boutique_sauna",
+        "crossfit_box",
+        "hyrox_box"
+      ],
+      "keywords_ko": [
+        "요금",
+        "이용료",
+        "입장료",
+        "1회",
+        "일일"
+      ],
+      "keywords_en": [
+        "day pass",
+        "drop-in",
+        "visit",
+        "price"
+      ]
+    },
+    {
+      "id": "hours",
+      "importance": 0.9,
+      "refresh_days": 3,
+      "applies_to": [
+        "sauna",
+        "jjimjilbang",
+        "hotel_spa",
+        "boutique_sauna",
+        "crossfit_box",
+        "hyrox_box"
+      ],
+      "keywords_ko": [
+        "운영시간",
+        "이용시간"
+      ],
+      "keywords_en": [
+        "hours",
+        "opening"
+      ]
+    },
+    {
+      "id": "closures",
+      "importance": 0.7,
+      "refresh_days": 3,
+      "applies_to": [
+        "sauna",
+        "jjimjilbang",
+        "hotel_spa",
+        "boutique_sauna",
+        "crossfit_box",
+        "hyrox_box"
+      ],
+      "keywords_ko": [
+        "휴무",
+        "휴관"
+      ],
+      "keywords_en": [
+        "closed",
+        "closure"
+      ]
+    },
+    {
+      "id": "sauna_temp_c",
+      "importance": 0.6,
+      "refresh_days": 14,
+      "applies_to": [
+        "sauna",
+        "jjimjilbang",
+        "hotel_spa",
+        "boutique_sauna"
+      ],
+      "keywords_ko": [
+        "사우나",
+        "건식",
+        "섭씨"
+      ],
+      "keywords_en": [
+        "sauna",
+        "temperature"
+      ]
+    },
+    {
+      "id": "cold_bath_temp_c",
+      "importance": 0.6,
+      "refresh_days": 14,
+      "applies_to": [
+        "sauna",
+        "jjimjilbang",
+        "hotel_spa",
+        "boutique_sauna"
+      ],
+      "keywords_ko": [
+        "냉탕",
+        "냉수",
+        "아이스"
+      ],
+      "keywords_en": [
+        "cold plunge",
+        "ice bath"
+      ]
+    },
+    {
+      "id": "rapid_cold_plunge",
+      "importance": 0.5,
+      "refresh_days": 14,
+      "applies_to": [
+        "sauna",
+        "jjimjilbang",
+        "hotel_spa",
+        "boutique_sauna"
+      ],
+      "keywords_ko": [
+        "급냉탕"
+      ],
+      "keywords_en": [
+        "rapid cold plunge"
+      ]
+    },
+    {
+      "id": "bath_composition",
+      "importance": 0.5,
+      "refresh_days": 14,
+      "applies_to": [
+        "sauna",
+        "jjimjilbang",
+        "hotel_spa",
+        "boutique_sauna"
+      ],
+      "keywords_ko": [
+        "건식",
+        "습식",
+        "온탕",
+        "냉탕",
+        "열탕",
+        "스팀",
+        "한증막",
+        "아이스배스"
+      ],
+      "keywords_en": [
+        "dry sauna",
+        "steam",
+        "hot bath",
+        "cold bath"
+      ]
+    },
+    {
+      "id": "tattoo_policy",
+      "importance": 0.8,
+      "refresh_days": 14,
+      "applies_to": [
+        "sauna",
+        "jjimjilbang",
+        "hotel_spa",
+        "boutique_sauna"
+      ],
+      "keywords_ko": [
+        "문신",
+        "커버",
+        "스티커"
+      ],
+      "keywords_en": [
+        "tattoo",
+        "covered"
+      ]
+    },
+    {
+      "id": "foreigner_policy",
+      "importance": 0.8,
+      "refresh_days": 14,
+      "applies_to": [
+        "sauna",
+        "jjimjilbang",
+        "hotel_spa",
+        "boutique_sauna",
+        "crossfit_box",
+        "hyrox_box"
+      ],
+      "keywords_ko": [
+        "외국인",
+        "여권",
+        "영어"
+      ],
+      "keywords_en": [
+        "foreigner",
+        "English",
+        "tourist",
+        "passport",
+        "ID"
+      ]
+    }
+  ],
+  "directories": [
+    {
+      "id": "osm",
+      "kind": "osm_search",
+      "url": "https://nominatim.openstreetmap.org/search",
+      "paginate": true,
+      "url_filter": "",
+      "max_pages": 8
+    },
+    {
+      "id": "tourism_leisure_sports",
+      "kind": "sitemap",
+      "url": "https://english.visitkorea.or.kr/sitemap_leisure_sports.xml",
+      "paginate": false,
+      "url_filter": "",
+      "max_candidates": 12
+    },
+    {
+      "id": "tourism_accommodations",
+      "kind": "sitemap",
+      "url": "https://english.visitkorea.or.kr/sitemap_accommodations.xml",
+      "paginate": false,
+      "url_filter": "",
+      "max_candidates": 12
+    },
+    {
+      "id": "tourism_attractions",
+      "kind": "sitemap",
+      "url": "https://english.visitkorea.or.kr/sitemap_attractions.xml",
+      "paginate": false,
+      "url_filter": "",
+      "max_candidates": 12
+    },
+    {
+      "id": "crossfit",
+      "kind": "html_list",
+      "url": "https://www.crossfit.com/map",
+      "paginate": true,
+      "url_filter": "",
+      "enabled": false,
+      "max_pages": 8
+    },
+    {
+      "id": "hyrox",
+      "kind": "html_list",
+      "url": "https://hyrox.com/find-a-gym/",
+      "paginate": true,
+      "url_filter": "",
+      "enabled": false,
+      "max_pages": 8
+    },
+    {
+      "id": "public_baths",
+      "kind": "html_list",
+      "url": "https://www.data.go.kr/",
+      "paginate": true,
+      "url_filter": "",
+      "enabled": false,
+      "max_pages": 8
+    }
+  ],
+  "relevance_keywords": [
+    "사우나",
+    "찜질방",
+    "스파",
+    "크로스핏",
+    "하이록스",
+    "sauna",
+    "spa",
+    "CrossFit",
+    "HYROX"
+  ],
+  "aggregator_domains": [
+    "tistory.com",
+    "blog.*",
+    "brunch.co.kr",
+    "medium.com",
+    "wordpress.com",
+    "namu.wiki",
+    "tripadvisor.com",
+    "klook.com"
+  ],
+  "reservation_platform_domains": [
+    "catchtable.co.kr",
+    "tablecheck.com",
+    "booking.com",
+    "agoda.com"
+  ],
+  "sns_domains": [
+    "instagram.com",
+    "facebook.com",
+    "youtube.com",
+    "youtu.be",
+    "kakao.com",
+    "linktr.ee"
+  ],
+  "exclusion_terms": [
+    "runport",
+    "런포트",
+    "butfit",
+    "버핏"
+  ],
+  "denied_domains": [
+    "naver.com",
+    "naver.me",
+    "pstatic.net",
+    "naver.net",
+    "*.naver.*",
+    "instagram.com",
+    "instagr.am"
+  ],
+  "budgets": {
+    "run_requests": 100,
+    "run_minutes": 30,
+    "class_shares": {
+      "backfill": 0.35,
+      "discover": 0.35,
+      "freshness": 0.3
+    },
+    "discover_floor": 0.25,
+    "daily_candidates": 500,
+    "daily_bodies": 200,
+    "daily_aux": 800,
+    "per_domain_pages": 12,
+    "max_depth": 2
+  },
+  "scheduler_weights": {
+    "novelty": 0.3,
+    "gap_importance": 0.25,
+    "urgency": 0.2,
+    "source_quality": 0.1,
+    "cost": 0.05,
+    "duplication": 0.05,
+    "repeat_failures": 0.05
+  },
+  "refresh_days": {
+    "identity": 30,
+    "links": 30,
+    "deprioritized": 30
+  },
+  "seed_paths": {
+    "saunas": "saunas.csv",
+    "boxes": "boxes.csv",
+    "approved_sources": "/workspace/hanset-collector/approved_sources.json"
+  }
+}
