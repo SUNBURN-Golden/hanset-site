@@ -597,10 +597,15 @@
       "directory": true,
       "max_candidates": 60,
       "slug_include": [
-        "사우나|찜질|스파|목욕|온천|한증|유황|피트니스|크로스핏|하이록스",
-        "sauna|spa|jjimjil|bath|hot-?spring|crossfit|hyrox|fitness|wellness"
+        "사우나|찜질|스파|목욕|온천|한증|대중탕|피트니스|크로스핏|하이록스|헬스",
+        "(?<![a-z])(sauna|spa|jjimjil\\w*|bathhouse|bath|hot-?spring|crossfit|hyrox|fitness|wellness)(?![a-z])"
       ],
-      "slug_exclude": []
+      "slug_exclude": [
+        "/(restaurants|shopping|accommodation|exhibition|events|mvp|announcements)/"
+      ],
+      "child_include": [
+        "/(entertainment|editorspicks|hallyu|attractions)_[a-z]+_sitemap"
+      ]
     },
     {
       "id": "visitseoul_en",
@@ -609,10 +614,15 @@
       "directory": true,
       "max_candidates": 60,
       "slug_include": [
-        "사우나|찜질|스파|목욕|온천|한증|유황|피트니스|크로스핏|하이록스",
-        "sauna|spa|jjimjil|bath|hot-?spring|crossfit|hyrox|fitness|wellness"
+        "사우나|찜질|스파|목욕|온천|한증|대중탕|피트니스|크로스핏|하이록스|헬스",
+        "(?<![a-z])(sauna|spa|jjimjil\\w*|bathhouse|bath|hot-?spring|crossfit|hyrox|fitness|wellness)(?![a-z])"
       ],
-      "slug_exclude": []
+      "slug_exclude": [
+        "/(restaurants|shopping|accommodation|exhibition|events|mvp|announcements)/"
+      ],
+      "child_include": [
+        "/(entertainment|editorspicks|hallyu|attractions)_[a-z]+_sitemap"
+      ]
     }
   ],
   "relevance_keywords": [
@@ -698,5 +708,41 @@
     "saunas": "saunas.csv",
     "boxes": "boxes.csv",
     "approved_sources": "/workspace/hanset-collector/approved_sources.json"
+  },
+  "venue_gate": {
+    "positive": [
+      "사우나",
+      "찜질",
+      "스파",
+      "목욕",
+      "온천",
+      "한증",
+      "대중탕",
+      "불가마",
+      "피트니스",
+      "헬스",
+      "크로스핏",
+      "하이록스",
+      "짐",
+      "(?<![a-z])(sauna|spa|jjimjil\\w*|bathhouse|bath ?house|hot ?spring|crossfit|hyrox|fitness|gym|wellness)(?![a-z])"
+    ],
+    "negative": [
+      "식당",
+      "맛집",
+      "구이",
+      "오리",
+      "고기",
+      "갈비",
+      "국밥",
+      "냉면",
+      "레스토랑",
+      "카페",
+      "치킨",
+      "한식",
+      "횟집",
+      "술집",
+      "베이커리",
+      "(?<![a-z])(restaurant|cafe|bbq|diner|bakery|pub|bar)(?![a-z])"
+    ]
   }
 }

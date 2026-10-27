@@ -5,7 +5,7 @@ import os
 import re
 import time
 from pathlib import Path
-from urllib.parse import urlsplit, urljoin
+from urllib.parse import urlsplit, urljoin, unquote
 from bs4 import BeautifulSoup
 from . import evaluator, gaps, labeling, venues
 from .db import deterministic_id
@@ -162,9 +162,10 @@ class Executor:
         directory_venue = None
         if directory_detail and directory_detail['name'] and not rejected_directory:
             directory_venue = venues.upsert_venue(self.db,directory_detail['name'],website=directory_detail['website'],
-                discovered_via='directory:'+directory_detail['directory_id'],clock=self.clock)
+                discovered_via='directory:'+directory_detail['directory_id'],clock=self.clock,
+                context=(directory_detail.get('category','') or '')+' '+doc.get('title','')+' '+unquote(urlsplit(result.url).path))
             page['directory_address']=directory_detail['address']
-            if directory_detail['website']:
+            if directory_detail['website'] and directory_venue:
                 trial=self.context.candidate(directory_detail['website'],text=directory_detail['name'],via='directory:'+directory_detail['directory_id'],parent_url=result.url,low_prior=True)
                 if trial:
                     with self.db: self.db.execute('UPDATE tasks SET venue_id=? WHERE task_id=?',(directory_venue,trial))
@@ -189,9 +190,9 @@ class Executor:
                     (deterministic_id(source_id,result.url),source_id,result.url,*(scores[k] for k in ('relevance','novelty','extractability','original','total','decision','reason')),now))
             source = self.db.execute('SELECT * FROM sources WHERE domain=?',(domain,)).fetchone()
         if rejected_directory: return raw_id
-        if name and venue is None:
-            vid = venues.upsert_venue(self.db,name,website=result.url,discovered_via=task.get('discovered_via',''),clock=self.clock)
-            venue = self.db.execute('SELECT * FROM venues WHERE venue_id=?',(vid,)).fetchone()
+        if name and venue is None and not directory_detail:
+            vid = venues.upsert_venue(self.db,name,website=result.url,discovered_via=task.get('discovered_via',''),clock=self.clock,context=doc.get('title',''))
+            venue = self.db.execute('SELECT * FROM venues WHERE venue_id=?',(vid,)).fetchone() if vid else None
         # Registered relevance alone does not prove a page is an original source.
         original = evaluator.evaluate(result.url,[doc],venue_name=name,profile=self.context.profile)['original']
         if original and not directory_detail:

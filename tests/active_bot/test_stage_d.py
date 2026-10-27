@@ -252,3 +252,35 @@ def test_long_url_paths_are_not_mistaken_for_tokens():
     assert strip_pii(url) == url
     assert strip_pii('x ' + 'aB3' * 14) == 'x [token]'
     assert '[token]' in strip_pii('key=' + 'a1' * 20)
+
+
+def test_venue_relevance_gate():
+    from hanset_active.venues import venue_relevant
+    assert not venue_relevant('놀부유황오리진흙구이(잠실점)', 'entertainment 유황 오리')
+    assert not venue_relevant('Cafe Space Seoul', 'cafe')
+    assert venue_relevant('봉일스파랜드', '')
+    assert venue_relevant('우리유황온천', '온천')
+    assert venue_relevant('CrossFit Hannam')
+    assert venue_relevant('Dragon Hill', 'jjimjilbang bathhouse')
+    assert not venue_relevant('Arario Museum in Space', 'museum')
+
+
+def test_upsert_gate_and_seed_path(tmp_path):
+    from hanset_active.db import connect, migrate
+    from hanset_active.venues import upsert_venue
+    db = connect(tmp_path / 'a.sqlite3'); migrate(db)
+    assert upsert_venue(db, '놀부유황오리진흙구이(잠실점)', discovered_via='directory:x', context='유황') is None
+    assert upsert_venue(db, '봉일스파랜드', discovered_via='directory:x', context='') is not None
+    assert upsert_venue(db, 'Some Hotel Josun') is not None  # trusted seed path is not gated
+    assert db.execute('SELECT COUNT(*) FROM venues').fetchone()[0] == 2
+
+
+def test_profile_visitseoul_category_restriction():
+    from hanset_active.config import load_profile
+    import re
+    for d in load_profile()['directories']:
+        if d['id'].startswith('visitseoul'):
+            ci = d['child_include']
+            assert any(re.search(x, 'https://korean.visitseoul.net/sitemap/entertainment_kr_sitemap.xml') for x in ci)
+            assert not any(re.search(x, 'https://korean.visitseoul.net/sitemap/restaurants_kr_sitemap.xml') for x in ci)
+            assert not any(re.search(x, 'https://english.visitseoul.net/sitemap/shopping_en_sitemap.xml') for x in ci)

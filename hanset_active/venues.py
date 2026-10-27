@@ -60,7 +60,24 @@ def review(db,kind,venue_id,details,clock=None):
     db.execute('INSERT OR IGNORE INTO review_queue(review_id,kind,venue_id,dedupe_key,details,state,created_at) VALUES (?,?,?,?,?,?,?)',(key,kind,venue_id,key,details,'open',kst_now(clock).isoformat()))
     return key
 
-def upsert_venue(db, name, *, website='', city='', region='', venue_type='sauna', discovered_via='', clock=None):
+def venue_relevant(name, context='', profile=None):
+    """Relevance gate: only sauna/spa/jjimjilbang/bathhouse/hotel spa/CrossFit/HYROX/gym venues are accepted.
+    A positive keyword must appear in the venue name or its (short) category context; a food/cafe keyword in the
+    name rejects unless the name itself also carries a strong positive keyword."""
+    import re
+    if profile is None:
+        from .config import load_profile
+        profile=load_profile()
+    gate=profile.get('venue_gate',{})
+    pos=lambda t: any(re.search(x,t,re.I) for x in gate.get('positive',[]))
+    neg=lambda t: any(re.search(x,t,re.I) for x in gate.get('negative',[]))
+    name=name or ''; context=(context or '')[:400]
+    if neg(name) and not pos(name): return False
+    return pos(name) or pos(context)
+
+def upsert_venue(db, name, *, website='', city='', region='', venue_type='sauna', discovered_via='', clock=None, context=None):
+    # context=None => trusted seed/legacy path (no gate); any string (even empty) => discovered venue, gated.
+    if context is not None and not venue_relevant(name, context): return None
     name,website,city,region,discovered_via=map(strip_pii,(name,website,city,region,discovered_via))
     if not name or is_excluded(name,website) or (website and is_denied(website)): return None
     website=canonicalize(website) if website else ''

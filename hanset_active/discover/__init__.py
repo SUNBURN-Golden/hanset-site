@@ -43,7 +43,7 @@ class Discovery:
             if via.startswith(('sitemap','directory')):  # directory leads are the discovery backbone: ahead of re-trials of already-seeded sites
                 self.db.execute('UPDATE tasks SET priority=0.9 WHERE task_id=?',(task,))
         if name and website:
-            upsert_venue(self.db,name,website=website,city=city,region=region,discovered_via=provenance,clock=self.clock)
+            upsert_venue(self.db,name,website=website,city=city,region=region,discovered_via=provenance,clock=self.clock,context=text)
         return task
     def search_task(self,name, *, region='', type_term='sauna', depth=1, via='mentions', parent_url=None):
         if not self.remaining or depth>2 or is_excluded(name): return None

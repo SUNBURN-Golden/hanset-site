@@ -4,7 +4,7 @@ from lxml.etree import XMLSyntaxError
 from urllib.parse import urljoin, urlsplit, unquote
 from ..extract import sitemap, feed, html
 
-def expand(context,url, *, depth=0, parent_url=None, max_children=20, max_candidates=60, slug_include=(), slug_exclude=(), via="sitemap", _seen=None, _children=None):
+def expand(context,url, *, depth=0, parent_url=None, max_children=20, max_candidates=60, slug_include=(), slug_exclude=(), child_include=(), via="sitemap", _seen=None, _children=None):
     if depth>2: return []
     seen=_seen if _seen is not None else set()
     children=_children if _children is not None else [0]
@@ -19,9 +19,10 @@ def expand(context,url, *, depth=0, parent_url=None, max_children=20, max_candid
     except (ValueError,TypeError,XMLSyntaxError): return []
     if doc['kind']=='index':
         for child in doc['urls']:
+            if child_include and not any(re.search(term,unquote(child),re.I) for term in child_include): continue  # category restriction
             if children[0]>=min(20,max_children): break
             children[0]+=1
-            tasks.extend(expand(context,child,depth=depth+1,parent_url=url,max_children=max_children,max_candidates=max_candidates-len(tasks),slug_include=slug_include,slug_exclude=slug_exclude,via=via,_seen=seen,_children=children))
+            tasks.extend(expand(context,child,depth=depth+1,parent_url=url,max_children=max_children,max_candidates=max_candidates-len(tasks),slug_include=slug_include,slug_exclude=slug_exclude,child_include=child_include,via=via,_seen=seen,_children=children))
             if len(tasks)>=max_candidates: break
     else:
         for entry in doc['entries']:

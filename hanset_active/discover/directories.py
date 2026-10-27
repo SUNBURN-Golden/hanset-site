@@ -6,7 +6,7 @@ from .sitemaps import expand, expand_feed, list_pages
 def discover(context, directory):
     if not directory.get('enabled',True): return []
     kind=directory['kind'];url=directory['url']
-    if kind=='sitemap': return expand(context,url,max_candidates=directory.get('max_candidates',60),slug_include=directory.get('slug_include',()),slug_exclude=directory.get('slug_exclude',()),via='directory:'+directory.get('id','sitemap'))
+    if kind=='sitemap': return expand(context,url,max_candidates=directory.get('max_candidates',60),slug_include=directory.get('slug_include',()),slug_exclude=directory.get('slug_exclude',()),child_include=directory.get('child_include',()),via='directory:'+directory.get('id','sitemap'))
     if kind=='rss': return expand_feed(context,url)
     if kind=='html_list': return list_pages(context,url,max_pages=directory.get('max_pages',8),url_filter=directory.get('url_filter',''))
     if kind!='osm_search': raise ValueError('Unknown directory kind')
