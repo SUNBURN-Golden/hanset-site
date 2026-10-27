@@ -1,0 +1,66 @@
+{
+  "example-hotel": {
+    "title": "Example Hotel Sauna",
+    "location": "Example location",
+    "facts": [
+      [
+        "Price",
+        "{price}"
+      ],
+      [
+        "Information",
+        "06:00\u201322:00"
+      ],
+      [
+        "Information",
+        "Not confirmed"
+      ],
+      [
+        "Information",
+        "Guest discount requires confirmation"
+      ]
+    ],
+    "tips": [
+      "Example English tip"
+    ],
+    "unverified": [
+      "Not stated: conditions"
+    ]
+  },
+  "example-reply": {
+    "title": "Example Reply Sauna",
+    "location": "Example location",
+    "facts": [
+      [
+        "Price",
+        "{price}"
+      ],
+      [
+        "Information",
+        "Venue reply: every Tuesday"
+      ]
+    ],
+    "tips": [
+      "Example English tip"
+    ],
+    "unverified": [
+      "Not stated: conditions"
+    ]
+  },
+  "example-box": {
+    "title": "Example Box",
+    "location": "Example location",
+    "facts": [
+      [
+        "Price",
+        "{price}"
+      ]
+    ],
+    "tips": [
+      "Example English tip"
+    ],
+    "unverified": [
+      "Not stated: conditions"
+    ]
+  }
+}

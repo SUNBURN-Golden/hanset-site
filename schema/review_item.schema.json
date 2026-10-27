@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "review_id",
+    "kind",
+    "conflict_group",
+    "fact_ids",
+    "state",
+    "resolution_notes",
+    "created_at"
+  ],
+  "properties": {
+    "review_id": {
+      "type": "string"
+    },
+    "kind": {
+      "enum": [
+        "conflict",
+        "verification",
+        "identity"
+      ]
+    },
+    "conflict_group": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fact_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "state": {
+      "enum": [
+        "open",
+        "resolved",
+        "dismissed"
+      ]
+    },
+    "resolution_notes": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

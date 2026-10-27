@@ -7,6 +7,7 @@ HANSET(한셋) — Korean wellness / functional-fitness magazine + "Drop-in & Sa
 - Open PRs: none. Default branch: `main`. **Read [AGENTS.md](AGENTS.md) first** (lock rules).
 
 ## Layout
+[Data foundation design, schema and migration](docs/data/README.md).
 ```
 boxes.csv saunas.csv events.csv   source-of-truth data (price, last_verified, source URL, confidence). Venue contact columns are blanked in this repo.
 site/build_site.py                builder (reads ../*.csv + site/content/*.json, writes site/dist)

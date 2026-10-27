@@ -1,0 +1,240 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "base_url",
+    "handle",
+    "fields",
+    "permission",
+    "refresh_hours",
+    "pace",
+    "retention_days",
+    "status",
+    "hold_reason",
+    "required",
+    "supported_scope",
+    "unsupported_scope"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "kind": {
+      "enum": [
+        "official_site",
+        "hotel_site",
+        "operator_profile",
+        "instagram",
+        "venue_reply",
+        "event_list"
+      ]
+    },
+    "base_url": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uri"
+    },
+    "handle": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1
+    },
+    "permission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "robots_reviewed_date",
+        "terms_note",
+        "allowed_paths",
+        "public",
+        "authenticated",
+        "read_only"
+      ],
+      "properties": {
+        "robots_reviewed_date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date"
+        },
+        "terms_note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "allowed_paths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "public": {
+          "const": true
+        },
+        "authenticated": {
+          "const": false
+        },
+        "read_only": {
+          "const": true
+        }
+      }
+    },
+    "refresh_hours": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "pace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "concurrency",
+        "gap_min_seconds",
+        "gap_max_seconds",
+        "daily_cap",
+        "window_kst",
+        "session",
+        "stop_on_challenge",
+        "bypass_allowed",
+        "writes_allowed"
+      ],
+      "properties": {
+        "concurrency": {
+          "const": 1
+        },
+        "gap_min_seconds": {
+          "type": "integer",
+          "minimum": 5
+        },
+        "gap_max_seconds": {
+          "type": "integer",
+          "minimum": 5
+        },
+        "daily_cap": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "window_kst": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "session": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "stop_on_challenge": {
+          "const": true
+        },
+        "bypass_allowed": {
+          "const": false
+        },
+        "writes_allowed": {
+          "const": false
+        }
+      }
+    },
+    "retention_days": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "status": {
+      "enum": [
+        "enabled",
+        "disabled",
+        "on_hold"
+      ]
+    },
+    "hold_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "required": {
+      "type": "boolean"
+    },
+    "supported_scope": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "unsupported_scope": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "instagram"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "required": {
+            "const": true
+          },
+          "pace": {
+            "properties": {
+              "gap_min_seconds": {
+                "const": 20
+              },
+              "gap_max_seconds": {
+                "const": 60
+              },
+              "daily_cap": {
+                "const": 20
+              },
+              "window_kst": {
+                "const": "13:00-14:00"
+              },
+              "session": {
+                "const": "shared Agamajung (\uc544\uac00\ub9c8\uc911)"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "on_hold"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "hold_reason": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  ]
+}

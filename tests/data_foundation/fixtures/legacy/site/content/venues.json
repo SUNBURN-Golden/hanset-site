@@ -1,0 +1,64 @@
+{
+  "Example Hotel Sauna": {
+    "csv": "saunas",
+    "slug": "example-hotel",
+    "title": "예시 호텔 사우나",
+    "location": "Example district",
+    "facts": [
+      [
+        "요금",
+        "{price}"
+      ],
+      [
+        "운영시간",
+        "06:00–22:00"
+      ],
+      [
+        "연령",
+        "Not confirmed"
+      ],
+      [
+        "객실 고객",
+        "Guest discount requires confirmation"
+      ]
+    ],
+    "tips": [
+      "Official guidance text"
+    ],
+    "unverified": [
+      "Not confirmed: wet room"
+    ]
+  },
+  "Example Reply Sauna": {
+    "csv": "saunas",
+    "slug": "example-reply",
+    "title": "예시 회신 사우나",
+    "location": "Example city",
+    "facts": [
+      [
+        "요금",
+        "{price}"
+      ],
+      [
+        "휴관",
+        "Venue reply: every Tuesday"
+      ]
+    ],
+    "tips": [],
+    "unverified": []
+  },
+  "Example Box": {
+    "csv": "boxes",
+    "slug": "example-box",
+    "title": "예시 박스",
+    "location": "Example city",
+    "facts": [
+      [
+        "드롭인",
+        "{price}"
+      ]
+    ],
+    "tips": [],
+    "unverified": []
+  }
+}
