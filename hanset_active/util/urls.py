@@ -4,7 +4,7 @@ import re
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
 from .pii import strip_pii
 
-DENIED = ('naver.com', 'naver.me', 'pstatic.net', 'naver.net', 'instagram.com', 'instagr.am')
+DENIED = ('naver.com', 'naver.me', 'pstatic.net', 'naver.net', 'instagram.com', 'instagr.am', 'cdninstagram.com')
 
 def canonicalize(url: str, base: str | None = None) -> str:
     from urllib.parse import urljoin

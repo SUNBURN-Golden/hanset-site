@@ -94,7 +94,7 @@ class Executor:
         result = self._original_fetch(url, kind=kind, _browser_shell=True,
             parent_url=task.get('parent_url'), task_id=task.get('task_id'),
             discovered_via=task.get('discovered_via'), **kwargs)
-        if result.outcome in ('ok', 'empty_body') and 'html' in result.content_type and browser.needs_browser(result.content):
+        if task.get('kind')!='trial' and result.outcome in ('ok', 'empty_body') and 'html' in result.content_type and browser.needs_browser(result.content):  # browser subrequests are budgeted: not for cheap trials
             # A blocked/login response never reaches this branch. Only one
             # rendered attempt is allowed, with every subrequest budgeted.
             result = browser.fetch(self.fetcher, result.url)

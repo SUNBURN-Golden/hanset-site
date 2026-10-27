@@ -40,6 +40,8 @@ class Discovery:
         provenance=via+(':'+parent_url if parent_url else '')
         with self.db:
             self.db.execute('UPDATE tasks SET kind=?,depth=?,parent_url=?,parent_task_id=?,discovered_via=?,payload=? WHERE task_id=?',('trial',depth,parent_url,parent_task_id,provenance,'{}',task))
+            if via.startswith(('sitemap','directory')):  # directory leads are the discovery backbone: ahead of re-trials of already-seeded sites
+                self.db.execute('UPDATE tasks SET priority=0.9 WHERE task_id=?',(task,))
         if name and website:
             upsert_venue(self.db,name,website=website,city=city,region=region,discovered_via=provenance,clock=self.clock)
         return task
