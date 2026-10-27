@@ -1,4 +1,5 @@
 """Frozen seed identity, conservative venue merges and temporal field history."""
+from datetime import datetime, timedelta
 import csv
 import json
 import re
@@ -32,6 +33,10 @@ def seed(db, records=(), *, paths=(), approved_sources=None, refreeze=False, clo
     safe=[]
     for row in rows:
         name=strip_pii(row.get('name','')); website=strip_pii(row.get('website',''))
+        try:
+            if website: website=canonicalize(website)
+        except ValueError:
+            website=''
         if is_excluded(name,website) or (website and is_denied(website)): continue
         safe.append((name,normalize_name(name),registrable_domain(website) if website else '',website))
     sid=deterministic_id(safe,sorted(domains),kst_now(clock).isoformat() if refreeze else 'initial')
@@ -91,6 +96,11 @@ def apply_observation(db, venue_id, obs_id, *, clock=None):
     with db:
         current=db.execute('SELECT * FROM venue_fields WHERE venue_id=? AND field=? AND valid_to IS NULL',(venue_id,obs['field'])).fetchone()
         if current and current['value_hash']==obs['value_hash']: return current['vf_id']
+        # Multiple pages can be processed within one clock tick. Keep temporal
+        # natural keys distinct when values change and return during that tick.
+        latest=db.execute('SELECT max(valid_from) FROM venue_fields WHERE venue_id=? AND field=?',(venue_id,obs['field'])).fetchone()[0]
+        if latest and now<=latest:
+            now=(datetime.fromisoformat(latest)+timedelta(microseconds=1)).isoformat()
         vf=deterministic_id(venue_id,obs['field'],obs['value_hash'],obs_id)
         db.execute('INSERT OR IGNORE INTO venue_fields(vf_id,venue_id,field,value_json,value_text,value_hash,unit,label_status,source_url,quote,obs_id,valid_from) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',(vf,venue_id,obs['field'],obs['value_json'],obs['value_text'],obs['value_hash'],obs['unit'],obs['label_status'],obs['source_url'],obs['quote'],obs_id,now))
         if current:

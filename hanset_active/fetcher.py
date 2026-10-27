@@ -206,7 +206,7 @@ class Fetcher:
     def fetch(self,url: str, *, kind: str = 'body', parent_url: str | None = None, task_id: str | None = None, discovered_via: str | None = None, _browser_shell: bool = False, api_headers: dict | None = None) -> FetchResult:
         if kind not in ('body','robots','sitemap','feed','api','browser_aux'):
             raise ValueError('Unsupported request kind')
-        ref=dict(parent_url=strip_pii(parent_url) if parent_url else None,task_id=strip_pii(task_id) if task_id else None,discovered_via=strip_pii(discovered_via) if discovered_via else None)
+        ref=dict(parent_url=strip_pii(parent_url) if parent_url else None,task_id=task_id if task_id and self.db.execute('SELECT 1 FROM tasks WHERE task_id=?',(task_id,)).fetchone() else None,discovered_via=strip_pii(discovered_via) if discovered_via else None)
         def result(outcome,reason='',**kw):
             safe_url=strip_pii(url)
             if outcome not in ('ok','denied','cap_reached'):
