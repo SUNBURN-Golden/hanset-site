@@ -10,6 +10,16 @@ from ..util.timeutil import kst_now
 from ..util.pii import strip_pii
 from ..util.urls import is_denied, is_excluded
 
+def usable_providers(db, *, clock=None, names=None):
+    """Return provider names whose existing block/disable state permits work."""
+    names=names or ('nominatim','wikipedia','brave','ddg_html')
+    now=kst_now(clock).isoformat()
+    states={r['provider']:r for r in db.execute('SELECT * FROM provider_state')}
+    return [name for name in names if not (name=='brave' and not os.environ.get('BRAVE_API_KEY'))
+            and not (name in states and states[name]['state'] in ('disabled','inaccessible')
+                     and (not states[name]['next_at'] or states[name]['next_at']>now))]
+
+
 @dataclass
 class Hit:
     url: str
@@ -33,7 +43,7 @@ class SearchProvider:
     def parse(self,result,limit): raise NotImplementedError
     def search(self,query,lang='ko',limit=10):
         row=self.db.execute('SELECT * FROM provider_state WHERE provider=?',(self.name,)).fetchone()
-        if row and row['state']=='inaccessible' and (not row['next_at'] or row['next_at']>kst_now(self.clock).isoformat()): return []
+        if row and row['state'] in ('inaccessible','disabled') and (not row['next_at'] or row['next_at']>kst_now(self.clock).isoformat()): return []
         if is_excluded(query): return []
         if self.name=='brave' and not os.environ.get('BRAVE_API_KEY'):
             self.state('disabled','missing credential');return []

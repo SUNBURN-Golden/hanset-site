@@ -125,7 +125,7 @@ class Fetcher:
                 if (used[0] if used else 0)>=self.settings.candidate_cap:
                     return False
                 self.db.execute("INSERT INTO budgets_daily VALUES (?,'candidates',1) ON CONFLICT(day,kind) DO UPDATE SET used=used+1",(day,))
-                self.db.execute("INSERT INTO tasks(task_id,dedupe_key,url,domain,task_class) VALUES (?,?,?,?,'discover')",(deterministic_id(url),url,url,registrable_domain(url)))
+                self.db.execute("INSERT INTO tasks(task_id,dedupe_key,url,domain,task_class,kind,priority,novelty,source_quality,created_at,updated_at) VALUES (?,?,?,?,'discover','trial',0.35,1,0.5,?,?)",(deterministic_id(url),url,url,registrable_domain(url),kst_now(self.clock).isoformat(),kst_now(self.clock).isoformat()))
                 return True
     def _inaccessible(self,domain,reason):
         from .db import deterministic_id

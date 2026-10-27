@@ -156,7 +156,19 @@ class Executor:
         if self.fetcher.settings.testing:
             delay = float(os.environ.get('HANSET_ACTIVE_TEST_EXECUTOR_SLEEP', '0'))
             if delay: time.sleep(min(delay, 60))
-        venue = self.db.execute('SELECT * FROM venues WHERE venue_id=?', (task.get('venue_id'),)).fetchone()
+        directory_detail = directories.detail(result.content,result.url,self.context.profile) if doc['extractor'] in ('html','browser') else None
+        rejected_directory = bool(directory_detail and directory_detail['low_prior'] and
+            evaluator.evaluate(result.url,[doc],venue_name=directory_detail['name'],profile=self.context.profile)['decision']!='registered')
+        directory_venue = None
+        if directory_detail and directory_detail['name'] and not rejected_directory:
+            directory_venue = venues.upsert_venue(self.db,directory_detail['name'],website=directory_detail['website'],
+                discovered_via='directory:'+directory_detail['directory_id'],clock=self.clock)
+            page['directory_address']=directory_detail['address']
+            if directory_detail['website']:
+                trial=self.context.candidate(directory_detail['website'],text=directory_detail['name'],via='directory:'+directory_detail['directory_id'],parent_url=result.url,low_prior=True)
+                if trial:
+                    with self.db: self.db.execute('UPDATE tasks SET venue_id=? WHERE task_id=?',(directory_venue,trial))
+        venue = self.db.execute('SELECT * FROM venues WHERE venue_id=?', (directory_venue or task.get('venue_id'),)).fetchone()
         if venue is None:
             venue = next((v for v in self.db.execute('SELECT * FROM venues') if domain in json.loads(v['domains'] or '[]')), None)
         name = venue['name'] if venue else ''
@@ -176,36 +188,52 @@ class Executor:
                 self.db.execute('INSERT OR IGNORE INTO source_trials VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                     (deterministic_id(source_id,result.url),source_id,result.url,*(scores[k] for k in ('relevance','novelty','extractability','original','total','decision','reason')),now))
             source = self.db.execute('SELECT * FROM sources WHERE domain=?',(domain,)).fetchone()
+        if rejected_directory: return raw_id
         if name and venue is None:
             vid = venues.upsert_venue(self.db,name,website=result.url,discovered_via=task.get('discovered_via',''),clock=self.clock)
             venue = self.db.execute('SELECT * FROM venues WHERE venue_id=?',(vid,)).fetchone()
         # Registered relevance alone does not prove a page is an original source.
         original = evaluator.evaluate(result.url,[doc],venue_name=name,profile=self.context.profile)['original']
-        if original:
+        if original and not directory_detail:
             with self.db: self.db.execute("UPDATE sources SET source_type='own_site' WHERE source_id=?",(source_id,))
         source_type = 'aggregator' if evaluator.is_aggregator(result.url,self.context.profile) else 'own_site' if venue and (original or source['source_type']=='own_site') else 'third_party'
+        if directory_detail: source_type = 'official_directory'
         if venue and doc['extractor'] in ('pdf','ocr') and domain in json.loads(venue['domains'] or '[]'):
             source_type = 'attachment'
         labeling.store_labels(self.db,raw_id,eid,labeling.labels(text,source_type=source_type,content_type=result.content_type,
             hosted_on_own_domain=source_type=='attachment',ocr_confidence=doc.get('mean_confidence')),self.clock)
         evidence = fields.extract_document(doc)
+        if directory_detail:
+            for field in ('name','address','website'):
+                value=directory_detail[field]
+                if value:
+                    evidence.append(dict(field=field,value=value,unit=None,quote=value[:240],locator={'selector':'directory:'+field},
+                        rule_id='directory.'+field+'.v1',extractor_version='1.0.0',ambiguous=False))
         if venue:
             for item in evidence:
                 oid = labeling.store_observation(self.db,venue['venue_key'],item,source_url=result.url,source_type=source_type,
                     raw_id=raw_id,extraction_id=eid,clock=self.clock,own_domain=venue['website'])
                 venues.apply_observation(self.db,venue['venue_id'],oid,clock=self.clock)
             gaps.ensure_gaps(self.db,venue['venue_id'],clock=self.clock)
+            if directory_detail:
+                from .discover.reverse import followups
+                for gap in self.db.execute('SELECT * FROM gaps WHERE venue_id=?',(venue['venue_id'],)).fetchall():
+                    for strategy in ('site_links','lang_counterpart','attachments','images'):
+                        for tid in followups(self.db,venue,gap['field'],[page],strategy=strategy,clock=self.clock):
+                            gaps.record_attempt(self.db,gap['gap_id'],strategy,task_id=tid,url=tid,state='pending',clock=self.clock)
         if doc['extractor'] in ('html','browser'):
             self.check_structure(source_id,urlsplit(result.url).path or '/',raw_id,result.content,{e['field'] for e in evidence},page)
         state = source['state']
-        if state == 'registered':
+        if state == 'registered' and not directory_detail:
             links.discover(self.context,doc,parent_url=result.url,venue_id=venue['venue_id'] if venue else None,depth=task.get('depth',0),source_state=state)
             mentions.discover(self.context,doc,parent_url=result.url,depth=task.get('depth',0))
-            for item in doc.get('entries',[]) + doc.get('items',[]):
+            # Sitemap adapters own filtering and their directory-wide cap.
+            # Never register unfiltered entries while persisting the XML.
+            for item in ([] if doc['extractor']=='sitemap' else doc.get('entries',[]) + doc.get('items',[])):
                 target = item.get('url') or item.get('link')
                 if target: self.context.candidate(urljoin(result.url,target),text=str(item),via=doc['extractor'],parent_url=result.url,low_prior=True)
         elif venue:
-            links.discover(self.context,doc,parent_url=result.url,venue_id=venue['venue_id'],source_state=state)
+            links.discover(self.context,doc,parent_url=result.url,venue_id=venue['venue_id'],source_state='deprioritized' if directory_detail else state)
         with self.db:
             self.db.execute('UPDATE extractions SET structured=? WHERE extraction_id=?',
                 (json.dumps({**doc.get('structured',{}),'_active_page':page},ensure_ascii=False),eid))
@@ -251,6 +279,7 @@ class Executor:
         kind = task.get('kind') or 'fetch'
         if kind == 'search' or (kind == 'directory' and 'query' in payload):
             for provider in self.providers:
+                if payload.get('provider') and payload['provider']!=provider.name: continue
                 for hit in provider.search(payload.get('query',''),payload.get('lang','ko'),10):
                     self.context.candidate(hit.url,text=hit.title+' '+hit.snippet,name=hit.name,website=hit.website,
                         depth=task.get('depth',0),via='search:'+provider.name,parent_task_id=task['task_id'],low_prior=bool(hit.extra.get('low_prior')))

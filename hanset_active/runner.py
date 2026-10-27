@@ -4,13 +4,14 @@ import math
 import signal
 import threading
 import uuid
+from urllib.parse import urlsplit
 from datetime import datetime, timedelta
 from .db import deterministic_id
 from .executor import Executor, BudgetExhausted, TaskFailure
 from .locks import RunLock, AlreadyRunning
 from .scheduler import Scheduler, enqueue, TASK_CLASSES, refresh_days
 from . import gaps
-from .discover.search import queries
+from .discover.search import queries, usable_providers
 from .util.timeutil import kst_now
 from .util.pii import strip_pii
 
@@ -20,19 +21,35 @@ def recover(db, *, clock=None):
     """Recover expired task leases and due failed tasks, preserving attempt count."""
     now = kst_now(clock).isoformat()
     with db:
+        db.execute("UPDATE tasks SET kind='trial' WHERE kind IS NULL AND url IS NOT NULL")
         db.execute("UPDATE tasks SET state='pending',lease_until=NULL WHERE state='running' AND (lease_until IS NULL OR lease_until<=?)",(now,))
         db.execute("UPDATE tasks SET state='pending' WHERE state='failed' AND next_at<=? AND attempts<3",(now,))
         db.execute("UPDATE failures SET state='pending' WHERE state='failed' AND next_at<=? AND attempts<3",(now,))
 
 
+def replenish_search(fetcher):
+    """Materialize at most 200 pending searches; leave blocked providers dormant."""
+    db, clock = fetcher.db, fetcher.clock
+    if not usable_providers(db,clock=clock): return
+    count=db.execute("SELECT count(*) FROM tasks WHERE kind='search' AND state IN ('pending','running')").fetchone()[0]
+    for query,lang in queries(fetcher.settings.profile):
+        if count>=200: break
+        before=db.total_changes
+        enqueue(db,kind='search',payload={'query':query,'lang':lang},clock=clock,discovered_via='profile:search',novelty=1)
+        count+=int(db.total_changes>before)
+
+
 def bootstrap(fetcher):
     """Register discovery work; task dedupe makes this safe on each invocation."""
     db, clock, profile = fetcher.db, fetcher.clock, fetcher.settings.profile
-    for query, lang in queries(profile):
-        enqueue(db,kind='search',payload={'query':query,'lang':lang},clock=clock,discovered_via='profile:search')
+    replenish_search(fetcher)
     for directory in profile.get('directories',[]):
         if directory.get('enabled',True):
-            enqueue(db,kind='directory',payload=directory,clock=clock,task_class='backfill',discovered_via='profile:directory')
+            tid=enqueue(db,kind='directory',payload=directory,clock=clock,task_class='discover',discovered_via='profile:directory',novelty=1,source_quality=1)
+            # A completed root is revisited on the next run. Candidate dedupe
+            # lets bounded sitemaps continue past already registered entries.
+            with db:
+                db.execute("UPDATE tasks SET state='pending',next_at=NULL WHERE task_id=? AND state='done'",(tid,))
     for row in db.execute("SELECT s.* FROM seed_venues s JOIN run_checkpoints c ON c.checkpoint_id='seed_freeze' AND c.cursor=s.seed_id").fetchall():
         if row['website']: fetcher.register_candidate(row['website'])
     now = kst_now(clock)
@@ -96,7 +113,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
             executor.run_id = run_id
             executor.heartbeat = lock.heartbeat
             executor.install()
-            scheduler = Scheduler(db,clock=clock,budget=max_requests,shares=profile['budgets'].get('class_shares'),discover_floor=profile['budgets'].get('discover_floor',.25))
+            scheduler = Scheduler(db,clock=clock,budget=max_requests,shares=profile['budgets'].get('class_shares'),discover_floor=profile['budgets'].get('discover_floor',.25),trial_limits={urlsplit(d['url']).hostname:min(5,d.get('max_candidates',5)) for d in profile.get('directories',[]) if d.get('low_prior')})
             stopped = threading.Event()
             old_handler = None
             if threading.current_thread() is threading.main_thread():
@@ -106,6 +123,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
             try:
                 while not stopped.is_set() and clock.monotonic()<deadline and executor.requests<max_requests:
                     recover(db,clock=clock)
+                    if initialize: replenish_search(fetcher)
                     # Filter before the scheduler so excluded classes consume no share.
                     pending = [dict(r) for r in db.execute("SELECT * FROM tasks WHERE state='pending'") if r['task_class'] in selected]
                     if not pending:

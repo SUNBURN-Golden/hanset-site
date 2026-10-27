@@ -1,7 +1,7 @@
 """Explicit bilingual field rules. Offsets refer to sanitized input text."""
 import re
 from ..util.pii import strip_pii
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 NAME = 'fields'
 
 def amount(text):
@@ -44,7 +44,7 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
         def add(field,value,m,unit=None,ambiguous=False): emit(field,value,Offset(m),unit,ambiguous)
         money=list(matches(r'₩\s*[\d,]+|[\d,]+\s*KRW|(?:\d+만(?:\d+천|\d+)?|\d+천|만|[\d,]+)\s*원'))
         price_context=text[max(0,block.start()-60):block.end()]
-        if re.search(r'요금|이용료|입장료|1회|일일|drop.?in|day pass|visit|price',price_context,re.I):
+        if re.search(r'요금|이용료|입장료|1회|일일|이용권|drop.?in|day pass|single entry|admission|visit|price',price_context,re.I):
             for m in money:
                 value={'amount':amount(m[0]),'scope':_scope(s),'ticket':'drop_in' if re.search(r'drop.?in|드롭인',s,re.I) else 'day_pass'}
                 if re.search(r'성인|adult',s,re.I): value['audience']='adult'
@@ -52,11 +52,19 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
                 duration=re.search(r'(\d+)\s*(?:시간|hours?)',s,re.I)
                 if duration: value['duration_hours']=int(duration[1])
                 add('price_day_pass',value,m,'KRW',len(money)>1)
+        for m in matches(r'(?:이용시간|운영시간|영업시간)\s*[:：]?\s*(\d{1,2})시(?:\s*(\d{1,2})분)?\s*[~–-]\s*(\d{1,2})시(?:\s*(\d{1,2})분)?'):
+            if int(m[1])<24 and int(m[3])<=24 and int(m[2] or 0)<60 and int(m[4] or 0)<60:
+                add('hours',{'hours':f'{int(m[1]):02d}:{int(m[2] or 0):02d}-{int(m[3]):02d}:{int(m[4] or 0):02d}','scope':_scope(s)},m)
+        for m in matches(r'\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s*(?:[~–-]|to)\s*(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b'):
+            if 1<=int(m[1])<=12 and 1<=int(m[4])<=12 and int(m[2] or 0)<60 and int(m[5] or 0)<60:
+                start=int(m[1])%12+(12 if m[3].lower()=='pm' else 0)
+                end=int(m[4])%12+(12 if m[6].lower()=='pm' else 0)
+                add('hours',{'hours':f'{start:02d}:{int(m[2] or 0):02d}-{end:02d}:{int(m[5] or 0):02d}','scope':_scope(s)},m)
         for m in matches(r'\b\d{1,2}:\d{2}\s*[~–—-]\s*\d{1,2}:\d{2}|24시간|24\s*hours|연중무휴'):
             times=re.findall(r'(\d{1,2}):(\d{2})',m[0])
             hours='-'.join(f'{int(h):02d}:{minute}' for h,minute in times) if times else '24_hours' if re.search(r'24',m[0]) else 'open_every_day'
             add('hours',{'hours':hours,'scope':_scope(s)},m)
-        for m in matches(r'(?:매주|매월)[^;]{0,50}(?:휴무|휴관)|closed on [A-Za-z]+|\d{4}[-/]\d{2}[-/]\d{2}\s*[~–]\s*\d{4}[-/]\d{2}[-/]\d{2}[^;]{0,30}(?:closed|휴무|휴관)'):
+        for m in matches(r'(?:휴무|휴관)\s*[:：]\s*(?:매주|매월)[^;]{0,40}|(?:매주|매월)[^;]{0,50}(?:휴무|휴관)|closed (?:on |every )?(?:Mondays?|Tuesdays?|Wednesdays?|Thursdays?|Fridays?|Saturdays?|Sundays?)|\d{4}[-/]\d{2}[-/]\d{2}\s*[~–]\s*\d{4}[-/]\d{2}[-/]\d{2}[^;]{0,30}(?:closed|휴무|휴관)'):
             add('closures',m[0].strip(),m)
         for m in matches(r'(?:섭씨\s*)?\d+(?:\.\d+)?(?:\s*[~–-]\s*\d+(?:\.\d+)?)?\s*(?:℃|°\s*C|도)'):
             before=s[:m.start()]
@@ -81,18 +89,18 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
             if re.search(r'커버.*(?:불필요|필요 없)|cover.*not required',tail,re.I): value='allowed'
             elif re.search(r'커버|스티커|must be covered|cover required',tail,re.I): value='cover_required'
             elif re.search(r'금지하지 않|불가하지 않|not prohibited|not forbidden',tail,re.I): value='allowed'
-            elif re.search(r'허용하지 않|가능하지 않|불가|금지|not allowed|prohibited',tail,re.I): value='not_allowed'
+            elif re.search(r'허용하지 않|가능하지 않|불가|금지|제한|거절|not allowed|prohibited|not permitted|forbidden',tail,re.I): value='not_allowed'
             elif re.search(r'커버.*(?:불필요|필요 없)|cover.*not required',tail,re.I): value='allowed'
-            elif re.search(r'가능|허용|allowed',tail,re.I): value='allowed'
+            elif re.search(r'가능|허용|allowed|permitted',tail,re.I): value='allowed'
             elif re.search(r'조건|conditional',tail,re.I): value='conditional'
             else: continue
             add('tattoo_policy',value,m)
-        for m in matches(r'외국인|foreigners?|tourists?|English|passport|여권|영어|\bID\b'):
+        for m in matches(r'외국인|foreign visitors?|foreigners?|tourists?|English|passport|여권|영어|\bID\b'):
             if re.search(r'허용하지 않|가능하지 않|불가|금지|not allowed|not accepted',s,re.I): value='not_allowed'
             elif re.search(r'여권|passport|\bID\b',s,re.I) and re.search(r'필요|지참|required|bring',s,re.I): value='id_required'
             elif re.search(r'English|영어',m[0],re.I) and re.search(r'미제공|없|not available|no guide',s,re.I): value='english_unavailable'
             elif re.search(r'English|영어',m[0],re.I) and re.search(r'안내|guide|available',s,re.I): value='english_guide'
-            elif re.search(r'가능|환영|허용|accepted|welcome|allowed',s,re.I): value='accepted'
+            elif re.search(r'가능|환영|허용|accepted|welcome|allowed|permitted',s,re.I): value='accepted'
             else: continue
             add('foreigner_policy',value,m)
     unique={ (r['field'],repr(r['value']),repr(r['locator'])):r for r in results }
@@ -107,5 +115,6 @@ def extract_document(document: dict) -> list[dict]:
     rows=extract(document.get('text',''))
     for ti,table in enumerate(document.get('structured',{}).get('tables',[])):
         for ri,cells in enumerate(table):
-            rows.extend(extract(' | '.join(cells),locator={'selector':f'table:nth-of-type({ti+1}) tr:nth-of-type({ri+1})'}))
+            header=' | '.join(table[0]) if ri and not re.search(r'\d', ' '.join(table[0])) else ''
+            rows.extend(extract(header+'\n'+' | '.join(cells),locator={'selector':f'table:nth-of-type({ti+1}) tr:nth-of-type({ri+1})'}))
     return rows

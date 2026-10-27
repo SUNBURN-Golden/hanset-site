@@ -536,7 +536,10 @@
       "url": "https://english.visitkorea.or.kr/sitemap_leisure_sports.xml",
       "paginate": false,
       "url_filter": "",
-      "max_candidates": 12
+      "max_candidates": 5,
+      "enabled": false,
+      "directory": true,
+      "low_prior": true
     },
     {
       "id": "tourism_accommodations",
@@ -544,7 +547,10 @@
       "url": "https://english.visitkorea.or.kr/sitemap_accommodations.xml",
       "paginate": false,
       "url_filter": "",
-      "max_candidates": 12
+      "max_candidates": 5,
+      "enabled": false,
+      "directory": true,
+      "low_prior": true
     },
     {
       "id": "tourism_attractions",
@@ -552,7 +558,10 @@
       "url": "https://english.visitkorea.or.kr/sitemap_attractions.xml",
       "paginate": false,
       "url_filter": "",
-      "max_candidates": 12
+      "max_candidates": 5,
+      "enabled": false,
+      "directory": true,
+      "low_prior": true
     },
     {
       "id": "crossfit",
@@ -580,6 +589,30 @@
       "url_filter": "",
       "enabled": false,
       "max_pages": 8
+    },
+    {
+      "id": "visitseoul_kr",
+      "kind": "sitemap",
+      "url": "https://korean.visitseoul.net/sitemap/sitemap_kr_index.xml",
+      "directory": true,
+      "max_candidates": 60,
+      "slug_include": [
+        "사우나|찜질|스파|목욕|온천|한증|유황|피트니스|크로스핏|하이록스",
+        "sauna|spa|jjimjil|bath|hot-?spring|crossfit|hyrox|fitness|wellness"
+      ],
+      "slug_exclude": []
+    },
+    {
+      "id": "visitseoul_en",
+      "kind": "sitemap",
+      "url": "https://english.visitseoul.net/sitemap/sitemap_en_index.xml",
+      "directory": true,
+      "max_candidates": 60,
+      "slug_include": [
+        "사우나|찜질|스파|목욕|온천|한증|유황|피트니스|크로스핏|하이록스",
+        "sauna|spa|jjimjil|bath|hot-?spring|crossfit|hyrox|fitness|wellness"
+      ],
+      "slug_exclude": []
     }
   ],
   "relevance_keywords": [

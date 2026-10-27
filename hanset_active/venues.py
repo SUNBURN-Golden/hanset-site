@@ -75,7 +75,10 @@ def upsert_venue(db, name, *, website='', city='', region='', venue_type='sauna'
             if same_domain or same_name:
                 domains=set(json.loads(row['domains'] or '[]'))
                 if domain: domains.add(domain)
-                db.execute('UPDATE venues SET domains=? WHERE venue_id=?',(json.dumps(sorted(domains)),row['venue_id']))
+                effective_website=row['website'] or website
+                db.execute('UPDATE venues SET domains=?,website=?,is_seed=?,seed_match=? WHERE venue_id=?',
+                    (json.dumps(sorted(domains)),effective_website,int(not is_new(db,row['name'],effective_website)),
+                     'frozen_seed' if not is_new(db,row['name'],effective_website) else None,row['venue_id']))
                 db.execute('INSERT OR IGNORE INTO venue_aliases VALUES (?,?,?,?)',(deterministic_id(row['venue_id'],norm),row['venue_id'],name,norm))
                 return row['venue_id']
             if SequenceMatcher(None,norm,normalize_name(row['name'])).ratio()>=.65:

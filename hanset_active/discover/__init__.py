@@ -24,14 +24,14 @@ class Discovery:
         try: url=canonicalize(url)
         except ValueError: return None
         domain=registrable_domain(url)
-        if not self.remaining or self.counts[domain]>=self.per_domain or is_denied(url) or is_excluded(url): return None
+        if not self.remaining or (kind!='sitemap' and self.counts[domain]>=self.per_domain) or is_denied(url) or is_excluded(url): return None
         self.remaining-=1;self.counts[domain]+=1
         return self.getter(url,kind=kind,**kwargs)
-    def candidate(self,url, *, text='', name='', city='', region='', website='', depth=0, via='search', parent_url=None, parent_task_id=None, low_prior=False):
+    def candidate(self,url, *, text='', name='', city='', region='', website='', depth=0, via='search', parent_url=None, parent_task_id=None, low_prior=False, domain_limit=None):
         if depth>2 or depth<0 or is_excluded(url,text,name,website): return None
         try: url=canonicalize(url)
         except ValueError: return None
-        if self.candidate_counts[registrable_domain(url)]>=self.per_domain: return None
+        if domain_limit is None and self.candidate_counts[registrable_domain(url)]>=self.per_domain: return None
         if is_denied(url) or url in self.seen or (not low_prior and self.relevance(text+' '+name+' '+url)<self.threshold): return None
         if not self.fetcher.register_candidate(url): return None
         self.seen.add(url)
