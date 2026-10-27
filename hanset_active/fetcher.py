@@ -132,7 +132,7 @@ class Fetcher:
         self._stopped[domain]=reason
         with self._guard, self.db:
             self.db.execute("INSERT INTO sources(source_id,domain,state,reason) VALUES (?,?,'inaccessible',?) ON CONFLICT(domain) DO UPDATE SET state='inaccessible',reason=excluded.reason",(deterministic_id(domain),domain,reason))
-    def _request(self,url,kind):
+    def _request(self,url,kind,headers=None):
         domain=registrable_domain(url)
         with self._lock(domain):
             with self._guard:
@@ -145,7 +145,7 @@ class Fetcher:
             response=None
             reason=''
             try:
-                response=self.session.get(url,allow_redirects=False,timeout=(self.settings.timeout,self.settings.timeout),stream=True)
+                response=self.session.get(url,headers=headers,allow_redirects=False,timeout=(self.settings.timeout,self.settings.timeout),stream=True)
                 status=response.status_code
                 ct=response.headers.get('Content-Type','').lower()
                 limit=8*1024**2 if 'pdf' in ct else 4*1024**2 if ct.startswith('image/') else 2*1024**2
@@ -203,7 +203,7 @@ class Fetcher:
                 self._inaccessible(domain,'robots_disallowed')
                 return False,'robots_disallowed'
             return True,''
-    def fetch(self,url: str, *, kind: str = 'body', parent_url: str | None = None, task_id: str | None = None, discovered_via: str | None = None, _browser_shell: bool = False) -> FetchResult:
+    def fetch(self,url: str, *, kind: str = 'body', parent_url: str | None = None, task_id: str | None = None, discovered_via: str | None = None, _browser_shell: bool = False, api_headers: dict | None = None) -> FetchResult:
         if kind not in ('body','robots','sitemap','feed','api','browser_aux'):
             raise ValueError('Unsupported request kind')
         ref=dict(parent_url=strip_pii(parent_url) if parent_url else None,task_id=strip_pii(task_id) if task_id else None,discovered_via=strip_pii(discovered_via) if discovered_via else None)
@@ -219,6 +219,9 @@ class Fetcher:
             url=canonicalize(url)
         except (ValueError,UnicodeError):
             return result('denied','invalid URL')
+        auth_origin=(urlsplit(url).scheme,urlsplit(url).netloc)
+        if api_headers and (kind!='api' or set(api_headers)!={'X-Subscription-Token'}):
+            raise ValueError('Only scoped search API authentication is supported')
         for hop in range(6):
             reason=self._reason_denied(url)
             if reason:
@@ -230,7 +233,7 @@ class Fetcher:
                 allowed,reason=self._robots_allowed(url)
                 if not allowed:
                     return result('cap_reached' if reason=='cap_reached' else 'robots_disallowed',reason)
-                response,body,error=self._request(url,kind)
+                response,body,error=self._request(url,kind,headers=api_headers if (urlsplit(url).scheme,urlsplit(url).netloc)==auth_origin else None)
                 if error:
                     return result('cap_reached' if error=='cap_reached' else 'error',error)
                 status=response.status_code

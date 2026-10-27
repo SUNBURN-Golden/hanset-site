@@ -1,0 +1,69 @@
+"""Bounded sitemap/feed/pagination expansion without cursor loops."""
+import re
+from lxml.etree import XMLSyntaxError
+from urllib.parse import urljoin, urlsplit
+from ..extract import sitemap, feed, html
+
+def expand(context,url, *, depth=0, parent_url=None, max_children=20, max_candidates=12, _seen=None, _children=None):
+    if depth>2: return []
+    seen=_seen if _seen is not None else set()
+    children=_children if _children is not None else [0]
+    if max_candidates<=0: return []
+    if url in seen: return []
+    seen.add(url)
+    result=context.get(url,kind='sitemap')
+    if not result or not result.ok: return []
+    tasks=[]
+    try:
+        doc=sitemap.extract(result.content,url)
+    except (ValueError,TypeError,XMLSyntaxError): return []
+    if doc['kind']=='index':
+        for child in doc['urls']:
+            if children[0]>=min(20,max_children): break
+            children[0]+=1
+            tasks.extend(expand(context,child,depth=depth+1,parent_url=url,max_children=max_children,max_candidates=max_candidates-len(tasks),_seen=seen,_children=children))
+            if len(tasks)>=max_candidates: break
+    else:
+        for link in doc['urls'][:max(0,max_candidates)]:
+            task=context.candidate(link,depth=0,via='sitemap',parent_url=url,low_prior=True)
+            if task: tasks.append(task)
+    return tasks
+
+def robots_sitemaps(context, origin):
+    result=context.get(urljoin(origin,'/robots.txt'),kind='robots')
+    if not result or not result.ok: return []
+    tasks=[]
+    for url in re.findall(r'^Sitemap:\s*(\S+)',result.text,re.I|re.M)[:20]: tasks.extend(expand(context,url,parent_url=origin))
+    return tasks
+
+def expand_feed(context,url):
+    result=context.get(url,kind='feed')
+    if not result or not result.ok: return []
+    tasks=[]
+    for item in feed.extract(result.content,url)['items']:
+        link=item.get('url') or item.get('link')
+        if link:
+            task=context.candidate(urljoin(url,link),text=str(item),via='feed',parent_url=url)
+            if task: tasks.append(task)
+    return tasks
+
+def list_pages(context,url, *, max_pages=8, url_filter='', low_prior=False):
+    tasks=[];queue=[url];seen=set();hashes=set()
+    while queue and len(seen)<min(8,max_pages):
+        current=queue.pop(0)
+        if current in seen: continue
+        seen.add(current)
+        result=context.get(current)
+        if not result or not result.ok: continue
+        if result.content_hash in hashes and result.content_hash: break
+        if result.content_hash: hashes.add(result.content_hash)
+        doc=html.extract(result.content,current)
+        for link in doc['links']:
+            target=link['url']
+            if link['kind']=='next_page' or re.search(r'[?&]page=\d+|/page/\d+',target) or link['text'].isdigit():
+                if urlsplit(target).netloc==urlsplit(current).netloc and target not in seen: queue.append(target)
+                continue
+            if url_filter and not re.search(url_filter,target): continue
+            task=context.candidate(target,text=link['text'],via='directory:html_list',parent_url=current,low_prior=low_prior)
+            if task: tasks.append(task)
+    return tasks
