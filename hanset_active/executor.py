@@ -160,6 +160,8 @@ class Executor:
         rejected_directory = bool(directory_detail and directory_detail['low_prior'] and
             evaluator.evaluate(result.url,[doc],venue_name=directory_detail['name'],profile=self.context.profile)['decision']!='registered')
         directory_venue = None
+        if directory_detail and re.search(r'/[A-Z]{2}N\d+/?$',urlsplit(result.url).path):
+            directory_detail = None  # editorial article (…N<id>), not a venue page (…P<id>)
         if directory_detail and directory_detail['name'] and not rejected_directory:
             directory_venue = venues.upsert_venue(self.db,directory_detail['name'],website=directory_detail['website'],
                 discovered_via='directory:'+directory_detail['directory_id'],clock=self.clock,
