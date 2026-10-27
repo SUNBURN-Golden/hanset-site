@@ -48,6 +48,7 @@ class Executor:
         self.fetcher, self.db, self.clock = fetcher, fetcher.db, fetcher.clock
         self.deadline, self.max_requests = deadline, max_requests
         self.start_requests = self.db.execute('SELECT count(*) FROM request_log').fetchone()[0]
+        self.run_id = None
         self.task = None
         self.documents = {}
         for row in self.db.execute('SELECT structured FROM extractions'):
@@ -67,7 +68,13 @@ class Executor:
         self.heartbeat()
         if self.requests >= self.max_requests or (self.deadline is not None and self.clock.monotonic() >= self.deadline):
             raise BudgetExhausted()
-        return self._original_request(*args, **kwargs)
+        previous = self.db.execute('SELECT coalesce(max(request_id),0) FROM request_log').fetchone()[0]
+        try:
+            return self._original_request(*args, **kwargs)
+        finally:
+            if self.run_id:
+                with self.db:
+                    self.db.execute('UPDATE request_log SET run_id=? WHERE request_id>?',(self.run_id,previous))
 
     def install(self):
         self.fetcher._request = self.guarded_request
@@ -96,7 +103,7 @@ class Executor:
             if raw_id and task.get('task_id'):
                 with self.db:
                     self.db.execute('INSERT OR IGNORE INTO run_checkpoints(checkpoint_id,task_id,kind,cursor,updated_at) VALUES (?,?,?,?,?)',
-                        (checkpoint_id,task['task_id'],'fetched',raw_id,kst_now(self.clock).isoformat()))
+                        (checkpoint_id,task['task_id'],'fetched:'+deterministic_id(url),raw_id,kst_now(self.clock).isoformat()))
         return result
 
     def _extract(self, result):

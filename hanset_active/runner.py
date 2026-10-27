@@ -93,6 +93,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
                 db.execute('INSERT INTO runs(run_id,started_at,state,max_requests,max_minutes) VALUES (?,?,?,?,?)',(run_id,kst_now(clock).isoformat(),'running',max_requests,max_minutes))
             if initialize: bootstrap(fetcher)
             executor = Executor(fetcher,providers=providers,max_requests=max_requests,deadline=deadline)
+            executor.run_id = run_id
             executor.heartbeat = lock.heartbeat
             executor.install()
             scheduler = Scheduler(db,clock=clock,budget=max_requests,shares=profile['budgets'].get('class_shares'),discover_floor=profile['budgets'].get('discover_floor',.25))
@@ -115,7 +116,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
                         clock.sleep(min(60,max(0,delay)))
                         lock.heartbeat()
                         continue
-                    task = _pick(scheduler,selected,deadline)
+                    task = _pick(scheduler,selected,deadline,{domain:last+max(fetcher.settings.min_interval,fetcher._delay.get(domain,0)) for domain,last in fetcher._last.items() if domain not in fetcher._stopped})
                     if task is None: break
                     until = lock.heartbeat()
                     with db:
@@ -146,7 +147,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
         return {'state':'already_running','requests':0}
 
 
-def _pick(scheduler, selected, deadline):
+def _pick(scheduler, selected, deadline, cooldowns=None):
     """Preserve scheduler fairness without allowing unselected task classes."""
     # The Stage B picker has no class predicate. Its queue can be filtered with
     # a read-only connection facade; no queue states are changed for filtering.
@@ -158,5 +159,5 @@ def _pick(scheduler, selected, deadline):
                 params = tuple(sorted(selected))+tuple(params)
             return original.execute(sql,params)
     scheduler.db = Filtered()
-    try: return scheduler.pick(deadline=deadline)
+    try: return scheduler.pick(deadline=deadline,cooldowns=cooldowns)
     finally: scheduler.db = original

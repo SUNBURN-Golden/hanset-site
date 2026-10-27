@@ -7,7 +7,7 @@ from .db import connect
 from .fetcher import Fetcher
 from . import venues
 from .runner import run
-from .report import report, status, export_service_data
+from .report import report, status, export_service_data, sanitize_output
 from .connectors.instagram import InstagramConnector, ConnectorPaused
 from .util.pii import strip_pii
 
@@ -63,7 +63,7 @@ def main(argv=None):
                 try: InstagramConnector().read_profile('')
                 except ConnectorPaused: result = {'state':'paused'}
                 else: result = {'state':'stub_only'}
-            print(strip_pii(json.dumps(result,ensure_ascii=False,indent=2)))
+            print(json.dumps(sanitize_output(result),ensure_ascii=False,indent=2))
         finally: db.close()
     except (ValueError,OSError) as error:
         print(json.dumps({'error':strip_pii(str(error))}))

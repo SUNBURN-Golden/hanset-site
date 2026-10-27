@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Draft target: scripts/run_active_cron.sh. No deployment or credentials.
+# HANSET active bot cron wrapper. No deployment or credentials.
 set -u
 set -o pipefail
 repo_root=$(git -C "$(dirname -- "$0")" rev-parse --show-toplevel) || exit 1

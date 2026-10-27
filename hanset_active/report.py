@@ -1,5 +1,6 @@
 """Acceptance metrics from persisted evidence, never inferred facts."""
 import json
+import re
 from pathlib import Path
 from .config import REPO_ROOT
 from .util.pii import strip_pii
@@ -18,7 +19,29 @@ NATURAL_KEYS = {
     'sources':('domain',),
     'gap_attempts':('gap_id','strategy','url'),
     'structure_alerts':('source_id','page_type','raw_id'),
+    'structure_baselines':('source_id','page_type'),
+    'source_trials':('source_id','url'),
+    'venue_aliases':('venue_id','normalized_name'),
+    'confirmations':('vf_id','obs_id'),
+    'seed_venues':('seed_id','normalized_name','domain'),
+    'seed_domains':('seed_id','domain'),
+    'failures':('task_id','url','reason'),
+    'run_checkpoints':('run_id','task_id','kind'),
+    'taxonomy_candidates':('kind','value','raw_id'),
 }
+
+def sanitize_output(value, key=''):
+    """Sanitize text without destroying collector-generated relational IDs."""
+    if isinstance(value, dict):
+        return {k:sanitize_output(v,k) for k,v in value.items()}
+    if isinstance(value, (list,tuple)):
+        return [sanitize_output(v,key) for v in value]
+    if isinstance(value,str):
+        if (key.endswith('_id') or key.endswith('_hash') or key=='seed_id') and re.fullmatch(r'[0-9a-f]{32}(?:[0-9a-f]{32})?',value):
+            return value
+        return strip_pii(value)
+    return value
+
 
 def duplicate_check(db):
     """Count excess rows per natural key, including NULL key components."""
@@ -68,7 +91,7 @@ def export_service_data(db, out):
     out.mkdir(parents=True,exist_ok=True)
     tables = ('venues','venue_aliases','venue_links','venue_fields','field_changes','gaps')
     for table in tables:
-        payload = strip_pii(json.dumps([dict(r) for r in db.execute('SELECT * FROM '+table)],ensure_ascii=False,indent=2))
+        payload = json.dumps(sanitize_output([dict(r) for r in db.execute('SELECT * FROM '+table)]),ensure_ascii=False,indent=2)
         temporary = out/(table+'.json.tmp')
         temporary.write_text(payload,encoding='utf-8')
         temporary.replace(out/(table+'.json'))

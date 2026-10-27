@@ -9,7 +9,7 @@ import sys
 import time
 import pytest
 from hanset_active import venues
-from hanset_active.discover.search import Hit
+from hanset_active.discover.search import Hit, SearchProvider
 from hanset_active.executor import Executor, TaskFailure
 from hanset_active.runner import run
 from hanset_active.scheduler import enqueue
@@ -20,13 +20,19 @@ def page(price='25000',extra='',name='Aurora Sauna'):
     return f'<html><title>{name}</title><main><h1>{name}</h1><p>Seoul sauna spa hotel opening 2026-10-20</p><p>Day pass {price} KRW</p><p>Opening hours 09:00 ~ 22:00</p><p>Tattoos allowed</p><p>Foreigners welcome</p><p>Sauna 90°C</p>{extra}<p>Official visitor information for guests visiting this venue in Seoul.</p></main></html>'
 
 
-class FixtureProvider:
+class FixtureProvider(SearchProvider):
     name='fixture'
-    def __init__(self,server): self.server=server
+    def __init__(self,server,bot):
+        self.server=server
+        super().__init__(bot.fetch,bot.db,clock=bot.clock,endpoint=server.base+'/search')
+    def parse(self,result,limit):
+        return [Hit(**item) for item in json.loads(result.text)]
     def search(self,query,lang='ko',limit=10):
         # Mention searches discover a source on a second local hostname.
         target=self.server.base.replace('127.0.0.1','localhost')+'/second' if 'Meadow' in query else self.server.base+'/venue'
-        return [Hit(target,'Seoul sauna spa hotel',website=target)]
+        from urllib.parse import urlencode
+        self.server.add('/search?'+urlencode(self.params(query,lang,limit)),json.dumps([{'url':target,'title':'Seoul sauna spa hotel','website':target}]),headers={'Content-Type':'application/json'})
+        return super().search(query,lang,limit)
 
 
 def setup_profile(bot,tmp_path,server):
@@ -57,11 +63,11 @@ def test_discovery_pagination_idempotence_and_change(bot,server,tmp_path):
     server.add('/list','<main><h1>Seoul sauna spa directory listing</h1><p>'+('Visitor directory information. '*6)+'</p><a href="/venue">Aurora Sauna Seoul</a><a rel="next" href="/list?page=2">Next</a></main>')
     server.add('/list?page=2','<main><h1>Seoul sauna spa directory listing second page</h1><p>'+('Other visitor directory information. '*6)+'</p><a href="/hours">Sauna opening hours</a></main>')
     # Keep the frozen known source from being requested; it is identity only.
-    result=run(bot,max_requests=60,max_minutes=2,providers=[FixtureProvider(server)],initialize=False)
+    result=run(bot,max_requests=60,max_minutes=2,providers=[FixtureProvider(server,bot)],initialize=False)
     assert result['completed']==0
     enqueue(bot.db,kind='search',payload={'query':'Seoul sauna'})
     enqueue(bot.db,kind='directory',payload=bot.settings.profile['directories'][0],task_class='backfill')
-    result=run(bot,max_requests=60,max_minutes=2,providers=[FixtureProvider(server)],initialize=False)
+    result=run(bot,max_requests=60,max_minutes=2,providers=[FixtureProvider(server,bot)],initialize=False)
     assert result['completed']>0
     metrics=report(bot.db)
     assert metrics['new_venues']['count']>=2
@@ -71,7 +77,7 @@ def test_discovery_pagination_idempotence_and_change(bot,server,tmp_path):
     assert metrics['gaps_filled']['examples'][0]['evidence_url'].startswith('http://')
     assert any('search:' in r['discovered_via'] for r in bot.db.execute('SELECT * FROM tasks'))
     before=counts(bot.db)
-    run(bot,max_requests=60,max_minutes=2,providers=[FixtureProvider(server)],initialize=False)
+    run(bot,max_requests=60,max_minutes=2,providers=[FixtureProvider(server,bot)],initialize=False)
     assert counts(bot.db)==before
     assert report(bot.db)['duplicate_check']['total']==0
     server.add('/venue',page('31000',extra=extra))
@@ -200,7 +206,7 @@ def test_pagination_checkpoint_resumes_without_refetch(bot,server):
     enqueue(bot.db,kind='directory',payload={'id':'local','kind':'html_list','url':server.base+'/list','max_pages':2},task_class='backfill')
     first=run(bot,max_requests=2,max_minutes=1,providers=[],initialize=False)
     assert first['state']=='budget_reached'
-    assert bot.db.execute("SELECT count(*) FROM run_checkpoints WHERE kind='fetched'").fetchone()[0]==1
+    assert bot.db.execute("SELECT count(*) FROM run_checkpoints WHERE kind LIKE 'fetched:%'").fetchone()[0]==1
     run(bot,max_requests=10,max_minutes=1,providers=[],initialize=False)
     assert sum(x['path']=='/list' for x in server.log)==1
     assert sum(x['path']=='/list?page=2' for x in server.log)==1

@@ -109,3 +109,26 @@ def test_invalid_seed_website_and_clock_tick_changes(bot):
         apply_observation(bot.db,vid,oid,clock=bot.clock)
     assert bot.db.execute('SELECT count(*) FROM venue_fields').fetchone()[0]==3
     assert bot.db.execute('SELECT count(*) FROM field_changes').fetchone()[0]==2
+
+
+def test_export_preserves_relational_ids(bot,tmp_path):
+    from hanset_active.venues import upsert_venue
+    vid=upsert_venue(bot.db,'Aurora Sauna',website='https://venue-a.test',clock=bot.clock)
+    export_service_data(bot.db,tmp_path/'export')
+    rows=json.loads((tmp_path/'export/venues.json').read_text())
+    assert rows[0]['venue_id']==vid
+
+
+def test_cron_wrapper_overlap_and_timestamps(bot):
+    import fcntl
+    import os
+    import subprocess
+    from pathlib import Path
+    wrapper=Path(__file__).resolve().parents[2]/'scripts/run_active_cron.sh'
+    bot.settings.data_dir.mkdir(exist_ok=True)
+    with (bot.settings.data_dir/'cron.lock').open('w') as lock:
+        fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        result=subprocess.run(['bash',str(wrapper)],env=dict(os.environ,HANSET_ACTIVE_DIR=str(bot.settings.data_dir)),capture_output=True,text=True,timeout=10)
+    assert result.returncode==0
+    lines=next((bot.settings.data_dir/'logs').glob('*.log')).read_text().splitlines()
+    assert len(lines)==1 and lines[0].endswith('+0900 already_running')
