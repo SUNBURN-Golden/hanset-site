@@ -47,11 +47,17 @@ def fetch(fetcher, url: str) -> FetchResult:
                 if request.method!='GET':
                     failure.append('denied'); route.abort(); return
                 document_body=request.is_navigation_request() or getattr(request,'resource_type','') in ('document','image')
-                r=fetcher.fetch(request.url,kind='body' if document_body else 'browser_aux',_browser_shell=request.is_navigation_request())
+                try:
+                    r=fetcher.fetch(request.url,kind='body' if document_body else 'browser_aux',_browser_shell=request.is_navigation_request())
+                except Exception:
+                    failure.append('denied'); route.abort(); return
                 shell=r.outcome=='empty_body' and r.content and needs_browser(r.content)
                 if not r.ok and not shell:
                     failure.append(r.outcome); route.abort(); return
-                route.fulfill(status=r.status or 200,body=r.content,headers={'Content-Type':r.content_type})
+                try:
+                    route.fulfill(status=r.status or 200,body=r.content,headers={'Content-Type':r.content_type})
+                except Exception:
+                    failure.append('error')
             context.route('**/*',route_request)
             # Newer Playwright supports explicit WebSocket routing; older versions
             # cannot provide the required network guarantee and are not used.
