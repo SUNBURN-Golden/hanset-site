@@ -139,11 +139,13 @@ def apply_snapshot(db, entity_id, attribute, source_url, values, *, at, clock=No
     successor = created[0] if len(created) == 1 else None
     for h in gone:
         old = open_rows[h]
-        db.execute("UPDATE facts SET effective_to=?, superseded_by=?, closed_reason='value_change' WHERE fact_id=?",
-                   (at, successor, old['fact_id']))
+        reason = 'value_change' if by_hash else 'evidence_removed'
+        db.execute('UPDATE facts SET effective_to=?, superseded_by=?, closed_reason=? WHERE fact_id=?',
+                   (at, successor, reason, old['fact_id']))
         for fid in created or [None]:
             db.execute('INSERT OR IGNORE INTO corrections VALUES (?,?,?,?,?,?,?)',
-                       (deterministic_id('corr', old['fact_id'], fid), entity_id, attribute, old['fact_id'], fid, 'value_change', at))
+                       (deterministic_id('corr', old['fact_id'], fid), entity_id, attribute,
+                        old['fact_id'], fid, reason, at))
     for h in set(by_hash) & set(open_rows):
         db.execute('UPDATE facts SET last_confirmed_at=? WHERE fact_id=?', (at, open_rows[h]['fact_id']))
     if created:  # evidence arrived: close the unverified placeholder for this attribute

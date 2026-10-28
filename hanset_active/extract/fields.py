@@ -1,8 +1,19 @@
 """Explicit bilingual field rules. Offsets refer to sanitized input text."""
 import re
 from ..util.pii import strip_pii
-VERSION = '1.1.0'
+VERSION = '1.2.0'
 NAME = 'fields'
+
+# A sentence that explicitly says a fact is unconfirmed/unlisted yields nothing at all:
+# never a value, never an ambiguous review item. Softer hedges stay per-match 'ambiguous'.
+_UNCONFIRMED = re.compile(
+    r'not confirmed|unconfirmed|\bunknown\b|미확인|확인\s*안\s*됨|확인안됨|확인\s*되지\s*않|확인되지\s*않|알\s*수\s*없'
+    r'|확인\s*중|확인\s*불가|확인\s*안\s*된|not\s+yet\s+confirmed|미정|미공개|미표시|\bnot listed\b|\bnot shown\b|\bnot stated\b|\bnot announced\b|\bnot found\b'
+    r'|\bnot public\b|\bnot applicable\b|\bnot read\b|\bno price\b|\bprice not\b', re.I)
+
+# Canonical (Korean) tokens so ontology mapping works for English mentions too.
+_BATH_TOKEN = {'dry sauna': '건식', 'wet sauna': '습식', 'steam': '스팀', 'hot bath': '온탕',
+               'cold bath': '냉탕', 'ice bath': '아이스배스', 'cold plunge': '냉탕'}
 
 def amount(text):
     text = re.sub(r'[₩,\s]|KRW|원', '', text, flags=re.I)
@@ -36,6 +47,8 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
     # Work per line/sentence to keep scopes and negations local.
     for block in re.finditer(r'(?:[^\n.!?]|(?<=\d)\.(?=\d))+',text):
         s=block[0]
+        if _UNCONFIRMED.search(s):
+            continue  # "Not confirmed"/"미확인" text must never produce a value
         def matches(pattern):
             return re.finditer(pattern,s,re.I)
         class Offset:
@@ -81,17 +94,28 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
             else: continue
             add('rapid_cold_plunge',value,m)
         baths=[]
-        for m in matches(r'건식|습식|온탕|냉탕|열탕|스팀|한증막|아이스배스|dry sauna|steam|hot bath|cold bath|ice bath'):
-            if not re.search(r'^\s*(?:없|미운영|not available)',s[m.end():],re.I) and not re.search(r'\bno\s*$',s[:m.start()],re.I): baths.append({'dry sauna':'건식','steam':'스팀','hot bath':'온탕','cold bath':'냉탕','ice bath':'아이스배스'}.get(m[0].lower(),m[0].lower()))
-        if baths: add('bath_composition',sorted(set(baths)),next(matches(r'건식|습식|온탕|냉탕|열탕|스팀|한증막|아이스배스|dry sauna|steam|hot bath|cold bath|ice bath')))
+        def bath(tok,m):
+            if not re.search(r'^\s*(?:없|미운영|not available)',s[m.end():],re.I) and not re.search(r'\bno\s*$',s[:m.start()],re.I):
+                baths.append((tok,m))
+        for m in matches(r'건식|습식|온탕|냉탕|열탕|스팀|한증막|아이스배스|dry sauna|wet sauna|steam|hot bath|cold bath|ice bath|cold plunge'):
+            bath(_BATH_TOKEN.get(m[0].lower(),m[0].lower()),m)
+        for m in matches(r'\b(?:dry|wet)\s*(?:,|and|&|/|\+|·)\s*(?:dry|wet)\s*saunas?\b'):  # "dry and wet saunas"
+            bath('건식',m); bath('습식',m)
+        for m in matches(r'\b(?:(?:very[- ])?hot|cold)\s*(?:/|&|,|or|and)\s*(?:(?:very[- ])?hot|cold)(?:\s*(?:/|&|,|or|and)\s*(?:(?:very[- ])?hot|cold))*\s*baths?\b'):
+            if re.search(r'cold',m[0],re.I): bath('냉탕',m)  # "hot/cold baths": the cold side is explicit
+        if re.search(r'\b(?:baths?|tubs?|pools?)\b|탕',s,re.I):  # "Four hot baths, one cold" -- cold named next to a bath noun
+            for m in matches(r'\b(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+cold\b(?!-?\s*showers?)'):
+                bath('냉탕',m)
+        if baths: add('bath_composition',sorted({t for t,_ in baths}),baths[0][1])
         for m in matches(r'문신|tattoos?'):
-            tail=s[m.end():m.end()+70]
+            tail=re.split(r'[,;]',s[m.end():m.end()+160])[0]
             if re.search(r'커버.*(?:불필요|필요 없)|cover.*not required',tail,re.I): value='allowed'
-            elif re.search(r'커버|스티커|must be covered|cover required',tail,re.I): value='cover_required'
-            elif re.search(r'금지하지 않|불가하지 않|not prohibited|not forbidden',tail,re.I): value='allowed'
-            elif re.search(r'허용하지 않|가능하지 않|불가|금지|제한|거절|not allowed|prohibited|not permitted|forbidden',tail,re.I): value='not_allowed'
-            elif re.search(r'커버.*(?:불필요|필요 없)|cover.*not required',tail,re.I): value='allowed'
-            elif re.search(r'가능|허용|allowed|permitted',tail,re.I): value='allowed'
+            elif re.search(r'금지하지 않|불가하지 않|not prohibited|not forbidden|not banned',tail,re.I): value='allowed'
+            elif re.search(r'not allowed|not admitted|not permitted|prohibited|forbidden|banned|출입금지|입장불가',tail,re.I) and not re.search(r'unless|except|제외|경우|하면',tail,re.I): value='not_allowed'
+            elif re.search(r'커버|스티커|패치|patch|rash.?guard|래쉬가드|레이시가드|covered',tail,re.I) and re.search(r'필요|필수|착용|부착|가려|가린|must|needs?|required|only when|unless|covered',tail,re.I): value='cover_required'
+            elif re.search(r'may be restrict|restrictions?\s+may\s+apply|제한될\s*수|거절될\s*수',tail,re.I): value='conditional'
+            elif re.search(r'허용하지 않|가능하지 않|불가|금지|제한|거절|not allowed|not admitted|not permitted|prohibited|forbidden|banned|restricted',tail,re.I): value='not_allowed'
+            elif re.search(r'가능|허용|allowed|permitted|admitted|welcome',tail,re.I): value='allowed'
             elif re.search(r'조건|conditional',tail,re.I): value='conditional'
             else: continue
             add('tattoo_policy',value,m)

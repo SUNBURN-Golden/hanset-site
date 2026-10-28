@@ -61,17 +61,51 @@ def closed_on(rule, d: date):
         return d.weekday() == WEEKDAYS[(m[1] or m[2] or m[3])[:3]]
     return None
 
+def _open_issue_refs(db, check_id):
+    return {r[0] for r in db.execute('SELECT ref FROM quality_issues WHERE check_id=? AND state=?', (check_id, 'open'))}
+
+def q1_excluded_branch_ids(db):
+    """Branches with an open non_sauna_branch_suspect issue (e.g. CrossFit boxes typed sauna
+    by the active bot): excluded from Q1's candidate list and reported separately."""
+    return _open_issue_refs(db, 'non_sauna_branch_suspect')
+
+def q1_excluded(db):
+    rows = db.execute('''SELECT q.ref, e.name FROM quality_issues q LEFT JOIN entities e ON e.entity_id=q.ref
+        WHERE q.check_id='non_sauna_branch_suspect' AND q.state='open' ORDER BY e.name''').fetchall()
+    return [{'branch_id': r[0], 'name': r[1], 'reason': 'non_sauna_branch_suspect'} for r in rows]
+
+def _scope_applies(scope, d):
+    if scope in (None, '', 'unspecified'): return True
+    if scope == 'weekday': return d.weekday() < 5
+    if scope == 'weekend': return d.weekday() >= 5
+    return True
+
 def q_rapid_cold_foreigner_day_pass(db, today: date):
-    """Q1: Which saunas have a rapid-cold plunge and let foreigners in on a day pass today?"""
+    """Q1: Which saunas have a rapid-cold plunge and let foreigners in on a day pass today?
+    Branches flagged non_sauna_branch_suspect are excluded (see q1_excluded); hours facts
+    flagged maintenance_window_as_hours never count towards open_today."""
     out = []
+    excluded = q1_excluded_branch_ids(db)
+    flagged_hours = _open_issue_refs(db, 'maintenance_window_as_hours')
     for (bid,) in db.execute("SELECT entity_id FROM entities WHERE entity_type='branch' ORDER BY name").fetchall():
+        if bid in excluded:
+            continue
         rapid = slot(db, bid, 'facility', 'rapid_cold_plunge', 'exists')
         foreign = slot(db, bid, 'usage_condition', 'foreigner', 'policy')
         access = slot(db, bid, 'usage_condition', 'access', 'policy')
         passes = [evidence(r) for r in _facts(db, bid, 'price_plan', None, 'amount') if r['status'] in ANSWERING and r['kind'] in ('day_pass', 'drop_in')]
-        closures = [evidence(r) for r in _facts(db, bid, 'hours', 'closure', 'closure_rule') if r['status'] in ANSWERING]
+        closures = [evidence(r) for r in _facts(db, bid, 'hours', 'closure', 'closure_rule') if r['status'] in ANSWERING and r['fact_id'] not in flagged_hours]
+        regular = [r for r in _facts(db, bid, 'hours', 'regular', 'open_hours') if r['status'] in ANSWERING and r['fact_id'] not in flagged_hours]
         decided = [closed_on(c['value'], today) for c in closures]
-        open_today = 'unverified' if not closures else ('closed' if True in decided else ('open' if all(x is False for x in decided) else 'undecidable'))
+        if closures:
+            open_today = 'closed' if True in decided else ('open' if all(x is False for x in decided) else 'undecidable')
+        elif regular:
+            # explicit regular hours for a scope matching the date mean the venue operates on it
+            operates = [r for r in regular if isinstance(json.loads(r['value_json']) if r['value_json'] else None, str)
+                        and _scope_applies((json.loads(r['qualifiers']) or {}).get('scope'), today)]
+            open_today = 'open' if operates else 'unverified'
+        else:
+            open_today = 'unverified'
         def yes(s, ok): return s['state'] == 'known' and all(ok(e['value']) for e in s['evidence'])
         criteria = {
             'rapid_cold_plunge': rapid['state'] if rapid['state'] != 'known' else ('yes' if yes(rapid, lambda v: v is True) else 'no'),
