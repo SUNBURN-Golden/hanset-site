@@ -1,0 +1,71 @@
+"""Command line interface for the independent active collection data store."""
+import argparse
+import json
+from pathlib import Path
+from .config import Settings
+from .db import connect
+from .fetcher import Fetcher
+from . import venues
+from .runner import run
+from .report import report, status, export_service_data, sanitize_output
+from .connectors.instagram import InstagramConnector, ConnectorPaused
+from .util.pii import strip_pii
+
+
+def parser():
+    p = argparse.ArgumentParser(prog='python -m hanset_active')
+    p.add_argument('--data-dir',type=Path)
+    p.add_argument('--profile',type=Path)
+    commands = p.add_subparsers(dest='command',required=True)
+    commands.add_parser('init')
+    seed = commands.add_parser('seed')
+    seed.add_argument('--refreeze',action='store_true')
+    seed.add_argument('--csv',action='append',default=[],type=Path)
+    seed.add_argument('--approved-sources',type=Path,default=Path('/workspace/hanset-collector/approved_sources.json'))
+    r = commands.add_parser('run')
+    r.add_argument('--max-minutes',type=float)
+    r.add_argument('--max-requests',type=int)
+    r.add_argument('--classes')
+    r.add_argument('--dry-run',action='store_true')
+    commands.add_parser('status')
+    commands.add_parser('report').add_argument('--json',action='store_true')
+    commands.add_parser('gaps').add_argument('--venue')
+    commands.add_parser('tasks')
+    commands.add_parser('failures')
+    commands.add_parser('export-service-data').add_argument('--out',type=Path,required=True)
+    commands.add_parser('ig-stub-check')
+    return p
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
+    options = {k:v for k,v in {'data_dir':args.data_dir,'profile_path':args.profile}.items() if v is not None}
+    try:
+        settings = Settings(**options)
+        db = connect(settings.data_dir/'active.sqlite3')
+        try:
+            command = args.command
+            if command=='init': result = {'state':'initialized'}
+            elif command=='seed':
+                paths = args.csv or [p for name in ('saunas.csv','boxes.csv') if (p:=Path(__file__).resolve().parents[1]/name).is_file()]
+                result = {'seed_id':venues.seed(db,paths=paths,approved_sources=args.approved_sources,refreeze=args.refreeze)}
+            elif command=='run':
+                fetcher = Fetcher(settings,db)
+                try: result = run(fetcher,max_minutes=args.max_minutes,max_requests=args.max_requests,classes=args.classes,dry_run=args.dry_run)
+                finally: fetcher.close()
+            elif command=='status': result = status(db)
+            elif command=='report': result = report(db)
+            elif command=='gaps':
+                result = [dict(r) for r in db.execute('SELECT g.*,v.name FROM gaps g JOIN venues v USING(venue_id)') if not args.venue or args.venue in (r['name'],r['venue_id'])]
+            elif command in ('tasks','failures'): result = [dict(r) for r in db.execute('SELECT * FROM '+command)]
+            elif command=='export-service-data': result = {'files':export_service_data(db,args.out)}
+            else:
+                try: InstagramConnector().read_profile('')
+                except ConnectorPaused: result = {'state':'paused'}
+                else: result = {'state':'stub_only'}
+            print(json.dumps(sanitize_output(result),ensure_ascii=False,indent=2))
+        finally: db.close()
+    except (ValueError,OSError) as error:
+        print(json.dumps({'error':strip_pii(str(error))}))
+        return 2
+    return 0

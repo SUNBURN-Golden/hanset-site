@@ -1,0 +1,48 @@
+{
+  "id": "instagram_announcements",
+  "kind": "instagram",
+  "base_url": "https://www.instagram.com/",
+  "handle": null,
+  "fields": [
+    "opening",
+    "relocation",
+    "closure",
+    "temporary_closure",
+    "hours",
+    "price",
+    "events"
+  ],
+  "permission": {
+    "robots_reviewed_date": null,
+    "terms_note": "Collection restricted by platform robots and terms; owner decision pending. On hold, no collection authorized.",
+    "allowed_paths": [],
+    "public": true,
+    "authenticated": false,
+    "read_only": true
+  },
+  "refresh_hours": 24,
+  "pace": {
+    "concurrency": 1,
+    "gap_min_seconds": 20,
+    "gap_max_seconds": 60,
+    "daily_cap": 20,
+    "window_kst": "13:00-14:00",
+    "session": "shared Agamajung (아가마중)",
+    "stop_on_challenge": true,
+    "bypass_allowed": false,
+    "writes_allowed": false
+  },
+  "retention_days": 30,
+  "status": "on_hold",
+  "hold_reason": "shared Agamajung account check pending; collection paused by operator 2026-10-27",
+  "required": true,
+  "supported_scope": [
+    "owner-visible public announcement text; source_claim leads only"
+  ],
+  "unsupported_scope": [
+    "private content",
+    "writes",
+    "login-walled content",
+    "images"
+  ]
+}

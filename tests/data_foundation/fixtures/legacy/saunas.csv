@@ -1,0 +1,3 @@
+name,name_ko,city,district,source_url,price_source_url,website,cf_listing_url,last_verified,confidence,price_krw,drop_in_price_krw
+Example Hotel Sauna,예시 호텔 사우나,Example city,Example district,https://example.invalid/hotel,https://example.invalid/box,,,2026-10-23,high (official page read),30000,
+Example Reply Sauna,예시 회신 사우나,Example city,Example district,https://example.invalid/hotel,https://example.invalid/box,,,2026-10-23,high (venue reply),,

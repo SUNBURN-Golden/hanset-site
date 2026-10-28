@@ -1,0 +1,2 @@
+name,name_ko,city,district,source_url,price_source_url,website,cf_listing_url,last_verified,confidence,price_krw,drop_in_price_krw
+Example Box,예시 박스,Example city,Example district,https://example.invalid/hotel,https://example.invalid/box,,,2026-10-23,verified,,25000
