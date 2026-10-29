@@ -744,7 +744,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 {home_mag}
 
 <div class="slot" data-slot="kix-ticketing" hidden></div>
-<section class="sec"><div class="sec-h"><h2>See it from above.</h2><a href="/archive/">Archive</a></div>
+<section class="sec"><div class="sec-h"><h2>Floor by floor.</h2><a href="/archive/">Archive</a></div>
 <p class="muted">Floors and zones from official guides, redrawn by hand. Layouts are conceptual. May differ from the actual venue.</p>
 <div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>View</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
 <p><a class="btn btn-d" href="/archive/">See every drawing</a></p></section>'''
@@ -875,7 +875,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
         f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener">View larger ↗</a><a class="btn btn-d" href="/finder/{vs}/">Venue details</a></div></div></article>'
         for f, vs, t, st, d, sl, su in ARCHIVE)
     abody = f'''<div class="page"><h1>Venue Sketches</h1>
-<p class="lead">Floors and zones from official guides. Redrawn by hand, from above (isometric).</p>
+<p class="lead">Floors and zones from official guides. Redrawn by hand, floor by floor.</p>
 <ul><li>No photos or official maps copied or traced. Nothing drawn that the official guide doesn’t describe.</li>
 <li>Layouts are conceptual. Only floor and zone names and order follow the official guide. Position and size may differ from the actual venue.</li>
 <li>Labels in the drawings are in Korean. Tap a drawing to open it larger in a new tab (pinch to zoom).</li></ul></div>
@@ -967,14 +967,25 @@ def leak_check(dist):
 ARCHIVE_DATE = "2026.10.18"
 # (file, venue slug, title, short title, alt text, source label, source URL)
 ARCHIVE = [
-    ("archive-sisu-house", "sisu-house", "Sisu House, floor by floor", "Sisu House", "Isometric hand drawing stacking the floors from Sisu House’s official space guide (1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone) and its ritual sequence. Conceptual layout.", "sisu.house", "https://sisu.house/about"),
-    ("archive-spa-haesurang", "spa-haesurang-busan", "Spa Haesurang, floor by floor", "Spa Haesurang", "Isometric hand drawing stacking the floors from Spa Haesurang’s official amenities guide (2F lobby, 3–4F powder rooms, 4–5F locker rooms, 5F jjimjil room, 7F open-air bath). No official info for 6F. Conceptual layout.", "spahaesurang.co.kr", "https://spahaesurang.co.kr/amenities"),
-    ("archive-heosimcheong", "heosimcheong-busan", "Hurshimchung, floor by floor", "Hurshimchung (Hotel Nongshim)", "Isometric hand drawing stacking Hotel Nongshim Hurshimchung’s official floor guide (B1·B2 parking, 1F restaurant, 2F banquet, 3F jjimjil room, 4F lockers and front desk, 5F hot-spring baths). Conceptual layout.", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
-    ("archive-termeden", "termeden-icheon", "Termeden, zone by zone", "Termeden", "Isometric hand drawing gathering the zones from Termeden’s official facility guide (indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa) on one sheet. Positions are not the real layout.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
-    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "Orakai Cheonggyesan, floor by floor", "Orakai Cheonggyesan", "Isometric hand drawing stacking the B1 sauna (dry and wet saunas, several pools, walk-in body scrub) and the B2 EV charging area from Orakai Cheonggyesan Hotel’s official guide. The sauna’s interior layout is not drawn.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
-    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Isometric hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
+    ("archive-sisu-house", "sisu-house", "Sisu House, floor by floor", "Sisu House", "Hand drawing stacking the floors from Sisu House’s official space guide (1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone) and its ritual sequence. Conceptual layout.", "sisu.house", "https://sisu.house/about"),
+    ("archive-spa-haesurang", "spa-haesurang-busan", "Spa Haesurang, floor by floor", "Spa Haesurang", "Hand drawing stacking the floors from Spa Haesurang’s official amenities guide (2F lobby, 3–4F powder rooms, 4–5F locker rooms, 5F jjimjil room, 7F open-air bath). No official info for 6F. Conceptual layout.", "spahaesurang.co.kr", "https://spahaesurang.co.kr/amenities"),
+    ("archive-heosimcheong", "heosimcheong-busan", "Hurshimchung, floor by floor", "Hurshimchung (Hotel Nongshim)", "Hand drawing stacking Hotel Nongshim Hurshimchung’s official floor guide (B1·B2 parking, 1F restaurant, 2F banquet, 3F jjimjil room, 4F lockers and front desk, 5F hot-spring baths). Conceptual layout.", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
+    ("archive-termeden", "termeden-icheon", "Termeden, zone by zone", "Termeden", "Hand drawing gathering the zones from Termeden’s official facility guide (indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa) on one sheet. Positions are not the real layout.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
+    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "Orakai Cheonggyesan, floor by floor", "Orakai Cheonggyesan", "Hand drawing stacking the B1 sauna (dry and wet saunas, several pools, walk-in body scrub) and the B2 EV charging area from Orakai Cheonggyesan Hotel’s official guide. The sauna’s interior layout is not drawn.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
+    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
 ]
 ARCHIVE_BY_VENUE = {a[1]: a for a in ARCHIVE}
+
+# 2026-10-29 owner order (준태님): the venue drawings are NOT aerial views. Never call them 조감도 / aerial / bird's-eye / from above / isometric.
+VIEW_WORD_BAN = r"(?i)조감|aerial|bird[’'`]?s?[- ]?eye|from above|isometric|아이소메트릭|내려다[본보]"
+def view_word_check(dist):
+    bad = []
+    srcs = [p for p in dist.rglob("*") if p.is_file() and p.suffix in (".html", ".xml", ".txt", ".json", ".svg", ".js", ".ics")]
+    srcs += [p for p in (Path(__file__).resolve().parent.parent / "illustrations").glob("*.py")]
+    for p in srcs:
+        m = re.search(VIEW_WORD_BAN, p.read_text(errors="ignore"))
+        if m: bad.append((str(p), m.group(0)))
+    return bad
 
 def main():
     ap = argparse.ArgumentParser()
@@ -1026,6 +1037,10 @@ def main():
         "/assets/*\n  Cache-Control: public, max-age=86400\n/*.html\n  Cache-Control: public, max-age=0, must-revalidate\n")
     subset_fonts(dist)
     bad = leak_check(dist)
+    vw = view_word_check(dist)
+    for b in vw: print("VIEW-WORD CHECK FAIL:", b)
+    if vw: sys.exit(3)
+    print("view-word check OK (no 조감도 / aerial / bird's-eye / from above / isometric)")
     total = sum(p.stat().st_size for p in dist.rglob("*") if p.is_file())
     print(f"built {len(site.pages)} pages, {len(venues)} venues ({sum(v['kind_key']=='box' for v in venues)} boxes, {sum(v['kind_key']=='sauna' for v in venues)} saunas), {len(events)} events, {len(vevents)} verified-feed events, {len(creators)} creators -> {dist}  ({total/1024:.0f} KB total)")
     print(f"not published (no verified/partial content): {len(skipped)} venue rows, {len(ev_skipped)} event rows")
