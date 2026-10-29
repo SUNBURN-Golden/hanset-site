@@ -81,7 +81,7 @@ def fchk(v):
         f'<tr><th>{lab}</th>' + (f'<td>{E(d[k])}</td>' if _is_confirmed(d.get(k, "")) else '<td class="unk">Not confirmed</td>') + '</tr>'
         for k, lab in keys
     )
-    return f'<h2>Foreigner &amp; visitor access checklist</h2><table class="facts"><tbody>{rows}</tbody></table><p class="muted">From the official source only, checked {dot(v["last_verified"])}. Unstated items remain Not confirmed (확인 중) and are excluded from condition-based recommendations.</p>'
+    return f'<h2>Foreigner &amp; visitor access checklist</h2><table class="facts"><tbody>{rows}</tbody></table><p class="muted">Official source · {dot(v["last_verified"])}</p>'
 
 GUIDES = [  # (slug, title, description); page bodies are built in guides()
     ("tattoo-friendly-saunas-korea", "Tattoos and saunas in Korea", "What official pages of Korean hotel saunas and spas say about tattoos. Verified, dated, sourced."),
@@ -210,7 +210,7 @@ def vevents_section(vevents):
     if not vevents: return ""
     return (f'<section class="sec vsec" aria-labelledby="vev-h"><div class="sec-h"><h2 id="vev-h">Coming up</h2></div>'
             f'<div class="vlist">{"".join(vevent_card(e) for e in vevents)}</div>'
-            f'<p class="muted">Official pages only. Dates change. Check before you go.</p></section>')
+            f'<p class="muted">Official pages only</p></section>')
 
 # ------------------------------------------------------------------ html pieces
 CREATORS_LINK = '<a href="/creators/">Creators</a>'
@@ -407,6 +407,11 @@ def price_html(v):
     return numeric + '<div class="price price-context">' + terms + '</div>'
 
 
+def price_short(v):
+    # List cards: headline price only. Full terms stay on the venue page.
+    return (f'<div class="price"><span class="price-label">{E(v["price_label"])}:</span> <strong>{E(v["price"])}</strong></div>'
+            if v["price"] else f'<span class="unk">Price: {UNKNOWN}</span>')
+
 def venue_facts(v, preview=False):
     groups = []
     for label, rows in fact_groups(v):
@@ -438,8 +443,8 @@ def venue_contents(v, preview=False):
     actions = (f'<div class="btnrow"><a class="btn btn-d" href="/finder/{v["slug"]}/">View full details</a>'
                f'<a class="btn map-link" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map</a></div>' if preview else
                f'<a class="card-details" href="/finder/{v["slug"]}/">Details &amp; facts</a>')
-    return (f'{v_badges(v)}<h3>{title}</h3><div class="loc">{E(v["location"])}</div>{price_html(v)}'
-            f'{venue_facts(v, preview=preview)}{footer}{actions}')
+    return (f'{v_badges(v)}<h3>{title}</h3><div class="loc">{E(v["location"])}</div>{price_short(v)}'
+            + f'{footer}{actions}')
 
 def venue_card(v):
     attrs = (f'data-slug="{v["slug"]}" data-city="{v["city_key"]}" data-type="{v["kind_key"]}" data-sunday="{v["sunday"]}" data-price="{1 if v["price"] else 0}" data-cf="{1 if v["off"]["cf"] else 0}" data-hyrox="{1 if v["off"]["hyrox"] else 0}" data-sub="{v["sub"]}" data-order="{v["order"]}" data-date="{v["last_verified"].isoformat()}" data-title="{E(v["title"])}" '
@@ -561,7 +566,7 @@ def venue_map(venues):
     return (f'<section class="venue-map" aria-labelledby="map-heading"><div class="map-header"><h2 id="map-heading">Explore the map</h2><span id="map-view">All Korea</span>'
             f'{city_tabs(True)}<div class="map-legend" aria-label="Map legend">{legend}</div></div>'
             f'<div class="map-regions">{"".join(panels)}</div>'
-            '<p class="map-disclaimer">Schematic regions, not exact entrances. Pins are spaced within confirmed city/district groups. District 확인 중 pins sit off-map. Use the venue’s map link for directions.</p></section>'
+            '<p class="map-disclaimer">Schematic map · not exact locations</p></section>'
             '<div id="map-selection" class="map-selection"><div id="map-preview" aria-live="polite" aria-atomic="true"><p>Select a pin to preview.</p></div></div>' + templates)
 
 
@@ -730,7 +735,6 @@ def build(site, venues, events, today, vevents=(), creators=()):
     guide_rows = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _ in GUIDES)
     body = f'''
 <div class="home-top"><section class="hero home-hero" aria-labelledby="home-heading"><h1 id="home-heading">Can I go?</h1>
-<p class="lead">CrossFit and HYROX drop-ins, boutique saunas and hotel saunas across Korea.</p>
 <div class="hero-ctas"><a class="btn btn-ghost" href="/guides/">Visitors guide</a></div></section>
 {number_board}</div>
 {price_board}
@@ -746,7 +750,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 
 <div class="slot" data-slot="kix-ticketing" hidden></div>
 <section class="sec"><div class="sec-h"><h2>Floor by floor.</h2><a href="/archive/">Archive</a></div>
-<p class="muted">Floors and zones from official guides, redrawn by hand. Layouts are conceptual. May differ from the actual venue.</p>
+<p class="muted">Conceptual · May differ from the venue</p>
 <div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>View</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
 <p><a class="btn btn-d" href="/archive/">See every drawing</a></p></section>'''
     site.add("/", f"{BRAND_EN} — CrossFit, HYROX & Sauna Wellness Magazine in Korea", "CrossFit, HYROX, hotel and boutique saunas in Korea. A drop-in and sauna finder plus race dates. Every entry with an official source and check date.", body, "home", ("dday.js", "finder.js"))
@@ -754,7 +758,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     # ---- finder
     fbody = f'''
 <div class="finder-head"><h1>{FINDER_LABEL}</h1>
-<p class="lead">{cnt_box} CrossFit &amp; HYROX boxes · {cnt_sauna} hotel, boutique &amp; large saunas across Korea. Every entry shows its official source and check date.</p></div>
+<p class="lead"><b>{cnt_box}</b> boxes · <b>{cnt_sauna}</b> saunas</p></div>
 {explorer}'''
     site.add("/finder/", f"{FINDER_LABEL} — Korea", "CrossFit and HYROX boxes, hotel and boutique saunas in Korea. Filter by city, type, Sunday hours and confirmed prices. Every entry with a check date and source.", fbody, "finder", ("finder.js",))
 
@@ -806,7 +810,6 @@ def build(site, venues, events, today, vevents=(), creators=()):
         next_html = f'<p class="next-venue"><a href="/finder/{nxt["slug"]}/">{next_label}</a></p>'
         body = f'''<div class="detail"><p class="crumb"><a href="/finder/">{FINDER_LABEL}</a> › {E(v["city_ko"])}</p>
 {v_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{adnote}{stale}
-<p class="lead">{E(v["summary"])}</p>
 <div class="btnrow detail-actions">{"".join(links)}</div>
 <section class="detail-glance" aria-labelledby="glance-heading"><h2 id="glance-heading">At a glance</h2>
 <div class="glance-grid"><div><h3>Price</h3>{price_html(v)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v)}</div>' for label, values in fact_groups(v))}</div>
@@ -814,7 +817,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{offrows}</tbody></table>
 {TW.render(TWIN.get(v['slug'], []))}{tips}{unv}{fchk(v)}{arch_blk}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong></p><p>Source: {" · ".join(srcs)}</p>
-<p>Something's off? Tell us via <a href="/corrections/">Corrections</a>. Prices and closing days change.</p></div>
+<p><a href="/corrections/">Report a correction</a></p></div>
 {next_html}
 <div class="btnrow">{"".join(links)}</div>{safety}</div>'''
         site.add(f"/finder/{v['slug']}/", f"{v['title']}", clip(f"{v['title']} — {v['summary']}"), body, "finder")
@@ -822,8 +825,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     # ---- events
     cards = "".join(event_card(e, today) for e in upcoming)
     if not upcoming: cards = '<div class="empty"><p>No officially confirmed races right now.</p><p class="muted">We add them as they’re confirmed.</p></div>'
-    ebody = f'''<div class="page"><h1>Event Calendar</h1>
-<p class="lead">Official dates only. Straight from the organizers.</p></div>
+    ebody = f'''<div class="page"><h1>Event Calendar</h1></div>
 <div class="ev">{cards}</div>
 {vevents_section(vevents)}
 <div class="note">Races listed only on aggregator sites wait until the organizer confirms. Fees appear only when read on the official page. <a href="/events.ics">Download all dates (.ics)</a></div>'''
@@ -831,9 +833,9 @@ def build(site, venues, events, today, vevents=(), creators=()):
 
     # ---- creators (verified feed; page only when there is data)
     if creators:
-        cbody = (f'<div class="page"><h1>Creators</h1><p class="lead">People worth following. Training, racing, sauna.</p></div>'
+        cbody = (f'<div class="page"><h1>Creators</h1></div>'
                  f'<section class="sec vsec" aria-label="Creators"><div class="vlist">{"".join(creator_card(c) for c in creators)}</div>'
-                 f'<p class="muted">Public profiles only. Each one checked on the date shown.</p></section>')
+                 f'<p class="muted">Public profiles · dated</p></section>')
         site.add("/creators/", "Creators", "CrossFit, HYROX, running and sauna creators in Korea. Public profiles, checked by date.", cbody, "creators")
 
     # ---- HYROX feature
@@ -865,7 +867,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     mcards = "".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3>'
                      f'<div class="loc">{E(a["deck_en"])}</div><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))}{"" if a.get("lang") == "en" else " · Article in Korean"}</div></article>' for a in arts)
     if arts: site.add("/magazine/", "Magazine", "Wellness reports from HANSET editors. Research and official sources, made easy to read.",
-             f'<div class="page"><h1>Magazine</h1><p class="lead">Research, made readable. Every article cited.</p><p class="muted">Articles are currently in Korean.</p></div><div class="grid">{mcards}</div>', "magazine")
+             f'<div class="page"><h1>Magazine</h1><p class="muted">Articles are currently in Korean.</p></div><div class="grid">{mcards}</div>', "magazine")
 
     # ---- archive (손그림 아카이브)
     items = "".join(
@@ -876,12 +878,9 @@ def build(site, venues, events, today, vevents=(), creators=()):
         f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener">View larger ↗</a><a class="btn btn-d" href="/finder/{vs}/">Venue details</a></div></div></article>'
         for f, vs, t, st, d, sl, su in ARCHIVE)
     abody = f'''<div class="page"><h1>Venue Sketches</h1>
-<p class="lead">Floors and zones from official guides. Redrawn by hand, floor by floor.</p>
-<ul><li>No photos or official maps copied or traced. Nothing drawn that the official guide doesn’t describe.</li>
-<li>Layouts are conceptual. Only floor and zone names and order follow the official guide. Position and size may differ from the actual venue.</li>
-<li>Labels in the drawings are in Korean. Tap a drawing to open it larger in a new tab (pinch to zoom).</li></ul></div>
+<p class="muted">Conceptual · May differ from the venue · Tap to enlarge</p></div>
 <div class="arcgrid">{items}</div>
-<div class="page"><p class="muted">More drawings as official floor and zone guides are published in text. {SAFETY}</p></div>'''
+<div class="page"><p class="muted">{SAFETY}</p></div>'''
     site.add("/archive/", "Venue Sketches", "Hand-drawn sketches of floors and zones, based on official venue guides (conceptual layouts). May differ from the actual venue. Every drawing with a source and check date.", abody, "guide")
 
     # ---- static pages
@@ -991,6 +990,20 @@ def view_word_check(dist):
 TWIN = TW.load(ROOT / "content/twin_catalog.json")
 TWIN_RAW = "/workspace/hanset-data/twin/export/public_catalog.json"
 
+# 2026-10-29 owner order (준태님): people hate reading. Key pages must not carry long paragraphs.
+LONG_P_LIMIT = 140
+LONG_P_KEY = ("index.html", "finder/index.html", "archive/index.html", "events/index.html", "guides/index.html")
+def long_text_check(dist):
+    bad = []
+    for p in dist.rglob("index.html"):
+        rel = str(p.relative_to(dist))
+        if not (rel in LONG_P_KEY or rel.startswith("finder/")): continue
+        t = re.sub(r"(?s)<details.*?</details>|<footer.*?</footer>", "", p.read_text(encoding="utf-8"))
+        for para in re.findall(r"(?s)<p(?:\s[^>]*)?>(.*?)</p>", t):
+            txt = html.unescape(re.sub(r"<[^>]+>", "", para)).strip()
+            if len(txt) > LONG_P_LIMIT and txt != html.unescape(SAFETY): bad.append((rel, len(txt), txt[:60]))
+    return bad
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--release", action="store_true"); ap.add_argument("--ads"); ap.add_argument("--today"); ap.add_argument("--out", default=str(DIST))
@@ -1041,6 +1054,10 @@ def main():
         "/assets/*\n  Cache-Control: public, max-age=86400\n/*.html\n  Cache-Control: public, max-age=0, must-revalidate\n")
     subset_fonts(dist)
     bad = leak_check(dist)
+    lt = long_text_check(dist)
+    for b in lt: print("LONG-TEXT WARN:", b)
+    if lt: sys.exit(5)
+    print(f"long-text check OK (no paragraph over {LONG_P_LIMIT} chars on key pages)")
     tw = TW.check(dist, TWIN_RAW, TWIN)
     for b in tw: print("TWIN CHECK FAIL:", b)
     if tw: sys.exit(4)
