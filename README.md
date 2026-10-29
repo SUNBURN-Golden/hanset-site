@@ -15,7 +15,7 @@ site/content/venues.json events.json   Korean copy for the ONLY entries cleared 
 site/content/pages/*.html         about / faq / guide / privacy / corrections fragments
 site/content/articles/            magazine articles (markdown)
 site/static/{css,js,img,fonts,root}   assets; root/* is copied to the dist root (Search Console verification file)
-illustrations/                    hand-drawn style SVG/PNG generators (make_all.py) + outputs
+illustrations/                    hand-drawn style SVG/PNG generators (make_all.py, make_archive.py, make_bird.py) + outputs
 articles/                         article research/drafts (no Gemini conversation links)
 ```
 
@@ -49,6 +49,7 @@ from the static site's build requirements.
 1. Home `/` (magazine home; illustration section at the bottom, mobile compact list)
 2. Finder `/finder/` (filters, URL state, big-spa category filter)
 3. Venue detail `/finder/<slug>/` (확인일 + 출처 block, safety line)
+4. `/archive/` (hand-drawn archive gallery, tap-to-enlarge)
 
 ## Data flow (for context)
 CSV (last_verified, source, confidence) → `venues.json`/`events.json` copy → release build → deploy by operations bot. The builder publishes a box only if confidence is verified/partial, a sauna only if read on an official page, an event only if organizer/official verified.
