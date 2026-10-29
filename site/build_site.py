@@ -112,7 +112,7 @@ def fchk(v):
         f'<tr><th>{lab}</th>' + (f'<td>{E(d[k])}</td>' if _is_confirmed(d.get(k, "")) else '<td class="unk">Not confirmed</td>') + '</tr>'
         for k, lab in keys
     )
-    return f'<h2>Foreigner &amp; visitor access checklist</h2><table class="facts"><tbody>{rows}</tbody></table><p class="muted">From the official source only, checked {dot(v["last_verified"])}. Unstated items remain Not confirmed (확인 중) and are excluded from condition-based recommendations.</p>'
+    return f'<h2>Foreigner &amp; visitor access checklist</h2><table class="facts"><tbody>{rows}</tbody></table><p class="muted">Official source · {dot(v["last_verified"])}</p>'
 
 GUIDES = [  # (slug, title, description); page bodies are built in guides()
     ("tattoo-friendly-saunas-korea", "Tattoos and saunas in Korea", "What official pages of Korean hotel saunas and spas say about tattoos. Verified, dated, sourced."),
@@ -251,7 +251,7 @@ def vevents_section(vevents):
     if not vevents: return ""
     return (f'<section class="sec vsec" aria-labelledby="vev-h"><div class="sec-h"><h2 id="vev-h">Coming up</h2></div>'
             f'<div class="vlist">{"".join(vevent_card(e) for e in vevents)}</div>'
-            f'<p class="muted">Official pages only. Dates change. Check before you go.</p></section>')
+            f'<p class="muted">Official pages only</p></section>')
 
 # ------------------------------------------------------------------ html pieces
 CREATORS_LINK = '<a href="/creators/">Creators</a>'
@@ -440,6 +440,11 @@ def price_html(v):
     return numeric + '<div class="price price-context">' + terms + '</div>'
 
 
+def price_short(v):
+    # List cards: headline price only. Full terms stay on the venue page.
+    return (f'<div class="price"><span class="price-label">{E(v["price_label"])}:</span> <strong>{E(v["price"])}</strong></div>'
+            if v["price"] else f'<span class="unk">Price: {UNKNOWN}</span>')
+
 def venue_facts(v, preview=False):
     groups = []
     for label, rows in fact_groups(v):
@@ -471,8 +476,8 @@ def venue_contents(v, preview=False):
     actions = (f'<div class="btnrow"><a class="btn btn-d" href="/finder/{v["slug"]}/">View full details →</a>'
                f'<a class="btn map-link" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map ↗</a></div>' if preview else
                f'<a class="card-details" href="/finder/{v["slug"]}/">Details &amp; facts →</a>')
-    return (f'{v_badges(v)}<h3>{title}</h3><div class="loc">{E(v["location"])}</div>{price_html(v)}'
-            f'{venue_facts(v, preview=preview)}{footer}{actions}')
+    return (f'{v_badges(v)}<h3>{title}</h3><div class="loc">{E(v["location"])}</div>{price_short(v)}'
+            + f'{footer}{actions}')
 
 def venue_card(v):
     attrs = (f'data-slug="{v["slug"]}" data-city="{v["city_key"]}" data-type="{v["kind_key"]}" data-sunday="{v["sunday"]}" data-price="{1 if v["price"] else 0}" data-cf="{1 if v["off"]["cf"] else 0}" data-hyrox="{1 if v["off"]["hyrox"] else 0}" data-sub="{v["sub"]}" data-order="{v["order"]}" data-date="{v["last_verified"].isoformat()}" data-title="{E(v["title"])}" '
@@ -596,7 +601,7 @@ def venue_map(venues):
     return (f'<section class="venue-map" aria-labelledby="map-heading"><div class="map-header"><h2 id="map-heading">Explore the map <span id="map-view">All Korea</span></h2>'
             f'{city_tabs(True)}<div class="map-legend" aria-label="Map legend">{legend}</div></div>'
             f'<div class="map-regions">{"".join(panels)}</div>'
-            '<p class="map-disclaimer">Schematic regions, not exact entrances. Pins are spaced within confirmed city/district groups. District 확인 중 pins sit off-map. Use the venue’s map link for directions.</p></section>'
+            '<p class="map-disclaimer">Schematic map · not exact locations</p></section>'
             '<div id="map-selection" class="map-selection"><div id="map-preview" aria-live="polite" aria-atomic="true"><p>Select a pin to preview.</p></div></div>' + templates)
 
 
@@ -726,7 +731,6 @@ def build(site, venues, events, today, vevents=(), creators=()):
     guide_rows = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _ in GUIDES)
     body = f'''
 <section class="hero home-hero"><span class="home-kicker">Wellness in Korea, for visitors</span><h1>Can I go?</h1>
-<p class="lead">CrossFit and HYROX drop-ins, boutique saunas and hotel saunas across Korea. Tattoo rules, non-guest access and drop-in, from each official page.</p>
 <div class="hero-ctas"><a class="btn btn-ghost" href="/guides/">Visitors guide</a></div></section>
 
 <section class="sec home-results"><h2>Explore {len(venues)} boxes &amp; saunas</h2>
@@ -741,8 +745,8 @@ def build(site, venues, events, today, vevents=(), creators=()):
 {home_mag}
 
 <div class="slot" data-slot="kix-ticketing" hidden></div>
-<section class="sec"><div class="sec-h"><h2>See it from above.</h2><a href="/archive/">Archive ›</a></div>
-<p class="muted">Floors and zones from official guides, redrawn by hand. Layouts are conceptual. May differ from the actual venue.</p>
+<section class="sec"><div class="sec-h"><h2>Floor by floor.</h2><a href="/archive/">Archive ›</a></div>
+<p class="muted">Conceptual · May differ from the venue</p>
 <div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>View ›</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
 <p><a class="btn btn-d" href="/archive/">See every drawing ›</a></p></section>'''
     site.add("/", f"{BRAND_EN} — CrossFit, HYROX & Sauna Wellness Magazine in Korea", "CrossFit, HYROX, hotel and boutique saunas in Korea. A drop-in and sauna finder plus race dates. Every entry with an official source and check date.", body, "home", ("dday.js", "finder.js"))
@@ -750,7 +754,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     # ---- finder
     fbody = f'''
 <div class="finder-head"><h1>{FINDER_LABEL}</h1>
-<p class="lead">{cnt_box} CrossFit &amp; HYROX boxes · {cnt_sauna} hotel, boutique &amp; large saunas across Korea. Every entry shows its official source and check date.</p></div>
+<p class="lead"><b>{cnt_box}</b> boxes · <b>{cnt_sauna}</b> saunas</p></div>
 {explorer}'''
     site.add("/finder/", f"{FINDER_LABEL} — Korea", "CrossFit and HYROX boxes, hotel and boutique saunas in Korea. Filter by city, type, Sunday hours and confirmed prices. Every entry with a check date and source.", fbody, "finder", ("finder.js",))
 
@@ -789,8 +793,8 @@ def build(site, venues, events, today, vevents=(), creators=()):
         if v["kind_key"] == "box" and v["sunday"] == "unk" and any("일요일" in k for k, _ in v["facts_ko"]): sunrow = ""
         _ar = ARCHIVE_BY_VENUE.get(v["slug"])
         _ae = AERIAL_BY_VENUE.get(v["slug"])
-        aer_blk = (f'<section class="archbox aerbox" id="aerial"><h2>Bird’s-eye drawing</h2><a class="illc" href="/archive/#aerial-{v["slug"]}"><picture><img src="/assets/img/aerial/{_ae[0]}-thumb.webp" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ae[2])}"></picture>'
-                   f'<span><b>{E(v["title"])}</b><em>From above · Tap to view ›</em></span></a></section>') if _ae else ""
+        aer_blk = (f'<!--aerial--><section class="archbox aerbox" id="aerial"><h2>Bird’s-eye drawing</h2><a class="illc" href="/archive/#aerial-{v["slug"]}"><picture><img src="/assets/img/aerial/{_ae[0]}-thumb.webp" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ae[2])}"></picture>'
+                   f'<span><b>{E(v["title"])}</b><em>From above · Tap to view ›</em></span></a></section><!--/aerial-->') if _ae else ""
         arch_blk = (f'<section class="archbox"><h2>Hand-drawn sketch</h2><a class="illc" href="/archive/#{v["slug"]}"><picture><img src="/assets/img/archive/{_ar[0]}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ar[4])}"></picture>'
                     f'<span><b>{E(_ar[2])}</b><em>Hand-drawn from the official guide · Tap to view ›</em></span></a></section>') if _ar else ""
         city_group = by_city.get(v["city_key"], [])
@@ -805,7 +809,6 @@ def build(site, venues, events, today, vevents=(), creators=()):
         next_html = f'<p class="next-venue"><a href="/finder/{nxt["slug"]}/">{next_label}</a></p>'
         body = f'''<div class="detail"><p class="crumb"><a href="/finder/">{FINDER_LABEL}</a> › {E(v["city_ko"])}</p>
 {v_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{adnote}{stale}
-<p class="lead">{E(v["summary"])}</p>
 <div class="btnrow detail-actions">{"".join(links)}</div>
 <section class="detail-glance" aria-labelledby="glance-heading"><h2 id="glance-heading">At a glance</h2>
 <div class="glance-grid"><div><h3>Price</h3>{price_html(v)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v)}</div>' for label, values in fact_groups(v))}</div>
@@ -813,7 +816,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{closed_row(v)}{offrows}</tbody></table>
 {tips}{unv}{fchk(v)}{aer_blk}{arch_blk}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong></p><p>Source: {" · ".join(srcs)}</p>
-<p>Something's off? Tell us via <a href="/corrections/">Corrections</a>. Prices and closing days change.</p></div>
+<p><a href="/corrections/">Report a correction</a></p></div>
 {next_html}
 <div class="btnrow">{"".join(links)}</div>{safety}</div>'''
         site.add(f"/finder/{v['slug']}/", f"{v['title']}", clip(f"{v['title']} — {v['summary']}"), body, "finder")
@@ -821,8 +824,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     # ---- events
     cards = "".join(event_card(e, today) for e in upcoming)
     if not upcoming: cards = '<div class="empty"><p>No officially confirmed races right now.</p><p class="muted">We add them as they’re confirmed.</p></div>'
-    ebody = f'''<div class="page"><h1>Event Calendar</h1>
-<p class="lead">Official dates only. Straight from the organizers.</p></div>
+    ebody = f'''<div class="page"><h1>Event Calendar</h1></div>
 <div class="ev">{cards}</div>
 {vevents_section(vevents)}
 <div class="note">Races listed only on aggregator sites wait until the organizer confirms. Fees appear only when read on the official page. <a href="/events.ics">Download all dates (.ics)</a></div>'''
@@ -830,9 +832,9 @@ def build(site, venues, events, today, vevents=(), creators=()):
 
     # ---- creators (verified feed; page only when there is data)
     if creators:
-        cbody = (f'<div class="page"><h1>Creators</h1><p class="lead">People worth following. Training, racing, sauna.</p></div>'
+        cbody = (f'<div class="page"><h1>Creators</h1></div>'
                  f'<section class="sec vsec" aria-label="Creators"><div class="vlist">{"".join(creator_card(c) for c in creators)}</div>'
-                 f'<p class="muted">Public profiles only. Each one checked on the date shown.</p></section>')
+                 f'<p class="muted">Public profiles · dated</p></section>')
         site.add("/creators/", "Creators", "CrossFit, HYROX, running and sauna creators in Korea. Public profiles, checked by date.", cbody, "creators")
 
     # ---- HYROX feature
@@ -864,7 +866,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     mcards = "".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3>'
                      f'<div class="loc">{E(a["deck_en"])}</div><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))}{"" if a.get("lang") == "en" else " · Article in Korean"}</div></article>' for a in arts)
     if arts: site.add("/magazine/", "Magazine", "Wellness reports from HANSET editors. Research and official sources, made easy to read.",
-             f'<div class="page"><h1>Magazine</h1><p class="lead">Research, made readable. Every article cited.</p><p class="muted">Articles are currently in Korean.</p></div><div class="grid">{mcards}</div>', "magazine")
+             f'<div class="page"><h1>Magazine</h1><p class="muted">Articles are currently in Korean.</p></div><div class="grid">{mcards}</div>', "magazine")
 
     # ---- archive (손그림 아카이브)
     items = "".join(
@@ -882,15 +884,12 @@ def build(site, venues, events, today, vevents=(), creators=()):
         f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/aerial/{f}.svg" target="_blank" rel="noopener">View larger ↗</a><a class="btn btn-d" href="/finder/{vs}/">Venue details</a></div></div></article>'
         for f, vs, d in AERIAL)
     abody = f'''<div class="page"><h1>Venue Sketches</h1>
-<p class="lead">Floors and zones from official guides. Redrawn by hand, from above (isometric).</p>
-<ul><li>No photos or official maps copied or traced. Nothing drawn that the official guide doesn’t describe.</li>
-<li>Layouts are conceptual. Only floor and zone names and order follow the official guide. Position and size may differ from the actual venue.</li>
-<li>Labels in the drawings are in Korean. Tap a drawing to open it larger in a new tab (pinch to zoom).</li></ul></div>
-<div class="page"><h2 id="aerial">Bird’s-eye drawings</h2><p class="lead">Each venue seen from above, drawn by hand.</p></div>
-<div class="arcgrid">{aitems}</div>
+<p class="muted">Conceptual · May differ from the venue · Tap to enlarge</p></div>
+<!--aerial--><div class="page"><h2 id="aerial">Bird’s-eye drawings</h2><p class="lead">Each venue seen from above, drawn by hand.</p></div>
+<div class="arcgrid">{aitems}</div><!--/aerial-->
 <div class="page"><h2 id="sketches">Floor-by-floor sketches</h2></div>
 <div class="arcgrid">{items}</div>
-<div class="page"><p class="muted">More drawings as official floor and zone guides are published in text. {SAFETY}</p></div>'''
+<div class="page"><p class="muted">{SAFETY}</p></div>'''
     site.add("/archive/", "Venue Sketches", "Hand-drawn sketches of floors and zones, based on official venue guides (conceptual layouts). May differ from the actual venue. Every drawing with a source and check date.", abody, "guide")
 
     # ---- static pages
@@ -974,12 +973,12 @@ def leak_check(dist):
 ARCHIVE_DATE = "2026.10.18"
 # (file, venue slug, title, short title, alt text, source label, source URL)
 ARCHIVE = [
-    ("archive-sisu-house", "sisu-house", "Sisu House, floor by floor", "Sisu House", "Isometric hand drawing stacking the floors from Sisu House’s official space guide (1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone) and its ritual sequence. Conceptual layout.", "sisu.house", "https://sisu.house/about"),
-    ("archive-spa-haesurang", "spa-haesurang-busan", "Spa Haesurang, floor by floor", "Spa Haesurang", "Isometric hand drawing stacking the floors from Spa Haesurang’s official amenities guide (2F lobby, 3–4F powder rooms, 4–5F locker rooms, 5F jjimjil room, 7F open-air bath). No official info for 6F. Conceptual layout.", "spahaesurang.co.kr", "https://spahaesurang.co.kr/amenities"),
-    ("archive-heosimcheong", "heosimcheong-busan", "Hurshimchung, floor by floor", "Hurshimchung (Hotel Nongshim)", "Isometric hand drawing stacking Hotel Nongshim Hurshimchung’s official floor guide (B1·B2 parking, 1F restaurant, 2F banquet, 3F jjimjil room, 4F lockers and front desk, 5F hot-spring baths). Conceptual layout.", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
-    ("archive-termeden", "termeden-icheon", "Termeden, zone by zone", "Termeden", "Isometric hand drawing gathering the zones from Termeden’s official facility guide (indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa) on one sheet. Positions are not the real layout.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
-    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "Orakai Cheonggyesan, floor by floor", "Orakai Cheonggyesan", "Isometric hand drawing stacking the B1 sauna (dry and wet saunas, several pools, walk-in body scrub) and the B2 EV charging area from Orakai Cheonggyesan Hotel’s official guide. The sauna’s interior layout is not drawn.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
-    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Isometric hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
+    ("archive-sisu-house", "sisu-house", "Sisu House, floor by floor", "Sisu House", "Hand drawing stacking the floors from Sisu House’s official space guide (1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone) and its ritual sequence. Conceptual layout.", "sisu.house", "https://sisu.house/about"),
+    ("archive-spa-haesurang", "spa-haesurang-busan", "Spa Haesurang, floor by floor", "Spa Haesurang", "Hand drawing stacking the floors from Spa Haesurang’s official amenities guide (2F lobby, 3–4F powder rooms, 4–5F locker rooms, 5F jjimjil room, 7F open-air bath). No official info for 6F. Conceptual layout.", "spahaesurang.co.kr", "https://spahaesurang.co.kr/amenities"),
+    ("archive-heosimcheong", "heosimcheong-busan", "Hurshimchung, floor by floor", "Hurshimchung (Hotel Nongshim)", "Hand drawing stacking Hotel Nongshim Hurshimchung’s official floor guide (B1·B2 parking, 1F restaurant, 2F banquet, 3F jjimjil room, 4F lockers and front desk, 5F hot-spring baths). Conceptual layout.", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
+    ("archive-termeden", "termeden-icheon", "Termeden, zone by zone", "Termeden", "Hand drawing gathering the zones from Termeden’s official facility guide (indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa) on one sheet. Positions are not the real layout.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
+    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "Orakai Cheonggyesan, floor by floor", "Orakai Cheonggyesan", "Hand drawing stacking the B1 sauna (dry and wet saunas, several pools, walk-in body scrub) and the B2 EV charging area from Orakai Cheonggyesan Hotel’s official guide. The sauna’s interior layout is not drawn.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
+    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
 ]
 ARCHIVE_BY_VENUE = {a[1]: a for a in ARCHIVE}
 # 조감도 손그림 (위에서 내려다본 평면). illustrations/make_aerial.py
@@ -993,6 +992,44 @@ AERIAL = [
 ]
 AERIAL_BY_VENUE = {a[1]: a for a in AERIAL}
 
+
+# 2026-10-29 owner order (준태님): the OLD floor-stacking venue sketches (archive-*) are NOT aerial views.
+# Never call them 조감도 / aerial / bird's-eye / from above / isometric.
+# 2026-10-30: the NEW true top-down drawings (/assets/img/aerial/, illustrations/*aerial*) ARE 조감도 and may use those words,
+# but only inside <!--aerial-->...<!--/aerial--> blocks in HTML and in their own asset/source files.
+VIEW_WORD_BAN = r"(?i)조감|aerial|bird[’'`]?s?[- ]?eye|from above|isometric|아이소메트릭|내려다[본보]"
+AERIAL_BLOCK = re.compile(r"(?s)<!--aerial-->.*?<!--/aerial-->")
+def _aerial_allowed(p):
+    s = str(p).replace("\\", "/")
+    return "/assets/img/aerial/" in s or "/img/aerial/" in s or Path(s).name.startswith(("aerial-", "make_aerial"))
+def view_word_scan(path, text):
+    """Return the banned word found, or None. Aerial assets pass; aerial HTML blocks are stripped first."""
+    if _aerial_allowed(path): return None
+    m = re.search(VIEW_WORD_BAN, AERIAL_BLOCK.sub("", text))
+    return m.group(0) if m else None
+def view_word_check(dist):
+    bad = []
+    ill = Path(__file__).resolve().parent.parent / "illustrations"
+    srcs = [p for p in dist.rglob("*") if p.is_file() and p.suffix in (".html", ".xml", ".txt", ".json", ".svg", ".js", ".ics")]
+    srcs += list(ill.glob("*.py")) + list(ill.glob("svg/*.svg"))
+    for p in srcs:
+        w = view_word_scan(p, p.read_text(errors="ignore"))
+        if w: bad.append((str(p), w))
+    return bad
+
+# 2026-10-29 owner order (준태님): people hate reading. Key pages must not carry long paragraphs.
+LONG_P_LIMIT = 140
+LONG_P_KEY = ("index.html", "finder/index.html", "archive/index.html", "events/index.html", "guides/index.html")
+def long_text_check(dist):
+    bad = []
+    for p in dist.rglob("index.html"):
+        rel = str(p.relative_to(dist))
+        if not (rel in LONG_P_KEY or rel.startswith("finder/")): continue
+        t = re.sub(r"(?s)<details.*?</details>|<footer.*?</footer>", "", p.read_text(encoding="utf-8"))
+        for para in re.findall(r"(?s)<p(?:\s[^>]*)?>(.*?)</p>", t):
+            txt = html.unescape(re.sub(r"<[^>]+>", "", para)).strip()
+            if len(txt) > LONG_P_LIMIT and txt != html.unescape(SAFETY): bad.append((rel, len(txt), txt[:60]))
+    return bad
 
 def main():
     ap = argparse.ArgumentParser()
@@ -1032,6 +1069,14 @@ def main():
         "/assets/*\n  Cache-Control: public, max-age=86400\n/*.html\n  Cache-Control: public, max-age=0, must-revalidate\n")
     subset_fonts(dist)
     bad = leak_check(dist)
+    lt = long_text_check(dist)
+    for b in lt: print("LONG-TEXT WARN:", b)
+    if lt: sys.exit(5)
+    print(f"long-text check OK (no paragraph over {LONG_P_LIMIT} chars on key pages)")
+    vw = view_word_check(dist)
+    for b in vw: print("VIEW-WORD CHECK FAIL:", b)
+    if vw: sys.exit(3)
+    print("view-word check OK (old sketches: no 조감도 / aerial / bird's-eye / from above / isometric; aerial drawings allowlisted)")
     total = sum(p.stat().st_size for p in dist.rglob("*") if p.is_file())
     print(f"built {len(site.pages)} pages, {len(venues)} venues ({sum(v['kind_key']=='box' for v in venues)} boxes, {sum(v['kind_key']=='sauna' for v in venues)} saunas), {len(events)} events, {len(vevents)} verified-feed events, {len(creators)} creators -> {dist}  ({total/1024:.0f} KB total)")
     print(f"not published (no verified/partial content): {len(skipped)} venue rows, {len(ev_skipped)} event rows")
