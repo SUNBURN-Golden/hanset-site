@@ -31,6 +31,12 @@ class Active:
         raw = deterministic_id(url, fetched_at)
         self.db.execute("INSERT INTO raw_documents(raw_id,url,canonical_url,domain,fetched_at,http_status,content_hash,outcome) VALUES (?,?,?,?,?,200,?, 'ok')",
                         (raw, url, url, 'example', fetched_at, deterministic_id('h', fetched_at, obs)))
+        from html import escape
+        title = self.db.execute('SELECT name FROM venues WHERE venue_key=?', (venue_key,)).fetchone()
+        blob = self.path.parent / (raw + '.html')
+        blob.write_text('<title>' + escape(title[0] if title else 'Example Page') + '</title><main>' +
+                        ''.join('<p>' + escape(o[3]) + '</p>' for o in obs) + '</main>')
+        self.db.execute('UPDATE raw_documents SET blob_path=?, content_type=? WHERE raw_id=?', (str(blob), 'text/html', raw))
         for i, (field, value, label, quote) in enumerate(obs):
             self.db.execute('''INSERT INTO observations(obs_id,venue_key,field,value_json,value_text,value_hash,label_status,source_url,source_type,quote,locator,raw_id,observed_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''', (deterministic_id(raw, i), venue_key, field, json.dumps(value), str(value), deterministic_id(value),
@@ -238,7 +244,7 @@ def test_open_today_ignores_maintenance_flagged_hours(env):
     a.doc('https://allday-demo.example', '2026-10-01T09:00:00+09:00',
           [('hours', {'hours': '24_hours'}, 'fact', 'open 24 hours')], 'allday::')
     assert run()[1] == 'ok'
-    assert twin.execute("SELECT count(*) FROM quality_issues WHERE check_id='maintenance_window_as_hours' AND state='open'").fetchone()[0] == 1
+    assert twin.execute("SELECT count(*) FROM candidates WHERE verdict_reason='maintenance_window'").fetchone()[0] == 1
     ans = {x['name']: x['criteria']['open_today'] for x in q_rapid_cold_foreigner_day_pass(twin, date(2026, 10, 27))}
     assert ans['Sauna Maint Demo'] == 'unverified'  # flagged hours are the only hours -> ignored
     assert ans['Sauna Allday Demo'] == 'open'       # explicit 24h hours count

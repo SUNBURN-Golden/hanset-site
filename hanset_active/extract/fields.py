@@ -1,7 +1,7 @@
 """Explicit bilingual field rules. Offsets refer to sanitized input text."""
 import re
 from ..util.pii import strip_pii
-VERSION = '1.2.0'
+VERSION = '1.3.0'
 NAME = 'fields'
 
 # A sentence that explicitly says a fact is unconfirmed/unlisted yields nothing at all:
@@ -34,6 +34,11 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
     results = []
     def emit(field, value, match, unit=None, ambiguous=False):
         start,end = match.span()
+        if field == 'hours':
+            sentence_start = max(text.rfind(c, 0, start) for c in '\n.!?') + 1
+            ends = [pos for c in '\n.!?' if (pos := text.find(c, end)) >= 0]
+            if re.search(r'maintenance|점검|정기\s*청소|cleaning|청소\s*시간', text[sentence_start:min(ends) if ends else len(text)], re.I):
+                return
         line_start=text.rfind('\n',0,start)+1
         line_end=text.find('\n',end)
         evidence_start=max(line_start,start-50)
@@ -45,7 +50,7 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
             rule_version=VERSION,extractor_version=VERSION,
             ambiguous=ambiguous or uncertain or (ocr_confidence is not None and ocr_confidence<60)))
     # Work per line/sentence to keep scopes and negations local.
-    for block in re.finditer(r'(?:[^\n.!?]|(?<=\d)\.(?=\d))+',text):
+    for block in re.finditer(r'(?:[^\n.!?]|(?<=\d)\.(?=\d)|\.(?=[A-Za-z_-]))+',text):
         s=block[0]
         if _UNCONFIRMED.search(s):
             continue  # "Not confirmed"/"미확인" text must never produce a value
@@ -97,12 +102,22 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
         def bath(tok,m):
             if not re.search(r'^\s*(?:없|미운영|not available)',s[m.end():],re.I) and not re.search(r'\bno\s*$',s[:m.start()],re.I):
                 baths.append((tok,m))
-        for m in matches(r'건식|습식|온탕|냉탕|열탕|스팀|한증막|아이스배스|dry sauna|wet sauna|steam|hot bath|cold bath|ice bath|cold plunge'):
-            bath(_BATH_TOKEN.get(m[0].lower(),m[0].lower()),m)
-        for m in matches(r'\b(?:dry|wet)\s*(?:,|and|&|/|\+|·)\s*(?:dry|wet)\s*saunas?\b'):  # "dry and wet saunas"
+        for m in matches(r'건식|습식|온탕|냉탕|열탕|스팀|한증막|아이스배스|(?<![\w.\-_])(?:dry saunas?|wet saunas?|steam|hot baths?|cold baths?|ice baths?|cold plunge)(?![\w\-_])'):
+            token = m[0].lower().rstrip('s')
+            if token == 'hot bath' and re.search(r'\bvery[- ]$', s[:m.start()], re.I):
+                bath('열탕', m)
+            else:
+                bath(_BATH_TOKEN.get(token,m[0].lower()),m)
+        for m in matches(r'(?<![\w.\-_])saunas?\s*\(\s*(?:dry|wet)\s*(?:\+|and|/)\s*(?:dry|wet)\s*\)'):
+            if re.search(r'\bdry\b', m[0], re.I) and re.search(r'\bwet\b', m[0], re.I):
+                bath('건식',m); bath('습식',m)
+        for m in matches(r'(?<![\w.\-_])(?:dry|wet)\s*(?:,|and|&|/|\+|·)\s*(?:dry|wet)\s*saunas?\b'):  # "dry and wet saunas"
             bath('건식',m); bath('습식',m)
-        for m in matches(r'\b(?:(?:very[- ])?hot|cold)\s*(?:/|&|,|or|and)\s*(?:(?:very[- ])?hot|cold)(?:\s*(?:/|&|,|or|and)\s*(?:(?:very[- ])?hot|cold))*\s*baths?\b'):
-            if re.search(r'cold',m[0],re.I): bath('냉탕',m)  # "hot/cold baths": the cold side is explicit
+        for m in matches(r'(?<![\w.\-_])(?:(?:very[- ])?hot|cold)\s*(?:/|&|,|or|and)\s*(?:(?:very[- ])?hot|cold)(?:\s*(?:/|&|,|or|and)\s*(?:(?:very[- ])?hot|cold))*\s*baths?\b'):
+            sides = re.findall(r'very[- ]hot|hot|cold', m[0], re.I)
+            if any(x.lower() == 'hot' for x in sides): bath('온탕',m)
+            if any(x.lower().startswith('very') for x in sides): bath('열탕',m)
+            if 'cold' in [x.lower() for x in sides]: bath('냉탕',m)  # "hot/cold baths": the cold side is explicit
         if re.search(r'\b(?:baths?|tubs?|pools?)\b|탕',s,re.I):  # "Four hot baths, one cold" -- cold named next to a bath noun
             for m in matches(r'\b(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+cold\b(?!-?\s*showers?)'):
                 bath('냉탕',m)
