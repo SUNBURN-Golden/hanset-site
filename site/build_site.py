@@ -17,6 +17,7 @@ from zoneinfo import ZoneInfo
 import verified as VF
 import public_catalog as PC
 import public_slots as PS
+import twin_slots as TW
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT.parent
@@ -811,7 +812,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <div class="glance-grid"><div><h3>Price</h3>{price_html(v)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v)}</div>' for label, values in fact_groups(v))}</div>
 <p class="meta">확인일 {dot(v["last_verified"])} · Official reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></p></section>
 <table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{offrows}</tbody></table>
-{tips}{unv}{fchk(v)}{arch_blk}
+{TW.render(TWIN.get(v['slug'], []))}{tips}{unv}{fchk(v)}{arch_blk}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong></p><p>Source: {" · ".join(srcs)}</p>
 <p>Something's off? Tell us via <a href="/corrections/">Corrections</a>. Prices and closing days change.</p></div>
 {next_html}
@@ -987,6 +988,9 @@ def view_word_check(dist):
         if m: bad.append((str(p), m.group(0)))
     return bad
 
+TWIN = TW.load(ROOT / "content/twin_catalog.json")
+TWIN_RAW = "/workspace/hanset-data/twin/export/public_catalog.json"
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--release", action="store_true"); ap.add_argument("--ads"); ap.add_argument("--today"); ap.add_argument("--out", default=str(DIST))
@@ -1020,7 +1024,7 @@ def main():
         p.parent.mkdir(parents=True, exist_ok=True); p.write_text(h, encoding="utf-8")
     (dist / "assets").mkdir(); shutil.copytree(ROOT / "static/css", dist / "assets/css"); shutil.copytree(ROOT / "static/js", dist / "assets/js"); shutil.copytree(ROOT / "static/img", dist / "assets/img")
     (dist / "assets/public-catalog.json").write_text(json.dumps(
-        {**catalog, "publication_enabled": False,
+        {**catalog, "publication_enabled": bool(TWIN), "twin_counts": TW.counts(TWIN),
          "input_available": public_input["available"]}, ensure_ascii=True), encoding="utf-8")
     shutil.copy(ROOT / "static/favicon.svg", dist / "favicon.svg")
     for _f in (ROOT / "static/root").glob("*"):  # 루트 정적 파일(구글 서치콘솔 소유확인 등; 지우지 말 것)
@@ -1037,6 +1041,10 @@ def main():
         "/assets/*\n  Cache-Control: public, max-age=86400\n/*.html\n  Cache-Control: public, max-age=0, must-revalidate\n")
     subset_fonts(dist)
     bad = leak_check(dist)
+    tw = TW.check(dist, TWIN_RAW, TWIN)
+    for b in tw: print("TWIN CHECK FAIL:", b)
+    if tw: sys.exit(4)
+    print(f"twin check OK (no unverified values rendered) {TW.counts(TWIN)}")
     vw = view_word_check(dist)
     for b in vw: print("VIEW-WORD CHECK FAIL:", b)
     if vw: sys.exit(3)

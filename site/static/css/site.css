@@ -452,3 +452,17 @@ table.t th{background:var(--surface-2);font-size:.82rem}
 
 .sec-h>a{display:inline-flex;align-items:center;min-width:44px;min-height:44px}
 .flinks a{min-width:44px}
+
+/* twin facts 2026-10-29 */
+.twin{margin:18px 0}
+.twin h2{font-size:1.05rem;margin:0 0 8px}
+.twin h2 small{font-weight:500;color:var(--muted,#777);font-size:.85rem}
+.tw-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.tw-list li{display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 10px;padding:8px 10px;border:1px solid var(--line);border-radius:10px}
+.tw-k{min-width:110px;font-size:.85rem;color:var(--muted,#777)}
+.tw-list b{font-weight:600}
+.tw-chip{font-style:normal;font-size:.75rem;padding:2px 8px;border-radius:999px;background:rgba(200,120,0,.14)}
+.tw-unv{background:rgba(127,127,127,.16)}
+.tw-src,.tw-list time{font-size:.75rem;color:var(--muted,#777)}
+.tw-unk summary{cursor:pointer;margin:8px 0;font-size:.9rem}
+@media(min-width:720px){.tw-list{grid-template-columns:repeat(2,1fr)}}
