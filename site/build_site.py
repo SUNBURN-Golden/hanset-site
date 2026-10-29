@@ -990,7 +990,8 @@ def main():
     cutoff = dt.datetime.combine(today, dt.time.max, ZoneInfo("Asia/Seoul"))
     try:
         public_input = PS.read_export(ROOT / "content/public_slots.json", catalog,
-                                      {v["slug"] for v in venues}, cutoff)
+                                      {v["slug"] for v in venues}, cutoff,
+                                      contract_path=ROOT / "content/public_contract.json")
     except PS.ExportError as exc:
         sys.exit(f"ERROR: public export rejected ({exc})")
     if a.verified_examples and a.release: sys.exit("ERROR: --verified-examples is preview-only; never with --release")

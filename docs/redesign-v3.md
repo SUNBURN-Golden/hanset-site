@@ -123,3 +123,68 @@ Screenshots and measurement artifacts are in
 `/workspace/rd-wt/logs/hanset-v3-pr1/`, outside the repository. Required screenshots
 are review artifacts, not temporary files. Disposable test files are cleaned by
 `TemporaryDirectory`; browser checks use local route fulfillment and no server.
+
+## PR1 review fixes — 2026-10-29 (still draft)
+
+Both consumer majors are addressed. `evaluate()` now requires a separate
+operations contract and actual retained content before returning a value. Missing
+contracts or unsupported slot descriptors yield unknown with no candidate value
+or provenance; the reader reports `missing_operations_contract`. The builder
+reads the proposed `site/content/public_contract.json` alongside the export.
+Neither operations input is created by this frontend PR. Publication stays off.
+
+The proposed sidecar has `schema_version: 1`, `descriptors` and `retained` lists.
+Each descriptor contains exactly `slot` (entity type/kind/attribute), `value`
+(type rule), `unit` and `qualifiers` (key-to-type-rule mapping). Supported type
+rules are boolean, integer, finite number, nonempty string, date and explicit
+enum, with numeric minimum/maximum and explicit nullable qualifiers. Operations
+must supply the actual policy enums, units, bounds and applicable qualifier keys;
+this PR adds no production defaults for them. Extra qualifiers, wrong types,
+units or enum values, duplicate matching descriptors and unsupported rules are
+rejected. Existing price/presence guards also remain in force.
+
+Each retained binding includes `public_slug`, `branch_id`, `entity_type`, `kind`,
+`attribute`, `json_pointer`, typed `value`, `unit`, `qualifiers` and `value_text`.
+All fields must exactly match the row, including JSON types and price scopes.
+Pointers resolve using RFC 6901 against a document keyed by the retained file
+names `venues.json`, `venues_en.json` and `foreigner.json`; targets must equal
+the original `value_text`. This draft supports retained text targets only.
+Missing targets, other-branch bindings, changed text/values/scopes, malformed
+escapes and invalid list indexes fail validation before replacing `dist`.
+Unsupported structured schedules, bath lists or program semantics stay unknown.
+Operations review of this proposed descriptor/binding format remains required.
+
+The dependency blocker is **unresolved**. Local `origin/main` is `fedec85`,
+whereas the unchanged parent remains `76b7b74`. The available base has no
+ontology or operations-issued descriptor/export. Importing operational files or
+inventing approval would not resolve that dependency. A complete parent-stack
+sync includes content and a deploy script and still requires the owner decision
+described above. Only v3 PR1 exists locally; there are no later v3 branches to
+rebase. No parent branch, main, operational content or deploy script was changed.
+
+Fix-stage verification and screenshot checklist:
+
+- [x] Full unit suite: **110 tests PASS**, including nine new regression tests
+  for pointers, identity/scope bindings, typed evidence and builder atomicity.
+- [x] `cd site && python3 build_site.py --release`: **PASS**, 69 pages,
+  49 venues; **leak check OK**. The full output is in `build.txt` below.
+- [x] Fresh Playwright screenshots for Home, Finder, Orakai detail and Archive:
+  **390×844 and 1440×900, light and dark**, plus Home illustration/footer views.
+  All 20 captures live under `/workspace/rd-wt/logs/hanset-v3-shots/`.
+  The 12 Home/Finder/detail viewport captures are pixel-identical to reviewed
+  PR1; `screenshot-comparison.json` records the decoded-pixel comparison.
+- [x] Real browser checks: fonts and theme backgrounds, no overflow at
+  320/360/390/768/1024/1440/1920, compound filters, empty/reset and URL reload;
+  zero external requests, missing assets or browser errors. `verify.cjs` and
+  `validation.json` in that directory reproduce/document the checks. Browser
+  routes serve only local release files; no background server is used.
+- [x] Generated comparison: 106 baseline files identical; only existing font
+  timestamps/calendar stamps vary, plus the previously introduced disabled
+  catalog asset. Existing HTML/CSS/JS and user-visible Korean copy are unchanged.
+- [x] Exact-diff contact/secret scan and `git diff --check`: PASS. No content
+  data, hero, font, illustration, deploy or crawler changes.
+
+```text
+built 69 pages, 49 venues (10 boxes, 39 saunas), 5 events, 2 verified-feed events, 2 creators -> /workspace/rd-wt/hanset-v3/site/dist  (13832 KB total)
+leak check OK (no owner credentials / third-party-source names / trackers)
+```
