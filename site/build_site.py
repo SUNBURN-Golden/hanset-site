@@ -31,7 +31,7 @@ KIND_EN = {"호텔 사우나": "Hotel Sauna", "부티크 사우나": "Boutique S
 PENDING = "확인 중 (not confirmed)"
 CITY_KEY = {"Seoul": "seoul", "Busan": "busan", "Jeju": "jeju", "Gyeonggi": "gyeonggi"}
 WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-SAFETY = "Cardiovascular disease, pregnancy, after drinking, or feeling unwell? Skip the sauna and cold plunge, or ask a doctor first. This is not medical advice."
+SAFETY = "Heart disease, pregnancy, after drinking, or feeling unwell? Skip the sauna and cold plunge, or ask a doctor first. Not medical advice."
 STALE_DAYS = 90
 FORBIDDEN = [r"\b442\b", r"KWANG", r"크왕", r"우승", r"로스쿨", r"법무", r"법학", r"변호사", r"\bMZ\b", r"saunaday", r"사우나데이",
              r"moduisauna", r"crossfitlee", r"LUWEI", r"한세트", r"땀살롱", r"PRIVATE-DM",
@@ -885,8 +885,8 @@ def build(site, venues, events, today, vevents=(), creators=()):
         for f, vs, d in AERIAL)
     abody = f'''<div class="page"><h1>Venue Sketches</h1>
 <p class="muted">Conceptual · May differ from the venue · Tap to enlarge</p></div>
-<!--aerial--><div class="page"><h2 id="aerial">Bird’s-eye drawings</h2><p class="lead">Each venue seen from above, drawn by hand.</p></div>
-<div class="arcgrid">{aitems}</div><!--/aerial-->
+<!--aerial--><div id="aerial" class="aerwrap"><div class="page"><h2>Bird’s-eye drawings</h2><p class="lead">Each venue seen from above, drawn by hand.</p></div>
+<div class="arcgrid aergrid">{aitems}</div></div><!--/aerial-->
 <div class="page"><h2 id="sketches">Floor-by-floor sketches</h2></div>
 <div class="arcgrid">{items}</div>
 <div class="page"><p class="muted">{SAFETY}</p></div>'''
@@ -1028,7 +1028,7 @@ def long_text_check(dist):
         t = re.sub(r"(?s)<details.*?</details>|<footer.*?</footer>", "", p.read_text(encoding="utf-8"))
         for para in re.findall(r"(?s)<p(?:\s[^>]*)?>(.*?)</p>", t):
             txt = html.unescape(re.sub(r"<[^>]+>", "", para)).strip()
-            if len(txt) > LONG_P_LIMIT and txt != html.unescape(SAFETY): bad.append((rel, len(txt), txt[:60]))
+            if len(txt) > LONG_P_LIMIT: bad.append((rel, len(txt), txt[:60]))
     return bad
 
 def main():
