@@ -23,6 +23,12 @@ class Active:
         raw = deterministic_id(url, fetched_at)
         self.db.execute("INSERT INTO raw_documents(raw_id,url,canonical_url,domain,fetched_at,http_status,content_hash,outcome) VALUES (?,?,?,?,?,200,?, 'ok')",
                         (raw, url, url, 'example', fetched_at, deterministic_id('h', fetched_at, obs)))
+        from html import escape
+        title = self.db.execute('SELECT name FROM venues WHERE venue_key=?', (venue_key,)).fetchone()
+        blob = self.path.parent / (raw + '.html')
+        blob.write_text('<title>' + escape(title[0] if title else 'Example Page') + '</title><main>' +
+                        ''.join('<p>' + escape(o[3]) + '</p>' for o in obs) + '</main>')
+        self.db.execute('UPDATE raw_documents SET blob_path=?, content_type=? WHERE raw_id=?', (str(blob), 'text/html', raw))
         for i, (field, value, label, quote) in enumerate(obs):
             self.db.execute('''INSERT INTO observations(obs_id,venue_key,field,value_json,value_text,value_hash,label_status,source_url,source_type,quote,locator,raw_id,observed_at)
                 VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)''', (deterministic_id(raw, i), venue_key, field, json.dumps(value), str(value), deterministic_id(value),
@@ -73,7 +79,7 @@ def test_facts_are_append_only(env):
 def test_conflicts_are_kept_not_overwritten(env):
     a, twin, run, _ = env
     a.venue('alpha::', 'Sauna Alpha', URL)
-    a.doc(URL, '2026-10-01T09:00:00+09:00', [('hours', {'hours': '24_hours'}, 'fact', 'open 24 hours'), ('hours', {'hours': '09:00-10:00'}, 'fact', 'maintenance 9-10')], 'alpha::')
+    a.doc(URL, '2026-10-01T09:00:00+09:00', [('hours', {'hours': '24_hours'}, 'fact', 'open 24 hours'), ('hours', {'hours': '09:00-10:00'}, 'fact', 'alternate hours 09:00-10:00')], 'alpha::')
     a.doc('https://directory.example/alpha', '2026-10-02T09:00:00+09:00', [('cold_bath_temp_c', 15, 'fact', '냉탕 15도')], 'alpha::', 'official_directory')
     a.doc(URL, '2026-10-03T09:00:00+09:00', [('cold_bath_temp_c', 12, 'fact', '냉탕 12도')], 'alpha::')
     run()
