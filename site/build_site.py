@@ -15,6 +15,8 @@ from pathlib import Path
 from urllib.parse import quote, urlparse
 from zoneinfo import ZoneInfo
 import verified as VF
+import public_catalog as PC
+import public_slots as PS
 
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT.parent
@@ -982,6 +984,15 @@ def main():
     today = ymd(a.today) if a.today else dt.datetime.now(ZoneInfo("Asia/Seoul")).date()
     dist = Path(a.out)
     venues, events, skipped, ev_skipped = load(today, a.ads)
+    # Read-only preparation. Existing site JSON is never a blanket fact allowlist.
+    # Until operations approves the export contract, no new value is published.
+    catalog = PC.generate(DATA / "hanset_twin/ontology.py")
+    cutoff = dt.datetime.combine(today, dt.time.max, ZoneInfo("Asia/Seoul"))
+    try:
+        public_input = PS.read_export(ROOT / "content/public_slots.json", catalog,
+                                      {v["slug"] for v in venues}, cutoff)
+    except PS.ExportError as exc:
+        sys.exit(f"ERROR: public export rejected ({exc})")
     if a.verified_examples and a.release: sys.exit("ERROR: --verified-examples is preview-only; never with --release")
     if a.verified_examples:
         vevents = VF.load_events(VERIFIED / "examples/events.example.json", today, allow_example=True)
@@ -996,6 +1007,9 @@ def main():
         p = dist / path.lstrip("/") if path.endswith(".html") else dist / path.lstrip("/") / "index.html"
         p.parent.mkdir(parents=True, exist_ok=True); p.write_text(h, encoding="utf-8")
     (dist / "assets").mkdir(); shutil.copytree(ROOT / "static/css", dist / "assets/css"); shutil.copytree(ROOT / "static/js", dist / "assets/js"); shutil.copytree(ROOT / "static/img", dist / "assets/img")
+    (dist / "assets/public-catalog.json").write_text(json.dumps(
+        {**catalog, "publication_enabled": False,
+         "input_available": public_input["available"]}, ensure_ascii=True), encoding="utf-8")
     shutil.copy(ROOT / "static/favicon.svg", dist / "favicon.svg")
     for _f in (ROOT / "static/root").glob("*"):  # 루트 정적 파일(구글 서치콘솔 소유확인 등; 지우지 말 것)
         if _f.is_file(): shutil.copy(_f, dist / _f.name)
