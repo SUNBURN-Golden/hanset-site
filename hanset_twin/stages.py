@@ -4,6 +4,8 @@ import hashlib
 import json
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
+from hanset_active.extract import html as html_rules
 from hanset_active.db import deterministic_id
 from hanset_active.extract import fields as field_rules
 from hanset_active.util.pii import strip_pii
@@ -21,6 +23,7 @@ SUPPORTED_NOTE = {
 class Ctx:
     def __init__(self, db, active, *, csv_path, run_id, clock=None, batch=500):
         self.db, self.active, self.csv_path, self.run_id, self.clock, self.batch = db, active, Path(csv_path), run_id, clock, batch
+        self._active_docs = {}
 
 def _seq(db):
     return (db.execute('SELECT max(seq) FROM work_items').fetchone()[0] or 0) + 1
@@ -216,6 +219,62 @@ def _extract_csv_item(db, w, line, row):
             add('min_age', int(m[1] or m[2]), 'years', 'fact', text[max(0, m.start()-40):m.end()+40][:240],
                 {**base, 'column': col, 'char_offsets': [m.start(), m.end()]}, f'csv:{line}:{col}:age:{m.start()}')
 
+_EVIDENCE_FIELDS = set(('foreigner_policy tattoo_policy bath_composition hours closures price_day_pass '
+                        'cold_bath_temp_c sauna_temp_c rapid_cold_plunge min_age access_policy').split())
+
+def _active_obs_verdict(ctx, obs, raw, venue):
+    if raw is None:
+        return 'raw_unavailable'
+    url = raw['canonical_url'] or raw['url'] or ''
+    path = urlsplit(url).path.lower()
+    ct = (raw['content_type'] or '').lower()
+    if any(t in ct for t in ('text/css', 'javascript', 'font', 'image')) or re.search(r'\.(css|js|mjs|woff2?|ttf|svg|png|jpe?g|gif|webp|ico)$', path):
+        return 'asset_document'
+    if obs['field'] in ('hours', 'closures', 'price_day_pass') and (any(t in ct for t in ('rss', 'atom', 'xml')) or re.search(r'\.(xml|rss|atom)$|feed', path)):
+        return 'feed_post_not_current'
+    cache = ctx._active_docs
+    if raw['raw_id'] not in cache:
+        try:
+            cache[raw['raw_id']] = html_rules.extract(Path(raw['blob_path']).read_bytes(), url)
+        except (OSError, TypeError):
+            cache[raw['raw_id']] = None
+    doc = cache[raw['raw_id']]
+    if doc is None:
+        return 'raw_unavailable'
+    if venue is not None:
+        domains = {registrable_domain(d if '://' in d else 'https://' + d) for d in json.loads(venue['domains'] or '[]')}
+        if venue['website']:
+            domains.add(registrable_domain(venue['website']))
+        norm = lambda t: ''.join(c for c in (t or '').casefold() if c.isalnum())
+        names = [norm(venue[k]) for k in ('name', 'name_ko') if norm(venue[k])]
+        if registrable_domain(url) not in domains and not any(n in norm(doc['title']) for n in names):
+            return 'off_topic_page'
+    if obs['field'] == 'hours' and re.search(r'maintenance|점검|정기\s*청소|cleaning', obs['quote'] or '', re.I):
+        return 'maintenance_window'
+    if obs['field'] in _EVIDENCE_FIELDS:
+        norm_quote = lambda t: re.sub(r'[\s|]+', '', t or '')
+        tables = '\n'.join(' '.join(cells) for table in doc['structured']['tables'] for cells in table)
+        quote = norm_quote(obs['quote'])
+        if not quote or quote not in norm_quote(doc['text'] + '\n' + tables):
+            return 'quote_not_in_main_text'
+    if obs['field'] in ('bath_composition', 'hours', 'closures', 'foreigner_policy',
+                        'tattoo_policy', 'rapid_cold_plunge', 'cold_bath_temp_c', 'sauna_temp_c'):
+        if not any(row['field'] == obs['field'] for row in field_rules.extract(obs['quote'] or '')):
+            return 'rule_no_longer_matches'
+    return None
+
+def _extract_active_item(ctx, w):
+    raw = ctx.active.execute('SELECT * FROM raw_documents WHERE raw_id=?', (w['item_id'],)).fetchone()
+    for o in ctx.active.execute('SELECT * FROM observations WHERE raw_id=?', (w['item_id'],)):
+        value = json.loads(o['value_json']) if o['value_json'] else None
+        _add_candidate(ctx.db, w, 'active:' + o['venue_key'], o['field'], value, o['unit'], o['label_status'],
+                       o['source_type'], o['source_url'], o['quote'], json.loads(o['locator']) if o['locator'] else None, o['obs_id'], w['fetched_at'])
+        venue = ctx.active.execute('SELECT * FROM venues WHERE venue_key=?', (o['venue_key'],)).fetchone()
+        reason = _active_obs_verdict(ctx, o, raw, venue)
+        if reason:
+            ctx.db.execute("UPDATE candidates SET verdict='rejected', verdict_reason=? WHERE cand_id=?",
+                           (reason, deterministic_id('cand', w['item_id'], o['obs_id'], o['field'], value)))
+
 def extract(ctx, cursor):
     """Reuse hanset_active observations (rule extractor fields.py) and run the same deterministic
     rules over the curated CSV text. No model calls; no AI-filled values."""
@@ -224,9 +283,7 @@ def extract(ctx, cursor):
     csv_rows = _load_csv_rows(ctx)
     for w in items:
         if w['origin'] == 'active_store' and ctx.active is not None:
-            for o in ctx.active.execute('SELECT * FROM observations WHERE raw_id=?', (w['item_id'],)):
-                _add_candidate(db, w, 'active:' + o['venue_key'], o['field'], json.loads(o['value_json']) if o['value_json'] else None, o['unit'], o['label_status'],
-                    o['source_type'], o['source_url'], o['quote'], json.loads(o['locator']) if o['locator'] else None, o['obs_id'], w['fetched_at'])
+            _extract_active_item(ctx, w)
         elif w['origin'] == 'verified_csv' and w['item_id'] in csv_rows:
             line, row = csv_rows[w['item_id']]
             _extract_csv_item(db, w, line, row)
@@ -322,7 +379,7 @@ def state_update(ctx, cursor):
     onto.refresh_conflicts(db, ctx.clock)
     return str(cursor or 0), n
 
-def _apply_work_item(db, w, clock, extra_slots=()):
+def _apply_work_item(db, w, clock, extra_slots=(), skip_slots=()):
     """Apply every accepted candidate of one work item through the temporal state machine.
     extra_slots are (entity_id, attribute, source_url) slots the item used to feed: they get an
     empty snapshot when the new rules no longer produce a value, closing the old facts."""
@@ -338,12 +395,15 @@ def _apply_work_item(db, w, clock, extra_slots=()):
     for key in extra_slots:
         groups.setdefault(key, [])
     for (eid, attr, url), values in groups.items():
+        if (eid, attr, url) in skip_slots:
+            continue
         onto.apply_snapshot(db, eid, attr, url, values, at=w['fetched_at'], clock=clock)
 
-def _item_slots(db, w, clock):
+def _item_slots(db, w, clock, *, accepted_only=True):
     """Slots (entity, attribute, source_url) this item currently feeds with accepted values."""
     out = set()
-    for c in db.execute("SELECT * FROM candidates WHERE item_id=? AND verdict='accepted'", (w['item_id'],)).fetchall():
+    verdict_filter = " AND verdict='accepted'" if accepted_only else ""
+    for c in db.execute("SELECT * FROM candidates WHERE item_id=?" + verdict_filter, (w['item_id'],)).fetchall():
         if not c['branch_id']: continue
         for etype, kind, q, attr, value, unit in onto.map_field(c['field'], json.loads(c['value_json']) if c['value_json'] else None):
             if value is None: continue
@@ -362,7 +422,7 @@ def reextract(ctx):
         raise
 
 def _reextract(ctx):
-    """Re-run extraction for every verified_csv work item under the CURRENT rules (run this after
+    """Re-run CSV extraction and active-store relevance checks under the CURRENT rules (run this after
     changing extraction/classification rules; change_detect only processes changed items, so an
     existing DB would otherwise keep the old values). Old candidate rows are re-derived, then the
     state machine closes superseded open facts with correction history — nothing is deleted.
@@ -373,6 +433,10 @@ def _reextract(ctx):
     csv_rows = _load_csv_rows(ctx)
     items = [w for w in db.execute("SELECT * FROM work_items WHERE origin='verified_csv' ORDER BY seq").fetchall()
              if w['item_id'] in csv_rows]
+    if ctx.active is not None:
+        ctx._active_docs = {}
+        items.extend(db.execute("SELECT * FROM work_items WHERE origin='active_store' ORDER BY seq").fetchall())
+        items.sort(key=lambda w: w['seq'])
     at = onto.now_iso(ctx.clock)
     slots = {}
     for w in items:
@@ -381,17 +445,40 @@ def _reextract(ctx):
         if w['item_id'] in csv_rows:
             line, row = csv_rows[w['item_id']]
             _extract_csv_item(db, w, line, row)
+        elif w['origin'] == 'active_store':
+            _extract_active_item(ctx, w)
     db.execute('UPDATE candidates SET branch_id=(SELECT branch_id FROM candidate_branches b WHERE b.subject_ref=candidates.subject_ref) WHERE branch_id IS NULL')
     while evidence_verify(ctx, None)[1]:
         pass  # verify in batches until every re-derived candidate has a verdict
+    # Re-derive every historical item, but apply only the latest snapshot feeding each
+    # active source slot. Replaying old snapshots at today's time would resurrect history.
+    latest = {}
+    current_slots = {}
     for w in items:
-        _apply_work_item(db, {**dict(w), 'fetched_at': at}, ctx.clock, extra_slots=slots[w['item_id']])
+        if w['origin'] == 'active_store':
+            keys = slots[w['item_id']] | _item_slots(db, w, ctx.clock, accepted_only=False)
+            current_slots[w['item_id']] = keys
+            for key in keys:
+                rank = (w['fetched_at'] or '', w['seq'])
+                if key not in latest or rank > latest[key][0]:
+                    latest[key] = (rank, w['item_id'])
+    for w in items:
+        skip = {key for key in current_slots.get(w['item_id'], ()) if latest[key][1] != w['item_id']}
+        _apply_work_item(db, {**dict(w), 'fetched_at': at}, ctx.clock, extra_slots=slots[w['item_id']] | current_slots.get(w['item_id'], set()), skip_slots=skip)
     reconcile_placeholders(db, ctx.clock)
     onto.refresh_conflicts(db, ctx.clock)
     recompute_views(ctx, None)
     quality_check(ctx, None)
-    return {'items': len(items),
-            'candidates': db.execute("SELECT count(*) FROM candidates WHERE item_id IN (SELECT item_id FROM work_items WHERE origin='verified_csv')").fetchone()[0]}
+    result = {'items': len(items), 'candidates': sum(db.execute('SELECT count(*) FROM candidates WHERE item_id=?', (w['item_id'],)).fetchone()[0] for w in items)}
+    if ctx.active is None:
+        result['candidates'] = db.execute("SELECT count(*) FROM candidates WHERE item_id IN (SELECT item_id FROM work_items WHERE origin='verified_csv')").fetchone()[0]
+    if ctx.active is not None:
+        result['origins'] = {origin: {'items': sum(w['origin'] == origin for w in items),
+            'candidates': sum(db.execute('SELECT count(*) FROM candidates WHERE item_id=?', (w['item_id'],)).fetchone()[0] for w in items if w['origin'] == origin)}
+            for origin in ('verified_csv', 'active_store')}
+        result['active_rejections'] = dict(db.execute("SELECT verdict_reason, count(*) FROM candidates JOIN work_items USING(item_id) WHERE origin='active_store' AND verdict='rejected' GROUP BY verdict_reason").fetchall())
+    return result
+
 
 def reconcile_placeholders(db, clock=None):
     at = onto.now_iso(clock)

@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 from ..util.pii import strip_pii
 from ..util.urls import is_denied, registrable_domain
 NAME = 'html'
-VERSION = '1.0.0'
+VERSION = '1.1.0'
 
 def extract(html: str | bytes, url: str = '') -> dict:
     soup = BeautifulSoup(strip_pii(html), 'lxml')
@@ -46,6 +46,10 @@ def extract(html: str | bytes, url: str = '') -> dict:
         elif 'sitemap' in href.lower():
             kind='sitemap'
         links.append(dict(url=strip_pii(href),kind=kind,text=anchor,hreflang=a.get('hreflang')))
+    ugc = re.compile(r'tripadvisor|review|comment|reply|trip-lst|guestbook', re.I)
+    for node in list(soup.find_all(True)):
+        if node.attrs is not None and ugc.search(' '.join(node.get('class', [])) + ' ' + (node.get('id') or '')):
+            node.decompose()
     tables = [[[c.get_text(' ',strip=True) for c in row.select('th,td')] for row in table.select('tr')] for table in soup.select('table')]
     headings=[h.get_text(' ',strip=True) for h in soup.select('h1,h2,h3,h4,h5,h6')]
     for node in soup.select('script,style,nav,footer,header,noscript,template'):
