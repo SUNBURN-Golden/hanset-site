@@ -66,6 +66,29 @@ def closed_row(v):
     if not c: return f'<tr><th>Closed on</th><td class="unk">{CLOSED_CHECK}</td></tr>'
     return (f'<tr><th>Closed on</th><td>{E(c["closed"])}<br><small class="fact-source">{E(c["source"])} · checked {dot(ymd(c["checked"]))} · '
             f'<a href="{E(c["url"])}" rel="noopener noreferrer">{E(host(c["url"]))}</a></small></td></tr>')
+
+try: CLOSED_MONTH = json.loads((ROOT / "content/closed_month.json").read_text(encoding="utf-8"))
+except FileNotFoundError: CLOSED_MONTH = {}  # month summary is optional; absent file = no block
+def closed_month_block(today, by_slug):
+    """English 'this month's closed days' summary for the closed-days guide, from content/closed_month.json.
+    Hides after the month ends; items whose date is already past drop at build time (main()'s today, KST)."""
+    if not CLOSED_MONTH.get("items"): return ""
+    y, m = (int(n) for n in CLOSED_MONTH["month"].split("-"))
+    if today > dt.date(y + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1): return ""
+    rows = []
+    for it in CLOSED_MONTH["items"]:
+        d = ymd(it["date"])
+        if d < today: continue
+        links = []
+        for slug in it["slugs"]:
+            v, c = by_slug.get(slug), CLOSED_ALL.get(slug)
+            if not v or not c: continue
+            note = (" (may change around holidays)" if "may change" in c["closed"] else "") + (" (maintenance)" if it.get("note") == "maintenance" else "")
+            links.append(f'<a href="{E(c["url"])}" rel="noopener noreferrer">{E(v["title"])}</a>{note}')
+        if links: rows.append(f'<li>{MON[d.month]} {d.day} ({wd(d)}): {" · ".join(links)}</li>')
+    if not rows: return ""
+    return (f'<section class="closed-month"><h2>{E(CLOSED_MONTH["title"])}</h2><ul class="clean">{"".join(rows)}</ul>'
+            '<p class="muted">Hours can change, so check before you go.</p></section>')
 FCHK_KEYS = [("tattoo", "Tattoos"), ("card", "Foreign card payment"), ("english", "English booking / staff"), ("dropin", "Drop-in for visitors")]
 SAUNA_PKG_KEYS = [
     ("public_access", "General public access"),
@@ -114,7 +137,8 @@ def guides(site, venues):
                    f'<td>{dot(ymd(c["checked"]))} · <a href="{E(c["url"])}" rel="noopener noreferrer">{E(c["source"])}</a></td></tr>'
                    for k, c in sorted(CLOSED.items(), key=lambda kc: (by_slug[kc[0]]["city_key"] != "seoul", by_slug[kc[0]]["city_key"], by_slug[kc[0]]["title"])) if k in by_slug)
     bodies["closed-days-korea"] = ('<h1>Closed today? Check first.</h1><p class="lead">Some Korean saunas and gyms close one day a month. Others close every week. Here are the ones we’ve confirmed.</p>'
-        '<p class="muted">Only places we’ve confirmed are listed, each with its source and check date. Not on the list? Check before you go. Holidays can change hours.</p>'
+        + closed_month_block(site.today, by_slug)
+        + '<p class="muted">Only places we’ve confirmed are listed, each with its source and check date. Not on the list? Check before you go. Holidays can change hours.</p>'
         f'<table class="facts"><thead><tr><th>Venue</th><th>Closed on</th><th>Checked · Source</th></tr></thead><tbody>{crow}</tbody></table>'
         '<p class="muted">Every other venue in the <a href="/finder/">Finder</a> shows “Check before you go” until its closed day is confirmed.</p>')
     G = [(s, t, d, bodies[s]) for s, t, d in GUIDES]

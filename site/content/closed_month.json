@@ -1,0 +1,13 @@
+{
+  "_note": "English month summary shown at the top of /guides/closed-days-korea/ (rendered by build_site.py, never hand-written HTML). The block hides itself once the build date is past the month's last day, and each item drops once its date is past. Slugs must exist in closed_days.json and venues.json. Maintained by the HANSET operations bot.",
+  "month": "2026-11",
+  "title": "November closed days",
+  "items": [
+    {"date": "2026-11-02", "slugs": ["novotel-ambassador-seoul-gangnam"]},
+    {"date": "2026-11-03", "slugs": ["banyan-tree-club-seoul"]},
+    {"date": "2026-11-04", "slugs": ["fraser-place-central-seoul", "ambassador-seoul-pullman"]},
+    {"date": "2026-11-09", "slugs": ["orakai-cheonggyesan"]},
+    {"date": "2026-11-11", "slugs": ["choice-by-vantt-gangdong"]},
+    {"date": "2026-11-12", "slugs": ["park-hyatt-seoul"], "note": "maintenance"}
+  ]
+}
