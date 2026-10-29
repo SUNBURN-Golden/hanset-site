@@ -29,8 +29,9 @@ Violating any of them = reject the PR. If a rule seems to conflict with a task, 
 
 ## Layout / UX locks
 - Mobile-first. The home page's hand-drawn illustration section stays **at the very bottom** (right above the footer). On mobile it is a compact thumbnail list; `/guide/` shows full-width tap-to-enlarge images. Do not reintroduce large swipe cards or clipped text on mobile.
-- Top priority screens: Home `/`, Finder `/finder/` (filters city/type/Sunday/price-known/search, URL-deep-linkable), venue detail `/finder/<slug>/`, `/archive/`.
-- Illustrations are SVG with outlined text (identical rendering without fonts), each marked "실제 업장과 다를 수 있어요" with source. Archive illustrations are pending venue replies — do not claim venue endorsement.
+- Top priority screens: Home `/`, Finder `/finder/` (filters city/type/Sunday/price-known/search, URL-deep-linkable), venue detail `/finder/<slug>/`.
+- **Venue Sketches / `/archive/` are removed for good (owner order 2026-10-29).** The isometric floor-stacking drawings are not aerial views (조감도). Never re-add them, any `archive-*` sketch, "isometric" or 조감도 content; `build_site.py` fails the build (sketch check) if they reappear.
+- Illustrations are SVG with outlined text (identical rendering without fonts), each marked "실제 업장과 다를 수 있어요" with source.
 
 ## Process
 - One topic per PR; describe screens affected with mobile + desktop screenshots; run `python build_site.py --release` and attach the output line (page counts + "leak check OK").

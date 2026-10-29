@@ -293,7 +293,7 @@ class Site:
 
     def foot(self, active):
         return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_EN}</strong> · Train. Sweat. One set.'
-                f'<div class="flinks"><a href="/join/">Join</a><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a>{CREATORS_LINK if self.creators else ""}<a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
+                f'<div class="flinks"><a href="/join/">Join</a><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/events/">Events</a>{CREATORS_LINK if self.creators else ""}<a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
                 f'<a href="/privacy/">Privacy</a></div>'
                 f'<p class="fsocial"><a class="ig ig-f" {IG_ATTRS}>{IG_SVG}<span>@hanset.mag</span></a></p>'
                 f'<p>Prices and closing days change. Every entry shows its check date and source. Confirm with the venue before you go.</p>'
@@ -740,11 +740,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 
 {home_mag}
 
-<div class="slot" data-slot="kix-ticketing" hidden></div>
-<section class="sec"><div class="sec-h"><h2>See it from above.</h2><a href="/archive/">Archive ›</a></div>
-<p class="muted">Floors and zones from official guides, redrawn by hand. Layouts are conceptual. May differ from the actual venue.</p>
-<div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>View ›</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
-<p><a class="btn btn-d" href="/archive/">See every drawing ›</a></p></section>'''
+<div class="slot" data-slot="kix-ticketing" hidden></div>'''
     site.add("/", f"{BRAND_EN} — CrossFit, HYROX & Sauna Wellness Magazine in Korea", "CrossFit, HYROX, hotel and boutique saunas in Korea. A drop-in and sauna finder plus race dates. Every entry with an official source and check date.", body, "home", ("dday.js", "finder.js"))
 
     # ---- finder
@@ -787,9 +783,6 @@ def build(site, venues, events, today, vevents=(), creators=()):
         sunrow = f'<tr><th>Sunday</th><td{"" if v["sunday"] != "unk" else " class=unk"}>{SUN_TXT[v["sunday"]] if v["sunday"] != "unk" else PENDING}</td></tr>' if v["kind_key"] == "box" or v["sunday"] != "unk" else ""
         if v["kind_key"] == "box" and any("일요일" in k or "휴무" in k for k, _ in v["facts_ko"]) and v["sunday"] != "unk": sunrow = ""
         if v["kind_key"] == "box" and v["sunday"] == "unk" and any("일요일" in k for k, _ in v["facts_ko"]): sunrow = ""
-        _ar = ARCHIVE_BY_VENUE.get(v["slug"])
-        arch_blk = (f'<section class="archbox"><h2>Hand-drawn sketch</h2><a class="illc" href="/archive/#{v["slug"]}"><picture><img src="/assets/img/archive/{_ar[0]}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ar[4])}"></picture>'
-                    f'<span><b>{E(_ar[2])}</b><em>Hand-drawn from the official guide · Tap to view ›</em></span></a></section>') if _ar else ""
         city_group = by_city.get(v["city_key"], [])
         same_city = len(city_group) > 1
         if same_city:
@@ -808,7 +801,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <div class="glance-grid"><div><h3>Price</h3>{price_html(v)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v)}</div>' for label, values in fact_groups(v))}</div>
 <p class="meta">확인일 {dot(v["last_verified"])} · Official reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></p></section>
 <table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{closed_row(v)}{offrows}</tbody></table>
-{tips}{unv}{fchk(v)}{arch_blk}
+{tips}{unv}{fchk(v)}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong></p><p>Source: {" · ".join(srcs)}</p>
 <p>Something's off? Tell us via <a href="/corrections/">Corrections</a>. Prices and closing days change.</p></div>
 {next_html}
@@ -863,22 +856,6 @@ def build(site, venues, events, today, vevents=(), creators=()):
     if arts: site.add("/magazine/", "Magazine", "Wellness reports from HANSET editors. Research and official sources, made easy to read.",
              f'<div class="page"><h1>Magazine</h1><p class="lead">Research, made readable. Every article cited.</p><p class="muted">Articles are currently in Korean.</p></div><div class="grid">{mcards}</div>', "magazine")
 
-    # ---- archive (손그림 아카이브)
-    items = "".join(
-        f'<article class="arc" id="{vs}"><a class="arcimg" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener" aria-label="{E(t)}: view larger (new tab)">'
-        f'<picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture></a>'
-        f'<div class="arcbody"><h2>{E(t)}</h2><p class="meta">Conceptual layout · Hand-drawn from the official guide · May differ from the actual venue</p>'
-        f'<p class="meta">Source <a href="{E(su)}" rel="noopener noreferrer">{E(sl)}</a> · Checked {ARCHIVE_DATE}</p>'
-        f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener">View larger ↗</a><a class="btn btn-d" href="/finder/{vs}/">Venue details</a></div></div></article>'
-        for f, vs, t, st, d, sl, su in ARCHIVE)
-    abody = f'''<div class="page"><h1>Venue Sketches</h1>
-<p class="lead">Floors and zones from official guides. Redrawn by hand, from above (isometric).</p>
-<ul><li>No photos or official maps copied or traced. Nothing drawn that the official guide doesn’t describe.</li>
-<li>Layouts are conceptual. Only floor and zone names and order follow the official guide. Position and size may differ from the actual venue.</li>
-<li>Labels in the drawings are in Korean. Tap a drawing to open it larger in a new tab (pinch to zoom).</li></ul></div>
-<div class="arcgrid">{items}</div>
-<div class="page"><p class="muted">More drawings as official floor and zone guides are published in text. {SAFETY}</p></div>'''
-    site.add("/archive/", "Venue Sketches", "Hand-drawn sketches of floors and zones, based on official venue guides (conceptual layouts). May differ from the actual venue. Every drawing with a source and check date.", abody, "guide")
 
     # ---- static pages
     for slug, title, desc, active in [("guide", "Guide", "How to read HANSET's finder, badges and check dates, and what to know before you go.", "guide"),
@@ -958,17 +935,19 @@ def leak_check(dist):
         bad.append(("*", "tracker", ""))
     return bad
 
-ARCHIVE_DATE = "2026.10.18"
-# (file, venue slug, title, short title, alt text, source label, source URL)
-ARCHIVE = [
-    ("archive-sisu-house", "sisu-house", "Sisu House, floor by floor", "Sisu House", "Isometric hand drawing stacking the floors from Sisu House’s official space guide (1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone) and its ritual sequence. Conceptual layout.", "sisu.house", "https://sisu.house/about"),
-    ("archive-spa-haesurang", "spa-haesurang-busan", "Spa Haesurang, floor by floor", "Spa Haesurang", "Isometric hand drawing stacking the floors from Spa Haesurang’s official amenities guide (2F lobby, 3–4F powder rooms, 4–5F locker rooms, 5F jjimjil room, 7F open-air bath). No official info for 6F. Conceptual layout.", "spahaesurang.co.kr", "https://spahaesurang.co.kr/amenities"),
-    ("archive-heosimcheong", "heosimcheong-busan", "Hurshimchung, floor by floor", "Hurshimchung (Hotel Nongshim)", "Isometric hand drawing stacking Hotel Nongshim Hurshimchung’s official floor guide (B1·B2 parking, 1F restaurant, 2F banquet, 3F jjimjil room, 4F lockers and front desk, 5F hot-spring baths). Conceptual layout.", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
-    ("archive-termeden", "termeden-icheon", "Termeden, zone by zone", "Termeden", "Isometric hand drawing gathering the zones from Termeden’s official facility guide (indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa) on one sheet. Positions are not the real layout.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
-    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "Orakai Cheonggyesan, floor by floor", "Orakai Cheonggyesan", "Isometric hand drawing stacking the B1 sauna (dry and wet saunas, several pools, walk-in body scrub) and the B2 EV charging area from Orakai Cheonggyesan Hotel’s official guide. The sauna’s interior layout is not drawn.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
-    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Isometric hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
-]
-ARCHIVE_BY_VENUE = {a[1]: a for a in ARCHIVE}
+
+# 2026-10-29 owner order (준태님): the isometric "Venue Sketches" are not aerial views (조감도) and must never reappear.
+SKETCH_BAN = [r"archive-(sisu-house|spa-haesurang|heosimcheong|termeden|orakai-cheonggyesan|crossfit-super-sapiens)",
+              r"/assets/img/archive/", r'href="/archive/', r"Venue Sketches", r"(?i)isometric", r"조감도", r"See it from above"]
+def sketch_check(dist):
+    bad = []
+    for p in dist.rglob("*"):
+        if p.is_file() and "/img/archive" in str(p).replace("\\", "/"): bad.append((str(p.relative_to(dist)), "archive asset"))
+        if p.is_file() and p.suffix in (".html", ".xml", ".txt", ".css", ".js", ".json", ".svg"):
+            t = p.read_text(errors="ignore")
+            for pat in SKETCH_BAN:
+                if re.search(pat, t): bad.append((str(p.relative_to(dist)), pat))
+    return bad
 
 def main():
     ap = argparse.ArgumentParser()
@@ -1008,6 +987,10 @@ def main():
         "/assets/*\n  Cache-Control: public, max-age=86400\n/*.html\n  Cache-Control: public, max-age=0, must-revalidate\n")
     subset_fonts(dist)
     bad = leak_check(dist)
+    sk = sketch_check(dist)
+    for b in sk: print("SKETCH-CHECK FAIL:", b)
+    if sk: sys.exit(3)
+    print("sketch check OK (no venue sketches / isometric / 조감도)")
     total = sum(p.stat().st_size for p in dist.rglob("*") if p.is_file())
     print(f"built {len(site.pages)} pages, {len(venues)} venues ({sum(v['kind_key']=='box' for v in venues)} boxes, {sum(v['kind_key']=='sauna' for v in venues)} saunas), {len(events)} events, {len(vevents)} verified-feed events, {len(creators)} creators -> {dist}  ({total/1024:.0f} KB total)")
     print(f"not published (no verified/partial content): {len(skipped)} venue rows, {len(ev_skipped)} event rows")
