@@ -90,7 +90,8 @@ def policy_for(cfg, url, browser=False, now=None, required=True):
             if not p.get('public') or (browser and not p.get('browser')):
                 break
             reviewed = dt.date.fromisoformat(p['robots_reviewed_at'])
-            today = dt.datetime.fromtimestamp(time.time() if now is None else now, dt.timezone.utc).date()
+            # Operators date robots reviews in KST; a UTC date rejected same-morning reviews before 09:00 KST.
+            today = dt.datetime.fromtimestamp(time.time() if now is None else now, dt.timezone(dt.timedelta(hours=9))).date()
             if not 0 <= (today - reviewed).days <= 90:
                 if required:
                     raise Rejected('robots_review_stale')
