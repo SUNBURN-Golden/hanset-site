@@ -168,10 +168,14 @@ class Explorer(unittest.TestCase):
                     self.assertIn(B.E(v['price_caveat']), B.price_html(v))
         repo = self.by_slug['solo-sauna-repo-noryangjin']
         terms = next(value for key, value in repo['facts'] if key == 'Price')
-        for output in (B.venue_card(repo), B.venue_contents(repo, preview=True), self.site.pages['/finder/solo-sauna-repo-noryangjin/']):
-            self.assertIn(B.E(terms), output)
-            self.assertIn('60 min from ₩45,000', output)
-            self.assertIn('Family room, 2 people', output)
+        page = self.site.pages['/finder/solo-sauna-repo-noryangjin/']
+        self.assertIn(B.E(terms), page)
+        self.assertIn('60 min from ₩45,000', page)
+        self.assertIn('Family room, 2 people', page)
+        # List cards and map previews are headline-only (PR #62): full terms live on the venue page.
+        for output in (B.venue_card(repo), B.venue_contents(repo, preview=True)):
+            self.assertIn(B.price_short(repo), output)
+            self.assertNotIn(B.E(terms), output)
 
     def test_access_age_time_tattoo_and_provenance_remain_verbatim(self):
         mandatory = {'Closed', 'Booking', 'Who can use', 'Conditions', 'Age', 'Capacity', 'Session length',
@@ -185,7 +189,7 @@ class Explorer(unittest.TestCase):
             if not B.FOREIGNER.get(v['slug'], {}).get('tattoo') and not any('tattoo' in val.lower() for _, val in v['facts'] + [('Tip', tip) for tip in v['tips']]):
                 self.assertIn(('Tattoos', B.UNKNOWN), rows)
         grand = self.by_slug['grand-josun-busan']
-        self.assertIn(B.E("Children 12 and under can't enter, for safety."), B.venue_contents(grand, preview=True))
+        self.assertIn(B.E("Children 12 and under can't enter, for safety."), self.site.pages['/finder/grand-josun-busan/'])
         sisu = self.by_slug['sisu-house']
         for key, value in sisu['facts']:
             if 'reply' in value:
@@ -221,9 +225,7 @@ class Explorer(unittest.TestCase):
         self.assertNotIn('10/28', note)
         self.assertIn(f'확인일 {B.dot(v["last_verified"])}', note)
         self.assertIn(f'href="{B.E(v["source"])}"', note)
-        for output in (B.venue_card(v), B.venue_contents(v, preview=True),
-                       self.site.pages[f'/finder/{v["slug"]}/']):
-            self.assertIn(B.E(value) + note, output)
+        self.assertIn(B.E(value) + note, self.site.pages[f'/finder/{v["slug"]}/'])
 
     def test_dash_reply_provenance_for_paradise_and_sisu_facts(self):
         for slug, checked, keys in (
@@ -232,8 +234,7 @@ class Explorer(unittest.TestCase):
             v = self.by_slug[slug]
             facts = [(key, value) for key, value in v['facts'] if key in keys]
             self.assertEqual({key for key, _ in facts}, keys)
-            outputs = (B.venue_card(v), B.venue_contents(v, preview=True),
-                       self.site.pages[f'/finder/{slug}/'])
+            outputs = (self.site.pages[f'/finder/{slug}/'],)  # cards/previews headline-only (PR #62)
             for key, value in facts:
                 with self.subTest(venue=slug, fact=key):
                     self.assertIn(f'— venue reply, {checked}', value)
@@ -293,7 +294,7 @@ class Explorer(unittest.TestCase):
         for v in packages:
             groups = dict(B.fact_groups(v))
             glance = self.site.pages[f'/finder/{v["slug"]}/'].split('id="glance-heading"', 1)[1].split('</section>', 1)[0]
-            outputs = (B.venue_card(v), B.venue_contents(v, preview=True), glance)
+            outputs = (glance,)  # cards/previews are headline-only since PR #62
             for key, label in B.SAUNA_PKG_KEYS:
                 with self.subTest(venue=v['slug'], key=key):
                     value = B.FOREIGNER[v['slug']][key]
@@ -361,7 +362,8 @@ class Explorer(unittest.TestCase):
     def test_cards_use_three_groups_and_details_keep_actions_and_safety(self):
         for v in self.venues:
             card = B.venue_card(v)
-            self.assertEqual(card.count('<dt>'), 3)
+            self.assertEqual(card.count('<dt>'), 0)  # headline-only list cards (PR #62)
+            self.assertIn(B.price_short(v), card)
             self.assertNotIn('<table', card)
             preview = B.venue_contents(v, preview=True)
             self.assertIn(f'href="/finder/{v["slug"]}/"', preview)
