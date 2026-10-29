@@ -28,7 +28,7 @@ CITY_EN = {"Seoul": "Seoul", "Busan": "Busan", "Jeju": "Jeju", "Gyeonggi": "Gyeo
 MON = ["", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 KIND_EN = {"호텔 사우나": "Hotel Sauna", "부티크 사우나": "Boutique Sauna", "대형 스파·온천": "Large Spa · Hot Spring", "크로스핏 박스": "CrossFit Box",
            "HYROX·스트렝스 짐": "HYROX · Strength Gym", "호텔·클럽 사우나": "Hotel · Club Sauna"}
-PENDING = "확인 중 (not confirmed)"
+PENDING = "Not confirmed yet"
 CITY_KEY = {"Seoul": "seoul", "Busan": "busan", "Jeju": "jeju", "Gyeonggi": "gyeonggi"}
 WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 SAFETY = "Heart disease, pregnancy, after drinking, or feeling unwell? Skip the sauna and cold plunge, or ask a doctor first. Not medical advice."
@@ -98,13 +98,13 @@ SAUNA_PKG_KEYS = [
     ("card", "Foreign card payment"),
     ("english", "English support / guide"),
     ("full_price", "Full admission rates"),
-    ("scrub_fee", "Body scrub (세신) fee"),
+    ("scrub_fee", "Body scrub (seshin) fee"),
     ("last_entry", "Last entry cutoff"),
     ("closures", "Regular & temp closures"),
     ("age_tattoo_attire", "Age · tattoo · attire rules"),
 ]
 def _is_confirmed(val):
-    return bool(val and val.strip() and val.strip().lower() not in ("not confirmed", "not stated for non-guests.", "확인 중"))
+    return bool(val and val.strip() and val.strip().lower() not in ("not confirmed", "not stated for non-guests.", "확인 중", "확인 중 (not confirmed)"))
 def fchk(v):
     d = FOREIGNER.get(v["slug"], {})
     keys = SAUNA_PKG_KEYS if (v["kind_key"] == "sauna" and "public_access" in d) else FCHK_KEYS
@@ -126,9 +126,9 @@ def guides(site, venues):
         confirmed = [v for v in vs if _is_confirmed(FOREIGNER.get(v["slug"], {}).get(key, ""))]
         excluded_cnt = len(vs) - len(confirmed)
         r = "".join(f'<tr><th><a href="/finder/{v["slug"]}/">{E(v["title"])}</a><br><span class="muted">{E(v["city_ko"])}</span></th><td>{E(FOREIGNER.get(v["slug"],{}).get(key))}</td><td>{dot(v["last_verified"])} · <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></td></tr>' for v in confirmed)
-        excl_note = f'<p class="muted">{excluded_cnt} open venue(s) where "{head}" is still Not confirmed (확인 중) on the official page are excluded from this table. See each venue page in the <a href="/finder/">Finder</a> for full details.</p>' if excluded_cnt else ""
+        excl_note = f'<p class="muted">{excluded_cnt} open venue(s) where "{head}" is still Not confirmed on the official page are excluded from this table. See each venue page in the <a href="/finder/">Finder</a> for full details.</p>' if excluded_cnt else ""
         return f'<table class="facts"><thead><tr><th>Venue</th><th>{head}</th><th>Checked · Source</th></tr></thead><tbody>{r}</tbody></table>{excl_note}'
-    note = '<p class="muted">Official pages only. Every line links to its source and check date. Venues where a condition is Not confirmed (확인 중), pre-opening, or temporarily closed are excluded from recommendations below.</p>'
+    note = '<p class="muted">Official pages only. Every line links to its source and check date. Venues where a condition is Not confirmed, pre-opening, or temporarily closed are excluded from recommendations below.</p>'
     bodies = {"tattoo-friendly-saunas-korea": "<h1>Tattoos? Read this first.</h1><p class=\"lead\">Some Korean saunas limit entry with tattoos. Here’s exactly what each official page says. Nothing more.</p>" + note + tbl(sau, "tattoo", "Tattoo rule"),
               "hotel-saunas-korea-non-guests": "<h1>No room? Some doors still open.</h1><p class=\"lead\">Hotel saunas in Seoul, Busan and Jeju. Who gets in, straight from the official pages.</p>" + note + tbl(sau, "dropin", "Open to visitors?") + f'<p class="safety">{SAFETY}</p>',
               "crossfit-hyrox-drop-in-korea": "<h1>Traveling? Keep training.</h1><p class=\"lead\">CrossFit and HYROX boxes in Korea. Drop-in and English support, from official pages only.</p>" + note + tbl(box, "dropin", "Drop-in") + "<h2>English support</h2>" + tbl(box, "english", "English")}
@@ -330,7 +330,7 @@ def off_marks(v):
 def off_html(v):
     m = off_marks(v)
     return "".join(f'<div class="off">✓ {E(t)}</div>' for t in m)
-SUN_TXT = {"yes": "Open Sunday (verified)", "no": "Closed Sunday (verified)", "unk": "Sunday: 확인 중 (not confirmed)"}
+SUN_TXT = {"yes": "Open Sunday (verified)", "no": "Closed Sunday (verified)", "unk": "Sunday: not confirmed"}
 
 def cav(v): return f'<div class="meta cav">※ {E(v["price_caveat"])}</div>' if v["price_caveat"] and v["price"] else ""
 
@@ -417,9 +417,9 @@ def fact_provenance(v, value):
         dates = [date for citation in citations for date in
                  re.findall(r"\b20\d{2}[-.]\d{2}[-.]\d{2}\b|\b\d{1,2}/\d{1,2}\b", citation)]
         if dates or not any(c.lower().startswith("(official page and ") for c in citations):
-            checked = ", ".join(dict.fromkeys(dates)) if dates else "확인일 확인 중"
+            checked = ", ".join(dict.fromkeys(dates)) if dates else "date not confirmed"
             return f'<small class="fact-source">Venue reply · {E(checked)} · Public source: {UNKNOWN}</small>'
-    return (f'<small class="fact-source">확인일 {dot(v["last_verified"])} · '
+    return (f'<small class="fact-source">Checked {dot(v["last_verified"])} · '
             f'<a href="{E(v["source"])}" rel="noopener noreferrer">Official source</a></small>')
 
 
@@ -471,7 +471,7 @@ def venue_facts(v, preview=False):
 
 def venue_contents(v, preview=False):
     title = E(v["title"]) if preview else f'<a href="/finder/{v["slug"]}/">{E(v["title"])}</a>'
-    footer = (f'<div class="meta">확인일 {dot(v["last_verified"])} · Official reference '
+    footer = (f'<div class="meta">Checked {dot(v["last_verified"])} · Official reference '
               f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></div>')
     actions = (f'<div class="btnrow"><a class="btn btn-d" href="/finder/{v["slug"]}/">View full details →</a>'
                f'<a class="btn map-link" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map ↗</a></div>' if preview else
@@ -504,7 +504,7 @@ MAP_LAYOUT = {
               [(None, "", 1), ("Gwanak", "Gwanak", 1), (None, "", 1), ("Gangnam", "Gangnam / Sinsa", 3), ("Gangdong", "", 1)],
               [(None, "", 1), ("Gwanak", "", 1), ("Gangnam", "", 4), ("Songpa", "Songpa", 1)]],
     "busan": [[("Dongnae", "Dongnae", 1), ("Haeundae", "Haeundae", 3), ("Nam-gu", "Nam-gu", 1), ("Jung-gu", "Jung-gu", 1), ("Seo-gu", "Seo-gu", 1)],
-              [(None, "", 3), ("", "District 확인 중 · off-map", 1)]],
+              [(None, "", 3), ("", "District not confirmed · off-map", 1)]],
     "jeju": [[("Jeju-si", "Jeju-si", 2), (None, "", 2), ("Seogwipo", "Seogwipo / Jungmun", 3)]],
     "gyeonggi": [[("Goyang", "Goyang / Samsong", 3), (None, "", 1), ("Icheon", "Icheon", 2)]],
     "all": [[("seoul", "Seoul", 7)], [("seoul", "", 7)], [("seoul", "", 7)], [("seoul", "", 7)], [("seoul", "", 7)],
@@ -589,7 +589,7 @@ def venue_map(venues):
         for key, items in groups.items():
             if len(items) > len(slots.get(key, [])):
                 raise ValueError(f'Expand schematic slots for {city}/{key}; never overlap pins')
-            place = (key.title() + " · schematic region only") if city == "all" else next(l for l, *_ in labels if l.split(" /")[0].startswith(key or "District")) if key else "District 확인 중 · off-map"
+            place = (key.title() + " · schematic region only") if city == "all" else next(l for l, *_ in labels if l.split(" /")[0].startswith(key or "District")) if key else "District not confirmed · off-map"
             for v, (x, y) in zip(items, slots[key]):
                 drawing += map_pin(v, x, y, place)
         label = "All Korea" if city == "all" else city.title()
@@ -702,7 +702,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
  <details class="more-filters"><summary>More filters <span id="f-more-count"></span></summary><div class="more-filter-fields">
  <div class="fgroup"><label for="f-sub">Sauna type</label><select id="f-sub"><option value="">All</option><option value="hotel">Hotel Saunas</option><option value="boutique">Boutique Saunas</option><option value="spa">Large Spa · Hot Spring</option></select></div>
  <div class="fgroup"><label for="f-sort">Sort</label><select id="f-sort"><option value="">Default</option><option value="date">Recently checked</option><option value="name">A–Z</option></select></div>
- <div class="fgroup"><label for="f-sunday">Sunday</label><select id="f-sunday"><option value="">All</option><option value="yes">Open (verified)</option><option value="no">Closed (verified)</option><option value="unk">확인 중 (not confirmed)</option></select></div>
+ <div class="fgroup"><label for="f-sunday">Sunday</label><select id="f-sunday"><option value="">All</option><option value="yes">Open (verified)</option><option value="no">Closed (verified)</option><option value="unk">Not confirmed</option></select></div>
  <div class="fgroup"><span>Price</span><label class="chk"><input id="f-price" type="checkbox"> Price confirmed only</label></div>
  <div class="fgroup"><span>Official lists</span><label class="chk"><input id="f-hyrox" type="checkbox"> HYROX gyms (official list)</label> <label class="chk"><input id="f-cf" type="checkbox"> CrossFit affiliates (verified)</label></div>
  <div class="fgroup"><span>&nbsp;</span><button id="f-reset" data-reset type="button" class="btn btn-d">Start over</button></div>
@@ -812,7 +812,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <div class="btnrow detail-actions">{"".join(links)}</div>
 <section class="detail-glance" aria-labelledby="glance-heading"><h2 id="glance-heading">At a glance</h2>
 <div class="glance-grid"><div><h3>Price</h3>{price_html(v)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v)}</div>' for label, values in fact_groups(v))}</div>
-<p class="meta">확인일 {dot(v["last_verified"])} · Official reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></p></section>
+<p class="meta">Checked {dot(v["last_verified"])} · Official reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></p></section>
 <table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{closed_row(v)}{offrows}</tbody></table>
 {tips}{unv}{fchk(v)}{aer_blk}{arch_blk}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong></p><p>Source: {" · ".join(srcs)}</p>
@@ -978,17 +978,17 @@ ARCHIVE = [
     ("archive-heosimcheong", "heosimcheong-busan", "Hurshimchung, floor by floor", "Hurshimchung (Hotel Nongshim)", "Hand drawing stacking Hotel Nongshim Hurshimchung’s official floor guide (B1·B2 parking, 1F restaurant, 2F banquet, 3F jjimjil room, 4F lockers and front desk, 5F hot-spring baths). Conceptual layout.", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
     ("archive-termeden", "termeden-icheon", "Termeden, zone by zone", "Termeden", "Hand drawing gathering the zones from Termeden’s official facility guide (indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa) on one sheet. Positions are not the real layout.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
     ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "Orakai Cheonggyesan, floor by floor", "Orakai Cheonggyesan", "Hand drawing stacking the B1 sauna (dry and wet saunas, several pools, walk-in body scrub) and the B2 EV charging area from Orakai Cheonggyesan Hotel’s official guide. The sauna’s interior layout is not drawn.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
-    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
+    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "CrossFit Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
 ]
 ARCHIVE_BY_VENUE = {a[1]: a for a in ARCHIVE}
 # 조감도 손그림 (위에서 내려다본 평면). illustrations/make_aerial.py
 AERIAL = [
-    ('aerial-termeden', 'termeden-icheon', "Bird's-eye hand drawing of Termeden in Icheon seen from above: the indoor pool and spa, the hot-spring bathhouse joined to its open-air bath, the jjimjil spa rooms, and the outdoor pools (infinity pool, forest bath, mountain pool, terme), with the entrance and ticket desk."),
-    ('aerial-spa-haesurang', 'spa-haesurang-busan', "Bird's-eye hand drawing of Spa Haesurang in Busan, floor plans seen from above: the 7th-floor open-air bath, Finnish sauna, lounge bar and PDR rooms, the 5th-floor jjimjil room and lockers, the 4th-floor lockers and powder room, and the 2nd-floor lobby with the 3rd-floor powder room."),
-    ('aerial-heosimcheong', 'heosimcheong-busan', "Bird's-eye hand drawing of Hurshimchung at Hotel Nongshim in Busan, floor plans seen from above: 5th-floor hot-spring baths, 4th-floor lockers and front desk, 3rd-floor jjimjil room, and the restaurant, banquet and parking floors below."),
-    ('aerial-orakai-cheonggyesan', 'orakai-cheonggyesan', "Bird's-eye hand drawing of Orakai Cheonggyesan Hotel seen from above: the basement-1 sauna with dry and wet saunas, several pools and a body-scrub area, and the basement-2 EV charging area."),
-    ('aerial-sisu-house', 'sisu-house', "Bird's-eye hand drawing of Sisu House in Seoul, floor plans seen from above: the 1st-floor Welcoming Zone (check-in and shop), the 1.5-floor Touch Zone, and the 2nd–3rd-floor Private Zone with sauna, warm bath, cold shower and private changing room."),
-    ('aerial-crossfit-super-sapiens', 'crossfit-super-sapiens', "Bird's-eye hand drawing of CrossFit Super Sapiens seen from above: the 1st-floor main training floor, the 2nd floor with showers, lockers and an accessory training area, and the 3rd floor with tanning and staff space."),
+    ('aerial-termeden', 'termeden-icheon', "Hand-drawn bird's-eye plan of Termeden in Icheon: outdoor infinity pool, forest bath, mountain pool and terme tubs; indoor pool and spa, hot-spring bathhouse with cold bath and saunas, and the jjimjil spa; day pass ₩49,000 (adult, November)."),
+    ('aerial-spa-haesurang', 'spa-haesurang-busan', "Hand-drawn bird's-eye plan of Spa Haesurang's sauna floor in Busan: dry and wet saunas, warm, hot and cold pools, event bath, rows of showers (about 80) and powder room; sauna ₩15,000 on weekdays."),
+    ('aerial-heosimcheong', 'heosimcheong-busan', "Hand-drawn bird's-eye plan of the 5th-floor hot-spring baths at Hurshimchung, Busan: longevity, event, celadon, cave, cold, half-body, salt and open-air baths, mini pool, steam and dry saunas, showers and scrub corner; ₩15,000 on weekdays."),
+    ('aerial-orakai-cheonggyesan', 'orakai-cheonggyesan', "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools, showers and a walk-in body scrub; adult ₩24,000."),
+    ('aerial-sisu-house', 'sisu-house', "Hand-drawn bird's-eye plan of Sisu House in Seoul: a one-person private room with Finnish sauna, warm bath, 14°C cold shower, ice fountain and changing room, plus the touch-care room and check-in; from ₩79,000."),
+    ('aerial-crossfit-super-sapiens', 'crossfit-super-sapiens', "Hand-drawn bird's-eye plan of CrossFit Super Sapiens in Seoul: 1st-floor training floor with rig and barbells, 2nd-floor accessory area, showers and lockers, 3rd-floor tanning and staff room; drop-in ₩30,000."),
 ]
 AERIAL_BY_VENUE = {a[1]: a for a in AERIAL}
 
@@ -1015,6 +1015,20 @@ def view_word_check(dist):
     for p in srcs:
         w = view_word_scan(p, p.read_text(errors="ignore"))
         if w: bad.append((str(p), w))
+    return bad
+
+# 2026-10-30 owner order: every drawing is English. Any Hangul in a drawing SVG fails the build.
+HANGUL = re.compile(r"[\u1100-\u11FF\u3130-\u318F\uAC00-\uD7A3]")
+def drawing_hangul_scan(text):
+    return sorted(set(HANGUL.findall(text)))
+def drawing_hangul_check(dist):
+    bad = []
+    ill = Path(__file__).resolve().parent.parent / "illustrations"
+    # Scope: the 12 venue drawings (aerial-*, archive-*). Guide drawings (img/guide) are tracked separately.
+    srcs = list(ill.glob("svg/aerial-*.svg")) + list(ill.glob("svg/archive-*.svg")) + [p for d in ("assets/img/aerial", "assets/img/archive") for p in (dist / d).glob("*.svg")]
+    for p in srcs:
+        h = drawing_hangul_scan(p.read_text(errors="ignore"))
+        if h: bad.append((str(p), "".join(h[:10])))
     return bad
 
 # 2026-10-29 owner order (준태님): people hate reading. Key pages must not carry long paragraphs.
@@ -1073,6 +1087,10 @@ def main():
     for b in lt: print("LONG-TEXT WARN:", b)
     if lt: sys.exit(5)
     print(f"long-text check OK (no paragraph over {LONG_P_LIMIT} chars on key pages)")
+    dh = drawing_hangul_check(dist)
+    for b in dh: print("DRAWING-HANGUL CHECK FAIL:", b)
+    if dh: sys.exit(6)
+    print("drawing Hangul check OK (all drawing SVGs are English)")
     vw = view_word_check(dist)
     for b in vw: print("VIEW-WORD CHECK FAIL:", b)
     if vw: sys.exit(3)

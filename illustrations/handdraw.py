@@ -31,6 +31,11 @@ def text(x, y, s, size=34, anchor="start", rot=0, op=1.0, jitter=True, color=INK
             out.append(f"M{cx+size*0.21-r:.1f},{y-size*0.3:.1f} a{r:.1f},{r:.1f} 0 1,0 {2*r:.1f},0 a{r:.1f},{r:.1f} 0 1,0 {-2*r:.1f},0 Z")
             cx += size * 0.42
             continue
+        if c == "°":
+            r = size * 0.08
+            out.append(f"M{cx+size*0.06:.1f},{y-size*0.62:.1f} a{r:.1f},{r:.1f} 0 1,0 {2*r:.1f},0 a{r:.1f},{r:.1f} 0 1,0 {-2*r:.1f},0 Z M{cx+size*0.06+r*0.45:.1f},{y-size*0.62:.1f} a{r*0.55:.1f},{r*0.55:.1f} 0 1,1 {r*1.1:.1f},0 a{r*0.55:.1f},{r*0.55:.1f} 0 1,1 {-r*1.1:.1f},0 Z")
+            cx += size * 0.3
+            continue
         if c == "→":
             yy = y - size * 0.28; x0 = cx + size * 0.1; x1 = cx + size * 0.9; k = size * 0.2
             out.append(f"M{x0:.1f},{yy:.1f} L{x1:.1f},{yy:.1f} L{x1-k:.1f},{yy-k*0.8:.1f} M{x1:.1f},{yy:.1f} L{x1-k:.1f},{yy+k*0.8:.1f}")

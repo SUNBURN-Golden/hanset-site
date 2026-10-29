@@ -101,7 +101,7 @@ class Explorer(unittest.TestCase):
             self.assertIn('map-land', ET.tostring(canvas, encoding='unicode'))
         self.assertIn('Han River', markup)
         self.assertNotIn('map-district', markup)
-        self.assertIn('District 확인 중 · off-map', markup)
+        self.assertIn('District not confirmed · off-map', markup)
         templates = [a['id'] for tag, a in Elements(markup).elements if tag == 'template']
         self.assertEqual(set(templates), {'preview-' + s for s in self.by_slug})
 
@@ -212,7 +212,7 @@ class Explorer(unittest.TestCase):
                 self.assertIn(phrase, value)
                 note = B.fact_provenance(v, value)
                 self.assertNotIn('Venue reply', note)
-                self.assertIn(f'확인일 {B.dot(v["last_verified"])}', note)
+                self.assertIn(f'Checked {B.dot(v["last_verified"])}', note)
                 self.assertIn(f'href="{B.E(v["source"])}"', note)
                 self.assertIn(B.E(value) + note, self.site.pages[f'/finder/{v["slug"]}/'])
 
@@ -223,7 +223,7 @@ class Explorer(unittest.TestCase):
         note = B.fact_provenance(v, value)
         self.assertNotIn('Venue reply', note)
         self.assertNotIn('10/28', note)
-        self.assertIn(f'확인일 {B.dot(v["last_verified"])}', note)
+        self.assertIn(f'Checked {B.dot(v["last_verified"])}', note)
         self.assertIn(f'href="{B.E(v["source"])}"', note)
         self.assertIn(B.E(value) + note, self.site.pages[f'/finder/{v["slug"]}/'])
 
@@ -250,16 +250,16 @@ class Explorer(unittest.TestCase):
         cases = (
             ('Closed 10/28 (venue reply 10/19)', '10/19'),
             ('Closed 10/28 (hotel reply 2026-10-18)', '2026-10-18'),
-            ('Closed 10/28 (venue reply)', '확인일 확인 중'),
-            ('Closed 10/28 (hotel reply)', '확인일 확인 중'),
+            ('Closed 10/28 (venue reply)', 'date not confirmed'),
+            ('Closed 10/28 (hotel reply)', 'date not confirmed'),
             ('Closed 10/28 — venue reply, 2026-10-18', '2026-10-18'),
             ('Closed 10/28 — hotel reply, 2026.10.18', '2026.10.18'),
             ('Closed 10/28 -- venue reply, 2026-10-17', '2026-10-17'),
             ('Closed 10/28 -- hotel reply, 10/19', '10/19'),
-            ('Closed 10/28 — venue reply', '확인일 확인 중'),
-            ('Closed 10/28 -- hotel reply', '확인일 확인 중'),
-            ('Closed 10/28 — venue reply (inquiry 10/20)', '확인일 확인 중'),
-            ('Closed 10/28 — venue reply\nInquiry 10/20', '확인일 확인 중'),
+            ('Closed 10/28 — venue reply', 'date not confirmed'),
+            ('Closed 10/28 -- hotel reply', 'date not confirmed'),
+            ('Closed 10/28 — venue reply (inquiry 10/20)', 'date not confirmed'),
+            ('Closed 10/28 — venue reply\nInquiry 10/20', 'date not confirmed'),
         )
         for value, checked in cases:
             with self.subTest(value=value):

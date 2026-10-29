@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
-"""한셋 '층별 층별 손그림' 6장 (2026-10-18).
-공식 안내에 글자로 공개된 층·구역 이름만 사용. 구역의 위치·크기는 개념도(그리지 않은 정보는 지어내지 않음).
-원본 이미지 복사·트레이싱 없음. 가격·시간 미표기."""
+"""HANSET floor-by-floor sketches, 6 venues (English labels, 2026-10-30).
+Only floor and zone names published in official guides. Zone positions are schematic; nothing is invented.
+No images copied or traced."""
 import sys, os, html as _h
 sys.path.insert(0, "/workspace/fitness-hub/illustrations")
 from handdraw import *
@@ -9,8 +9,8 @@ import handdraw as h
 from make_archive import wrap, fit, steam, waves, curve_arrow
 
 CHECK = "2026.10.18"
-K = 0.46   # 세로 압축
-SAFE = ["심혈관 질환·임신·음주 후·컨디션 불량 시 사우나·냉수욕을 피하거나", "의사와 상담하세요. 의학적 조언이 아닙니다."]
+K = 0.46   
+SAFE = ["Heart disease, pregnancy, after drinking or feeling unwell? Skip the sauna", "and cold plunge, or ask a doctor first. Not medical advice."]
 
 def P(ox, oy, gx, gy, gz=0):
     return (ox + (gx - gy), oy + (gx + gy) * K - gz)
@@ -32,9 +32,9 @@ def hatch_poly(pts, gap=11, lw=1.5, op=0.5, ang=1):
     return s + "</g>"
 
 def slab(ox, oy, S, t, ghost=False, walls=0):
-    """ox,oy = 윗면 맨 위 꼭짓점. 정사각 바닥 S×S 슬래브(두께 t). 반환 (svg, 윗면 좌표 함수)"""
+    """helper"""
     T = P(ox, oy, 0, 0); R = P(ox, oy, S, 0); B = P(ox, oy, S, S); L = P(ox, oy, 0, S)
-    # (gx 증가 = 오른쪽 아래, gy 증가 = 왼쪽 아래) → 위 꼭짓점 T, 오른쪽 R, 아래 B, 왼쪽 L
+    
     s = ""
     dn = lambda p: (p[0], p[1] + t)
     if ghost:
@@ -47,7 +47,7 @@ def slab(ox, oy, S, t, ghost=False, walls=0):
     s += poly([T, R, B, L], fill=PAPER, lw=3.6)
     s += f'<path d="M{T[0]:.1f},{T[1]:.1f} L{R[0]:.1f},{R[1]:.1f} L{B[0]:.1f},{B[1]:.1f} L{L[0]:.1f},{L[1]:.1f} Z" fill="{INK}" fill-opacity="0.04"/>'
     if walls:
-        # 뒤쪽 두 벽(낮은 칸막이)
+        
         Tt = (T[0], T[1] - walls); Rt = (R[0], R[1] - walls); Lt = (L[0], L[1] - walls)
         s += poly([L, T, Tt, Lt], fill=PAPER, lw=3.0, passes=1)
         s += hatch_poly([L, T, Tt, Lt], gap=10, lw=1.2, op=0.35, ang=1)
@@ -56,7 +56,7 @@ def slab(ox, oy, S, t, ghost=False, walls=0):
     return s
 
 def block(ox, oy, gx, gy, side, hgt, motif=None):
-    """윗면 좌표 (gx,gy)에 놓는 작은 직육면체(구역). 위치는 개념도."""
+    """helper"""
     a = side
     A = P(ox, oy, gx - a/2, gy - a/2, 0); Bp = P(ox, oy, gx + a/2, gy - a/2, 0)
     C = P(ox, oy, gx + a/2, gy + a/2, 0); D = P(ox, oy, gx - a/2, gy + a/2, 0)
@@ -83,7 +83,7 @@ def block(ox, oy, gx, gy, side, hgt, motif=None):
     return s
 
 def floor_label(lx, ty, tag, title, items, size=25, wlab=450, dashed=False):
-    """라벨 블록. (svg, 높이)"""
+    """helper"""
     s = ellipse(lx + 30, ty + 26, 30, 30, 3.6, dash=("4 6" if dashed else None))
     s += text(lx + 30, ty + 26 + 11, tag, fit(tag, 32, 54), "middle", jitter=False)
     s += text(lx + 76, ty + 38, title, fit(title, 38, wlab - 76))
@@ -98,7 +98,7 @@ def label_height(title, items, size=25, wlab=450):
     return 38 + size * 1.3 + n * size * 1.22 - size * 0.4 + 10
 
 def tower(floors, cx, S, t=18, top=238, bottom=1066, lx=540, wlab=500, size=25, pmax_ratio=1.0):
-    """floors: 위층 → 아래층 순서. dict(tag,title,items,blocks=[(motif,height)],ghost,tt(두께))"""
+    """helper"""
     n = len(floors)
     hh = 2 * S * K
     avail = bottom - top
@@ -108,14 +108,14 @@ def tower(floors, cx, S, t=18, top=238, bottom=1066, lx=540, wlab=500, size=25, 
     y0 = top + max(0, (avail - used) / 2)
     ys = [y0 + i * p for i in range(n)]
     labh = [label_height(f["title"], f.get("items", []), size, wlab) for f in floors]
-    # 라벨 y: 이상적 위치(슬래브 옆)에서 시작해 겹치면 아래로 밀고, 넘치면 전체를 위로
+    
     ideal = [ys[i] + hh / 2 + floors[i].get("tt", t) / 2 - 26 for i in range(n)]
     tops = []; cur = -1e9
     for i in range(n):
         ty = max(ideal[i], cur, top - 6); tops.append(ty); cur = ty + labh[i] + 2
     over = tops[-1] + labh[-1] - bottom
     if over > 0:
-        # 아래에서부터 위로 당기기
+        
         nxt = bottom
         for i in range(n - 1, -1, -1):
             tops[i] = min(tops[i], nxt - labh[i]); nxt = tops[i] - 2
@@ -150,45 +150,42 @@ def base(title, sub):
     sz = fit(title, 76, 960)
     s = text(60, 118, title, sz, "start", rot=-0.8)
     s += rpath([(60, 142), (300, 148), (min(60 + tw(title, sz), 900), 141)], 4.5, passes=2)
-    s += text(62, 196, sub, fit(sub, 32, 960), "start", op=0.85)
+    s += text(62, 196, sub, fit(sub, 30, 450), "start", op=0.85)
     return s
 
 def foot(src, sauna=True, extra=None, y=1092):
     s = rpath([(60, y), (540, y + 4), (1020, y - 1)], 2.4, passes=1, dash="3 9", op=0.8)
-    l1 = "구역 배치는 개념도예요 · 공식 안내를 바탕으로 한 손그림"
-    l2 = "실제와 다를 수 있어요"
-    l3 = f"출처 {src} · 확인일 {CHECK}"
-    s += text(60, y + 42, l1, fit(l1, 30, 960)) + text(60, y + 78, l2, fit(l2, 30, 960))
-    s += text(60, y + 112, l3, fit(l3, 27, 960), op=0.9)
-    yy = y + 142
+    l3 = f"Source {src} · checked {CHECK}"
+    s += text(60, y + 42, l3, fit(l3, 27, 960), op=0.9)
+    yy = y + 76
     for e in (extra or []):
         s += text(60, yy, e, fit(e, 25, 960), op=0.85); yy += 29
     if sauna:
         for e in SAFE:
             s += text(60, yy, e, fit(e, 24, 960), op=0.85); yy += 28
-    s += text(1020, 1334, "한셋 HANSET", 30, "end", rot=-1)
+    s += text(1020, 1334, "HANSET", 30, "end", rot=-1)
     return s
 
-# ------------------------------------------------------------------ 장면
+# ------------------------------------------------------------------ scenes
 def haesurang():
-    b = base("스파 해수랑, 층별로", "부산 서구 · 공식 편의시설 층 표기를 쌓아 올린 손그림")
+    b = base("Spa Haesurang, floor by floor", "Busan · official amenities page")
     fl = [
-        dict(tag="7F", title="노천탕", items=["노천탕 · 핀란드 사우나", "라운지바 · 대형스크린", "PDR룸(블루 웨이브 · 레드 하모니 · 퍼플 스카이)"], blocks=[("wave", 24), ("steam", 30), ("plain", 22)]),
-        dict(tag="6F", title="공식 층 안내 없음", items=[], ghost=True),
-        dict(tag="5F", title="찜질방", items=["릴렉스존 · 안마의자존 · 동굴존 · 포토존 · 인형뽑기 · 키즈존", "스낵바 · 푸드코트", "사우나 락커룸은 4~5F(공식 층 표기)"], blocks=[("steam", 26), ("plain", 20), ("desk", 18)]),
-        dict(tag="4F", title="락커룸 · 파우더룸", items=["사우나 락커룸 4~5F · 파우더룸 3~4F(공식 층 표기)"], blocks=[("locker", 30), ("plain", 20)]),
-        dict(tag="3F", title="파우더룸", items=["면봉 · 빗 · 드라이기가 있는 공간(공식)"], blocks=[("desk", 20), ("plain", 18)]),
-        dict(tag="2F", title="로비", items=["키오스크 · 신발장 · 인포데스크"], blocks=[("desk", 22), ("plain", 20)]),
+        dict(tag="7F", title="Open-air bath", items=["Open-air bath · Finnish sauna", "Lounge bar · big screen", "PDR rooms (Blue Wave · Red Harmony · Purple Sky)"], blocks=[("wave", 24), ("steam", 30), ("plain", 22)]),
+        dict(tag="6F", title="Not listed officially", items=[], ghost=True),
+        dict(tag="5F", title="Jjimjil rooms", items=["Relax · massage chair · cave · photo · claw machine · kids zones", "Snack bar · food court", "Sauna lockers on 4-5F (official)"], blocks=[("steam", 26), ("plain", 20), ("desk", 18)]),
+        dict(tag="4F", title="Lockers · powder room", items=["Sauna lockers 4-5F · powder rooms 3-4F (official)"], blocks=[("locker", 30), ("plain", 20)]),
+        dict(tag="3F", title="Powder room", items=["Cotton swabs · combs · hair dryers (official)"], blocks=[("desk", 20), ("plain", 18)]),
+        dict(tag="2F", title="Lobby", items=["Kiosks · shoe lockers · info desk"], blocks=[("desk", 22), ("plain", 20)]),
     ]
     sv, S = tower(fl, 272, 182, top=240, bottom=1062)
     b += sv
-    b += foot("spahaesurang.co.kr", True, ["사우나 구성(공식): 습식·건식 사우나, 온탕·열탕, 냉탕, 이벤트탕, 샤워 공간(80여 개)"])
+    b += foot("spahaesurang.co.kr", True, ["Sauna (official): wet and dry saunas, warm and hot pools, cold pool, event bath, about 80 shower spots"])
     return b
 
 from make_archive import steps_box, side_note
 
 def sisu():
-    b = base("시수하우스, 층별로", "서울 신사동 · 공식 '공간 안내'의 층 구성을 쌓아 올린 손그림")
+    b = base("Sisu House, floor by floor", "Seoul · official space guide")
     fl = [
         dict(tag="2-3F", title="Private Zone", tt=40, items=["Private Changing Room", "Warm Bath · Cold Shower", "Finnish Sauna · Ice Fountain"], blocks=[("steam", 30), ("wave", 22), ("plain", 20)]),
         dict(tag="1.5F", title="Touch Zone", items=["Pre-Sauna Touch Care"], blocks=[("desk", 20), ("plain", 18)]),
@@ -196,60 +193,60 @@ def sisu():
     ]
     sv, S = tower(fl, 270, 186, top=236, bottom=772, t=24)
     b += sv
-    st, ye = steps_box(60, 788, 480, "리추얼 순서(공식)", ["Warm-up · 터치 케어", "Totonoi · 프라이빗 존에서 사우나", "Cold Shower & Cold Bath", "Clarity · 마무리"], size=26)
+    st, ye = steps_box(60, 788, 480, "Ritual steps (official)", ["Warm-up · touch care", "Totonoi · sauna in the private zone", "Cold Shower & Cold Bath", "Clarity · wind down"], size=26)
     b += st
-    sn, y2 = side_note(600, 788, 420, "이용 방식(공식)", ["100% 사전 예약제(네이버 예약)", "1인 이용을 원칙으로 해요", "예약자 본인 이용 원칙"], size=25)
+    sn, y2 = side_note(600, 788, 420, "How it works (official)", ["100% advance booking (Naver Booking)", "One person per room", "Only the person who booked"], size=25)
     b += sn
-    b += foot("sisu.house", True, ["공식 사이트의 '공간 안내'·'리추얼 단계'를 글자로 읽고 그렸어요."], y=1098)
+    b += foot("sisu.house", True, y=1098)
     return b
 
 def orakai():
-    b = base("오라카이 청계산, 층별로", "서울 서초 · 호텔 지하 1층 사우나 안내를 쌓아 올린 손그림")
+    b = base("Orakai Cheonggyesan, floor by floor", "Seoul · hotel B1 sauna")
     fl = [
-        dict(tag="B1", title="사우나(공식: 지하 1층)", items=["건식 사우나 · 습식 사우나", "다양한 탕", "세신은 현장 접수만 가능", "같은 층에 'LEVEL B1' 레스토랑이 있어요"], blocks=[("steam", 30), ("wave", 22), ("plain", 20)]),
-        dict(tag="B2", title="주차 · 전기차 충전소", items=["전기차 충전소는 지하 2층(공식 이용안내)"], blocks=[("car", 20), ("plain", 16)]),
+        dict(tag="B1", title="Sauna (official: B1)", items=["Dry sauna · wet sauna", "Several pools", "Body scrub: walk-in sign-up only", "'LEVEL B1' restaurant on the same floor"], blocks=[("steam", 30), ("wave", 22), ("plain", 20)]),
+        dict(tag="B2", title="Parking · EV charging", items=["EV chargers on B2 (official guide)"], blocks=[("car", 20), ("plain", 16)]),
     ]
     sv, S = tower(fl, 270, 200, top=246, bottom=790, t=28)
     b += sv
-    sn, y2 = side_note(60, 830, 470, "이용 안내(공식)", ["객실을 이용하지 않은 고객도 이용 가능", "8세 미만은 입장 불가", "8세 이상 17세 미만은 보호자 동반"], size=25)
+    sn, y2 = side_note(60, 830, 470, "Who can use (official)", ["Open to non-guests too", "Under 8 not admitted", "Ages 8-16 with a guardian"], size=25)
     b += sn
-    sn2, y3 = side_note(580, 830, 440, "알아 두세요", ["정기 휴관일이 있어요", "요금·운영시간은 상세 페이지에서 확인하세요", "사우나 안의 구체적인 배치는 공식 안내에 글자로 나와 있지 않아요"], size=25)
+    sn2, y3 = side_note(580, 830, 440, "Good to know", ["Has regular closing days", "Prices and hours: see the venue page"], size=25)
     b += sn2
     b += foot("cgs.orakaihotels.com", True, y=1098)
     return b
 
 def heosimcheong():
-    b = base("허심청, 층별로", "호텔농심 온천 · 공식 층별 시설 안내를 쌓아 올린 손그림")
+    b = base("Hurshimchung, floor by floor", "Busan · Hotel Nongshim")
     fl = [
-        dict(tag="5F", title="온천시설 · 온천탕", items=["남·여 별도탕, 3,000명 동시 수용(공식)", "장수탕 · 이벤트탕 · 청자탕 · 노천탕 · 회목탕 · 물맞이탕 · 동굴탕 · 냉탕 · 반신욕탕 · 소금탕 · 미니풀장", "증기 사우나(습식) · 고온 사우나(건식) · 샤워장 · 세신코너"], blocks=[("wave", 22), ("steam", 28), ("wave", 20)]),
-        dict(tag="4F", title="온천시설 · 입퇴장", items=["안내데스크(키 지급·계산)", "락카(남·여) · 이발소 · 구두수선실", "락카룸 용품판매코너에서 가운 받기"], blocks=[("desk", 22), ("locker", 26)]),
-        dict(tag="3F", title="찜질방", items=["참숯방 · 아로마향기방 · 황토방 · 보석방 · 아이스방", "대휴게실 · 수면실 · 엔카페&스낵 · 헬스센터"], blocks=[("steam", 26), ("plain", 20)]),
-        dict(tag="1-2F", title="식당 · 연회시설", items=["1F 제과점 · 중식당 · 패스트푸드점 · 카페 · 브로이하우스펍 · 다목적홀", "2F 연회장(대·중·소) · 예식홀(호텔 연결 통로)"], blocks=[("plain", 22), ("plain", 18)]),
-        dict(tag="B1·2", title="주차장", items=["RV차량은 진입 금지(주차빌딩 이용)"], blocks=[("car", 16)]),
+        dict(tag="5F", title="Hot-spring baths", items=["Separate men's and women's baths, 3,000 people at once (official)", "Longevity · event · celadon · open-air · cave · cold · half-body · salt baths · mini pool and more", "Steam sauna (wet) · high-heat sauna (dry) · showers · scrub corner"], blocks=[("wave", 22), ("steam", 28), ("wave", 20)]),
+        dict(tag="4F", title="Entry and exit", items=["Front desk (keys · payment)", "Lockers (men · women) · barber · shoe repair", "Get your robe at the locker-room shop"], blocks=[("desk", 22), ("locker", 26)]),
+        dict(tag="3F", title="Jjimjil rooms", items=["Charcoal · aroma · clay · gem · ice rooms", "Big rest hall · sleeping room · cafe & snacks · gym"], blocks=[("steam", 26), ("plain", 20)]),
+        dict(tag="1-2F", title="Food · banquet", items=["1F bakery · Chinese restaurant · fast food · cafe · brewpub · hall", "2F banquet halls · wedding hall (link to the hotel)"], blocks=[("plain", 22), ("plain", 18)]),
+        dict(tag="B1·2", title="Parking", items=["No RVs (use the parking building)"], blocks=[("car", 16)]),
     ]
     sv, S = tower(fl, 262, 168, top=236, bottom=1062, size=23, wlab=520, lx=530, t=16)
     b += sv
-    b += foot("hotelnongshim.com", True, ["이용 순서(공식): 4F 안내데스크에서 키 받고 입장 → 락카 → 5F 온천 · 3F 찜질 → 4F 계산(후불제)"], y=1092)
+    b += foot("hotelnongshim.com", True, ["How it works (official): key at the 4F desk → lockers → 5F baths · 3F jjimjil → pay at 4F when you leave"], y=1092)
     return b
 
 def supersapiens():
-    b = base("슈퍼사피엔스, 층별로", "서울 강동 · 크로스핏 박스 공식 'Our Facility'를 쌓아 올린 손그림")
+    b = base("CrossFit Super Sapiens, floor by floor", "Seoul · 'Our Facility' page")
     fl = [
-        dict(tag="3F", title="추가 시설", items=["회원용 태닝 시설", "스태프 전용 공간"], blocks=[("sun", 22), ("plain", 20)]),
-        dict(tag="2F", title="편의 시설 · 보조 운동 공간", items=["샤워실 · 락커룸", "웨이트 · 스트레칭 · 유산소 존", "커뮤니티 공간"], blocks=[("locker", 26), ("plain", 20), ("plain", 18)]),
-        dict(tag="1F", title="메인 운동 공간", items=["다양한 크로스핏 장비", "WOD · 오픈짐 이용 공간"], blocks=[("bar", 24), ("plain", 18)]),
+        dict(tag="3F", title="Extras", items=["Tanning for members", "Staff-only space"], blocks=[("sun", 22), ("plain", 20)]),
+        dict(tag="2F", title="Amenities · accessory training", items=["Showers · lockers", "Weights · stretching · cardio zone", "Community space"], blocks=[("locker", 26), ("plain", 20), ("plain", 18)]),
+        dict(tag="1F", title="Main training floor", items=["CrossFit equipment", "WOD and open-gym space"], blocks=[("bar", 24), ("plain", 18)]),
     ]
     sv, S = tower(fl, 270, 196, top=236, bottom=820, t=28)
     b += sv
-    sn, y2 = side_note(60, 850, 470, "주차(공식)", ["박스 앞 마당", "바로 옆 '함께하는교회' 건물 주차장"], size=26)
+    sn, y2 = side_note(60, 850, 470, "Parking (official)", ["Front yard of the box", "Church parking lot next door"], size=26)
     b += sn
-    sn2, y3 = side_note(580, 850, 440, "알아 두세요", ["공식 안내: 지상 3층 규모의 창고형 공간", "층 안의 구체적인 배치는 글자로 나와 있지 않아요", "드롭인·체험 예약은 상세 페이지에서 확인해요"], size=24)
+    sn2, y3 = side_note(580, 850, 440, "Good to know", ["Official: a 3-storey warehouse space", "Drop-in and trial booking: see the venue page"], size=24)
     b += sn2
     b += foot("crossfitsupersapiens.com", False, y=1110)
     return b
 
 def termeden():
-    b = base("테르메덴, 구역 한눈에", "경기 이천 · 공식 시설 소개의 구역 이름을 한 장에 모은 손그림")
+    b = base("Termeden, zone by zone", "Icheon · official facility guide")
     S = 290; ox, oy = 540, 238
     b += slab(ox, oy, S, 22)
     zones = [
@@ -265,12 +262,12 @@ def termeden():
         px, py = P(ox, oy, gx * S, gy * S, top_y)
         b += ellipse(px, py - 26 - (62 if mot == "steam" else 0), 20, 20, 3.4) + text(px, py - 26 - (62 if mot == "steam" else 0) + 10, str(num), 28, "middle", jitter=False)
     fr = P(ox, oy, S, S)
-    b += text(540, fr[1] + 52, "입구 · 유인 매표소 · 2층 정산소(공식)", 27, "middle")
+    b += text(540, fr[1] + 52, "Entrance · staffed ticket desk · pay on 2F (official)", 27, "middle")
     cards = [
-        (1, "실내 풀&스파", ["실내 바데풀(유수풀·유아풀)", "실내 이벤트탕 · 아로마 사우나(건식)", "플로팅 · 넥샤워 · 릴렉스 라이닝 등 수류 시설"]),
-        (2, "온천대욕장", ["남·여 온천대욕장(온탕·냉탕·샤워)", "건식 · 습식 사우나 · 노천온천 · 이벤트탕", "노천탕과 대욕장은 홀딩도어로 이어져요(공식 소개)"]),
-        (3, "찜질스파", ["편백나무방 · 소금방 · 황토방 · 맥반석방", "마사지체어룸 · 키즈라이브러리", "패밀리룸 · 가든커뮤니티 · 찜질복은 락커룸 데스크에서 대여"]),
-        (4, "실외 풀&스파(1층·2층 구역)", ["인피니티풀 · 포레스트바스 · 워터플레이", "마운틴풀 · 테르메(정자탕·이벤트탕)", "카바나·슬라이드·파이어 연출은 시즌·시간대별 운영"]),
+        (1, "Indoor pool & spa", ["Indoor bade pool (lazy river · kids pool)", "Indoor event bath · aroma sauna (dry)", "Floating · neck showers · relax loungers"]),
+        (2, "Hot-spring bathhouse", ["Men's and women's (warm · cold baths · showers)", "Dry and wet saunas · open-air bath · event bath", "Open-air bath joins the bathhouse by a folding door"]),
+        (3, "Jjimjil spa", ["Cypress · salt · clay · elvan-stone rooms", "Massage-chair room · kids library", "Family room · garden lounge · jjimjil wear at the locker desk"]),
+        (4, "Outdoor pool & spa (1F · 2F)", ["Infinity pool · forest bath · water play", "Mountain pool · terme (pavilion bath · event bath)", "Cabanas, slides and fire shows by season and time"]),
     ]
     ys0 = 640
     for i, (num, ttl, its) in enumerate(cards):
@@ -281,16 +278,16 @@ def termeden():
         for it in its:
             for j, l in enumerate(wrap("· " + it, 24, 440)):
                 b += text(cx0 + 62 + (22 if j > 0 else 0), yy, l, 24); yy += 29
-    b += foot("termeden.com", True, ["칸의 위치는 실제 배치가 아니에요 · 구역 이름만 글자로 확인했어요.", "휴장·클린데이·운영시간은 상세 페이지의 공지를 확인하세요."], y=1076)
+    b += foot("termeden.com", True, ["Closures, clean days and hours: see the notices on the venue page."], y=1076)
     return b
 
 SCENES = {
-    "archive-sisu-house": (sisu, "시수하우스 층별 손그림", "시수하우스 공식 공간 안내의 층 구성(1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone)과 리추얼 순서를 쌓아 올린 층별 손그림. 구역 배치는 개념도예요."),
-    "archive-spa-haesurang": (haesurang, "스파 해수랑 층별 손그림", "스파 해수랑 공식 편의시설 안내의 층 표기(2F 로비, 3~4F 파우더룸, 4~5F 락커룸, 5F 찜질방, 7F 노천탕)를 층별로 쌓아 올린 층별 손그림. 6층은 공식 안내가 없고 구역 배치는 개념도예요."),
-    "archive-heosimcheong": (heosimcheong, "허심청 층별 손그림", "호텔농심 허심청 공식 층별 시설 안내(B1·B2 주차장, 1F 식당, 2F 연회, 3F 찜질방, 4F 락카·안내데스크, 5F 온천탕)를 쌓아 올린 층별 손그림. 구역 배치는 개념도예요."),
-    "archive-termeden": (termeden, "테르메덴 구역 손그림", "테르메덴 공식 시설 소개의 구역(실내 풀&스파, 온천대욕장, 찜질스파, 실외 풀&스파)을 한 장에 모은 층별 손그림. 칸의 위치는 실제 배치가 아니에요."),
-    "archive-orakai-cheonggyesan": (orakai, "오라카이 청계산 층별 손그림", "오라카이 청계산 호텔 공식 안내의 지하 1층 사우나(건식·습식 사우나, 다양한 탕, 세신 현장 접수)와 지하 2층 전기차 충전소를 쌓아 올린 층별 손그림. 사우나 안의 구체적인 배치는 그리지 않았어요."),
-    "archive-crossfit-super-sapiens": (supersapiens, "크로스핏 슈퍼사피엔스 층별 손그림", "크로스핏 슈퍼사피엔스 공식 시설 안내의 층 구성(1F 메인 운동 공간, 2F 샤워실·락커룸·보조 운동 공간, 3F 태닝·스태프 공간)을 쌓아 올린 층별 손그림. 층 안의 배치는 개념도예요."),
+    "archive-sisu-house": (sisu, "Sisu House, floor by floor", "Hand-drawn floor-by-floor sketch of Sisu House from its official space guide: 1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone, plus the ritual steps."),
+    "archive-spa-haesurang": (haesurang, "Spa Haesurang, floor by floor", "Hand-drawn floor-by-floor sketch of Spa Haesurang from its official amenities page: 2F lobby, 3-4F powder rooms, 4-5F lockers, 5F jjimjil, 7F open-air bath; 6F is not listed."),
+    "archive-heosimcheong": (heosimcheong, "Hurshimchung, floor by floor", "Hand-drawn floor-by-floor sketch of Hurshimchung at Hotel Nongshim: B1-B2 parking, 1F food, 2F banquet, 3F jjimjil, 4F lockers and desk, 5F hot-spring baths."),
+    "archive-termeden": (termeden, "Termeden, zone by zone", "Hand-drawn zone-by-zone sketch of Termeden from its official facility guide: indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa."),
+    "archive-orakai-cheonggyesan": (orakai, "Orakai Cheonggyesan, floor by floor", "Hand-drawn floor-by-floor sketch of the Orakai Cheonggyesan Hotel sauna: B1 dry and wet saunas, several pools and walk-in body scrub; B2 EV charging."),
+    "archive-crossfit-super-sapiens": (supersapiens, "CrossFit Super Sapiens, floor by floor", "Hand-drawn floor-by-floor sketch of CrossFit Super Sapiens: 1F main training floor, 2F showers, lockers and accessory training, 3F tanning and staff space."),
 }
 
 def render(only=None, outdir="/workspace/fitness-hub/illustrations/svg"):
