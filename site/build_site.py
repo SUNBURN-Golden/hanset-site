@@ -788,6 +788,9 @@ def build(site, venues, events, today, vevents=(), creators=()):
         if v["kind_key"] == "box" and any("일요일" in k or "휴무" in k for k, _ in v["facts_ko"]) and v["sunday"] != "unk": sunrow = ""
         if v["kind_key"] == "box" and v["sunday"] == "unk" and any("일요일" in k for k, _ in v["facts_ko"]): sunrow = ""
         _ar = ARCHIVE_BY_VENUE.get(v["slug"])
+        _ae = AERIAL_BY_VENUE.get(v["slug"])
+        aer_blk = (f'<section class="archbox aerbox" id="aerial"><h2>Bird’s-eye drawing</h2><a class="illc" href="/archive/#aerial-{v["slug"]}"><picture><img src="/assets/img/aerial/{_ae[0]}-thumb.webp" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ae[2])}"></picture>'
+                   f'<span><b>{E(v["title"])}</b><em>From above · Tap to view ›</em></span></a></section>') if _ae else ""
         arch_blk = (f'<section class="archbox"><h2>Hand-drawn sketch</h2><a class="illc" href="/archive/#{v["slug"]}"><picture><img src="/assets/img/archive/{_ar[0]}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ar[4])}"></picture>'
                     f'<span><b>{E(_ar[2])}</b><em>Hand-drawn from the official guide · Tap to view ›</em></span></a></section>') if _ar else ""
         city_group = by_city.get(v["city_key"], [])
@@ -808,7 +811,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <div class="glance-grid"><div><h3>Price</h3>{price_html(v)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v)}</div>' for label, values in fact_groups(v))}</div>
 <p class="meta">확인일 {dot(v["last_verified"])} · Official reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></p></section>
 <table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{closed_row(v)}{offrows}</tbody></table>
-{tips}{unv}{fchk(v)}{arch_blk}
+{tips}{unv}{fchk(v)}{aer_blk}{arch_blk}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong></p><p>Source: {" · ".join(srcs)}</p>
 <p>Something's off? Tell us via <a href="/corrections/">Corrections</a>. Prices and closing days change.</p></div>
 {next_html}
@@ -871,11 +874,21 @@ def build(site, venues, events, today, vevents=(), creators=()):
         f'<p class="meta">Source <a href="{E(su)}" rel="noopener noreferrer">{E(sl)}</a> · Checked {ARCHIVE_DATE}</p>'
         f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener">View larger ↗</a><a class="btn btn-d" href="/finder/{vs}/">Venue details</a></div></div></article>'
         for f, vs, t, st, d, sl, su in ARCHIVE)
+    _vt = {a[1]: a[3] for a in ARCHIVE}
+    aitems = "".join(
+        f'<article class="arc" id="aerial-{vs}"><a class="arcimg" href="/assets/img/aerial/{f}.svg" target="_blank" rel="noopener" aria-label="{E(_vt.get(vs, vs))} bird’s-eye drawing: view larger (new tab)">'
+        f'<picture><source media="(min-width:720px)" srcset="/assets/img/aerial/{f}-mid.webp"><img src="/assets/img/aerial/{f}-thumb.webp" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture></a>'
+        f'<div class="arcbody"><h2>{E(_vt.get(vs, vs))}, from above</h2>'
+        f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/aerial/{f}.svg" target="_blank" rel="noopener">View larger ↗</a><a class="btn btn-d" href="/finder/{vs}/">Venue details</a></div></div></article>'
+        for f, vs, d in AERIAL)
     abody = f'''<div class="page"><h1>Venue Sketches</h1>
 <p class="lead">Floors and zones from official guides. Redrawn by hand, from above (isometric).</p>
 <ul><li>No photos or official maps copied or traced. Nothing drawn that the official guide doesn’t describe.</li>
 <li>Layouts are conceptual. Only floor and zone names and order follow the official guide. Position and size may differ from the actual venue.</li>
 <li>Labels in the drawings are in Korean. Tap a drawing to open it larger in a new tab (pinch to zoom).</li></ul></div>
+<div class="page"><h2 id="aerial">Bird’s-eye drawings</h2><p class="lead">Each venue seen from above, drawn by hand.</p></div>
+<div class="arcgrid">{aitems}</div>
+<div class="page"><h2 id="sketches">Floor-by-floor sketches</h2></div>
 <div class="arcgrid">{items}</div>
 <div class="page"><p class="muted">More drawings as official floor and zone guides are published in text. {SAFETY}</p></div>'''
     site.add("/archive/", "Venue Sketches", "Hand-drawn sketches of floors and zones, based on official venue guides (conceptual layouts). May differ from the actual venue. Every drawing with a source and check date.", abody, "guide")
@@ -969,6 +982,17 @@ ARCHIVE = [
     ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Isometric hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
 ]
 ARCHIVE_BY_VENUE = {a[1]: a for a in ARCHIVE}
+# 조감도 손그림 (위에서 내려다본 평면). illustrations/make_aerial.py
+AERIAL = [
+    ('aerial-termeden', 'termeden-icheon', "Bird's-eye hand drawing of Termeden in Icheon seen from above: the indoor pool and spa, the hot-spring bathhouse joined to its open-air bath, the jjimjil spa rooms, and the outdoor pools (infinity pool, forest bath, mountain pool, terme), with the entrance and ticket desk."),
+    ('aerial-spa-haesurang', 'spa-haesurang-busan', "Bird's-eye hand drawing of Spa Haesurang in Busan, floor plans seen from above: the 7th-floor open-air bath, Finnish sauna, lounge bar and PDR rooms, the 5th-floor jjimjil room and lockers, the 4th-floor lockers and powder room, and the 2nd-floor lobby with the 3rd-floor powder room."),
+    ('aerial-heosimcheong', 'heosimcheong-busan', "Bird's-eye hand drawing of Hurshimchung at Hotel Nongshim in Busan, floor plans seen from above: 5th-floor hot-spring baths, 4th-floor lockers and front desk, 3rd-floor jjimjil room, and the restaurant, banquet and parking floors below."),
+    ('aerial-orakai-cheonggyesan', 'orakai-cheonggyesan', "Bird's-eye hand drawing of Orakai Cheonggyesan Hotel seen from above: the basement-1 sauna with dry and wet saunas, several pools and a body-scrub area, and the basement-2 EV charging area."),
+    ('aerial-sisu-house', 'sisu-house', "Bird's-eye hand drawing of Sisu House in Seoul, floor plans seen from above: the 1st-floor Welcoming Zone (check-in and shop), the 1.5-floor Touch Zone, and the 2nd–3rd-floor Private Zone with sauna, warm bath, cold shower and private changing room."),
+    ('aerial-crossfit-super-sapiens', 'crossfit-super-sapiens', "Bird's-eye hand drawing of CrossFit Super Sapiens seen from above: the 1st-floor main training floor, the 2nd floor with showers, lockers and an accessory training area, and the 3rd floor with tanning and staff space."),
+]
+AERIAL_BY_VENUE = {a[1]: a for a in AERIAL}
+
 
 def main():
     ap = argparse.ArgumentParser()
