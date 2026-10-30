@@ -900,8 +900,8 @@ def build(site, venues, events, today, vevents=(), creators=()):
                                        ("corrections", "Corrections", "See something wrong? Tell us.", "about")]:
         frag = (ROOT / f"content/pages/{slug}.html").read_text(encoding="utf-8")
         if slug == "guide":
-            figs = "".join(f'<figure class="fig" id="{k}"><a class="figlink" href="/assets/img/guide/{f}.svg" target="_blank" rel="noopener" aria-label="{E(t)}: view larger (new tab)"><img src="/assets/img/guide/{f}.svg" width="1080" height="1350" loading="lazy" decoding="async" alt="{E(d)}"></a><figcaption><strong>{E(t)}</strong><br>A general illustration. May differ from the actual venue. Labels are in Korean. <a href="/assets/img/guide/{f}.svg" target="_blank" rel="noopener">View larger ↗</a></figcaption></figure>' for k, f, t, d in ILLUSTRATIONS)
-            frag = frag.replace("<!--ILLUSTRATIONS-->", f'<h2 id="pictures">In pictures</h2><p>Hand-drawn guides for first-timers. General examples. Layout and process may differ from the actual venue. Tap a drawing to open it larger in a new tab (pinch to zoom).</p><div class="figs">{figs}</div>')
+            figs = "".join(f'<figure class="fig" id="{k}"><a class="figlink" href="/assets/img/guide/{f}.svg" target="_blank" rel="noopener" aria-label="{E(t)}: view larger (new tab)"><img src="/assets/img/guide/{f}.svg" width="1080" height="1350" loading="lazy" decoding="async" alt="{E(d)}"></a><figcaption><strong>{E(t)}</strong><br><a href="/assets/img/guide/{f}.svg" target="_blank" rel="noopener">View larger ↗</a></figcaption></figure>' for k, f, t, d in ILLUSTRATIONS)
+            frag = frag.replace("<!--ILLUSTRATIONS-->", f'<h2 id="pictures">In pictures</h2><p>Hand-drawn guides for first-timers. Tap to enlarge.</p><div class="figs">{figs}</div>')
         site.add(f"/{slug}/", title, desc, f'<div class="page">{frag}</div>', active)
 
     # ---- join (Google sign-up; the OAuth flow runs in functions/api/auth/*, server-side only)
@@ -925,9 +925,9 @@ def asset_ver(rel):
     return hashlib.md5((ROOT / "static" / rel).read_bytes()).hexdigest()[:8]
 
 ILLUSTRATIONS = [
-    ("box", "crossfit-box-plan", "Inside a CrossFit box", "Hand-drawn layout sketch of a typical CrossFit box: entrance and front desk, lockers and changing area, whiteboard, WOD area, rig, open gym and barbell racks, rowing and bike zone. A general example. May differ from the actual venue."),
-    ("dropin", "dropin-steps", "How a drop-in works", "Hand-drawn CrossFit drop-in steps: 1 check timetable and price on the official page, 2 book or ask, 3 check in on arrival, 4 join the class, 5 clean up and pay. Class format and price vary by box."),
-    ("sauna", "sauna-guide", "How to sauna", "Hand-drawn sauna sequence and a typical layout of dry and wet saunas, showers, cold plunge and rest area. With cardiovascular disease, during pregnancy, after drinking, or when you feel unwell, avoid saunas and cold plunges or consult a doctor. Facilities vary by venue."),
+    ("box", "crossfit-box-plan", "Inside a CrossFit box", "Hand-drawn plan of a typical CrossFit box: whiteboard, WOD floor with kettlebells and boxes, rig, open gym with barbell racks, lockers, rowers and bikes, front desk and entrance."),
+    ("dropin", "dropin-steps", "How a drop-in works", "Hand-drawn drop-in steps: 1 check class times and price online, 2 book or message the box, 3 say drop-in at the desk, 4 train, 5 put gear back and pay."),
+    ("sauna", "sauna-guide", "How to sauna", "Hand-drawn sauna plan and order: lockers, shower, dry or wet sauna, optional cold plunge, rest and water. Skip it if pregnant, unwell, after drinking or with heart issues."),
 ]
 
 def ics(events):
@@ -1001,7 +1001,7 @@ VIEW_WORD_BAN = r"(?i)조감|aerial|bird[’'`]?s?[- ]?eye|from above|isometric|
 AERIAL_BLOCK = re.compile(r"(?s)<!--aerial-->.*?<!--/aerial-->")
 def _aerial_allowed(p):
     s = str(p).replace("\\", "/")
-    return "/assets/img/aerial/" in s or "/img/aerial/" in s or Path(s).name.startswith(("aerial-", "make_aerial"))
+    return "/assets/img/aerial/" in s or "/img/aerial/" in s or Path(s).name.startswith(("aerial-", "make_aerial")) or Path(s).name == "make_guide.py"  # source import only; guide SVG output is still scanned
 def view_word_scan(path, text):
     """Return the banned word found, or None. Aerial assets pass; aerial HTML blocks are stripped first."""
     if _aerial_allowed(path): return None
@@ -1024,8 +1024,11 @@ def drawing_hangul_scan(text):
 def drawing_hangul_check(dist):
     bad = []
     ill = Path(__file__).resolve().parent.parent / "illustrations"
-    # Scope: the 12 venue drawings (aerial-*, archive-*). Guide drawings (img/guide) are tracked separately.
-    srcs = list(ill.glob("svg/aerial-*.svg")) + list(ill.glob("svg/archive-*.svg")) + [p for d in ("assets/img/aerial", "assets/img/archive") for p in (dist / d).glob("*.svg")]
+    # Scope: venue drawings (aerial-*, archive-*) and the guide drawings (img/guide).
+    guide = ("sauna-guide", "crossfit-box-plan", "dropin-steps")
+    srcs = list(ill.glob("svg/aerial-*.svg")) + list(ill.glob("svg/archive-*.svg")) + [ill / f"svg/{g}.svg" for g in guide if (ill / f"svg/{g}.svg").exists()]
+    srcs += list((Path(__file__).resolve().parent / "static/img/guide").glob("*.svg"))
+    srcs += [p for d in ("assets/img/aerial", "assets/img/archive", "assets/img/guide") for p in (dist / d).glob("*.svg")]
     for p in srcs:
         h = drawing_hangul_scan(p.read_text(errors="ignore"))
         if h: bad.append((str(p), "".join(h[:10])))
