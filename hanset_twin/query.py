@@ -59,6 +59,9 @@ def closed_on(rule, d: date):
     m = re.search(r'매주\s*([월화수목금토일])|every\s*(mon|tue|wed|thu|fri|sat|sun)|closed (?:on )?(mon|tue|wed|thu|fri|sat|sun)', t)
     if m:
         return d.weekday() == WEEKDAYS[(m[1] or m[2] or m[3])[:3]]
+    # "open every day" with no other closure wording decides the date as not closed
+    if re.search(r'연중\s*무휴|open[_ ]every[_ ]day|open 365', t) and not re.search(r'휴관|휴장|(?<!무)휴무|closed|except|단[,\s]', t):
+        return False
     return None
 
 def _open_issue_refs(db, check_id):

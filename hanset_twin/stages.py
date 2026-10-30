@@ -259,7 +259,11 @@ def _active_obs_verdict(ctx, obs, raw, venue):
             return 'quote_not_in_main_text'
     if obs['field'] in ('bath_composition', 'hours', 'closures', 'foreigner_policy',
                         'tattoo_policy', 'rapid_cold_plunge', 'cold_bath_temp_c', 'sauna_temp_c'):
-        if not any(row['field'] == obs['field'] for row in field_rules.extract(obs['quote'] or '')):
+        expected_field = obs['field']
+        value = json.loads(obs['value_json']) if obs['value_json'] else None
+        if expected_field == 'hours' and isinstance(value, dict) and value.get('hours') == 'open_every_day':
+            expected_field = 'closures'
+        if not any(row['field'] == expected_field for row in field_rules.extract(obs['quote'] or '')):
             return 'rule_no_longer_matches'
     return None
 
@@ -267,13 +271,24 @@ def _extract_active_item(ctx, w):
     raw = ctx.active.execute('SELECT * FROM raw_documents WHERE raw_id=?', (w['item_id'],)).fetchone()
     for o in ctx.active.execute('SELECT * FROM observations WHERE raw_id=?', (w['item_id'],)):
         value = json.loads(o['value_json']) if o['value_json'] else None
-        _add_candidate(ctx.db, w, 'active:' + o['venue_key'], o['field'], value, o['unit'], o['label_status'],
+        field = o['field']
+        if field == 'hours' and isinstance(value, dict):
+            if value.get('hours') == 'open_every_day':
+                field, value = 'closures', '연중무휴'
+            else:
+                matches = [r for r in field_rules.extract(o['quote'] or '')
+                           if r['field'] == 'hours' and r['value'].get('hours') == value.get('hours')]
+                if len(matches) == 1:
+                    qualifiers = matches[0]['value'].copy()
+                    if qualifiers.get('scope') == 'unspecified': qualifiers.pop('scope', None)
+                    value = {**value, **qualifiers}
+        _add_candidate(ctx.db, w, 'active:' + o['venue_key'], field, value, o['unit'], o['label_status'],
                        o['source_type'], o['source_url'], o['quote'], json.loads(o['locator']) if o['locator'] else None, o['obs_id'], w['fetched_at'])
         venue = ctx.active.execute('SELECT * FROM venues WHERE venue_key=?', (o['venue_key'],)).fetchone()
         reason = _active_obs_verdict(ctx, o, raw, venue)
         if reason:
             ctx.db.execute("UPDATE candidates SET verdict='rejected', verdict_reason=? WHERE cand_id=?",
-                           (reason, deterministic_id('cand', w['item_id'], o['obs_id'], o['field'], value)))
+                           (reason, deterministic_id('cand', w['item_id'], o['obs_id'], field, value)))
 
 def extract(ctx, cursor):
     """Reuse hanset_active observations (rule extractor fields.py) and run the same deterministic
@@ -401,7 +416,10 @@ def _apply_work_item(db, w, clock, extra_slots=(), skip_slots=()):
 
 def _item_slots(db, w, clock, *, accepted_only=True):
     """Slots (entity, attribute, source_url) this item currently feeds with accepted values."""
-    out = set()
+    out = {(r['entity_id'], r['attribute'], r['source_url']) for r in db.execute(
+        '''SELECT f.entity_id, f.attribute, f.source_url FROM facts f
+           JOIN candidates c ON f.origin_ref=c.origin_ref WHERE c.item_id=?
+           AND f.effective_to IS NULL''', (w['item_id'],))}
     verdict_filter = " AND verdict='accepted'" if accepted_only else ""
     for c in db.execute("SELECT * FROM candidates WHERE item_id=?" + verdict_filter, (w['item_id'],)).fetchall():
         if not c['branch_id']: continue
@@ -506,12 +524,20 @@ def recompute_views(ctx, cursor):
 # 9. quality check -----------------------------------------------------------
 def quality_check(ctx, cursor):
     db, at, n = ctx.db, onto.now_iso(ctx.clock), 0
+    seen = set()
+    checks = ('ai_value_present', 'missing_evidence', 'portal_title_as_name',
+              'maintenance_window_as_hours', 'temperature_out_of_range', 'stale_90d',
+              'non_sauna_branch_suspect')
     def issue(check, ref, details):
         nonlocal n
-        db.execute('INSERT OR IGNORE INTO quality_issues VALUES (?,?,?,?,?,?)', (deterministic_id('qi', check, ref), check, ref, details, 'open', at)); n += 1
+        iid = deterministic_id('qi', check, ref)
+        seen.add(iid)
+        db.execute('''INSERT INTO quality_issues VALUES (?,?,?,?,?,?)
+            ON CONFLICT(issue_id) DO UPDATE SET state='open', details=excluded.details''',
+            (iid, check, ref, details, 'open', at)); n += 1
     for r in db.execute("SELECT fact_id FROM facts WHERE status='ai_inference' AND effective_to IS NULL"):
         issue('ai_value_present', r[0], 'AI inference must never be served as a value')
-    for r in db.execute("SELECT fact_id FROM facts WHERE status IN ('fact','source_claim') AND (quote IS NULL OR source_url IS NULL)"):
+    for r in db.execute("SELECT fact_id FROM facts WHERE effective_to IS NULL AND status IN ('fact','source_claim') AND (quote IS NULL OR source_url IS NULL)"):
         issue('missing_evidence', r[0], 'fact without quote/source')
     for r in db.execute("SELECT f.fact_id, f.value_json FROM facts f WHERE f.attribute='name' AND f.effective_to IS NULL AND f.value_json LIKE '%Visit Seoul%'"):
         issue('portal_title_as_name', r[0], 'directory page title extracted as venue name')
@@ -525,6 +551,9 @@ def quality_check(ctx, cursor):
         issue('stale_90d', r[0], 'not re-confirmed in 90 days')
     for r in db.execute("SELECT e.entity_id, e.name FROM entities e WHERE e.entity_type='branch' AND lower(e.name) LIKE '%crossfit%'"):
         issue('non_sauna_branch_suspect', r[0], f"{r[1]}: typed sauna by active bot; needs sauna evidence")
+    for row in db.execute("SELECT issue_id, check_id FROM quality_issues WHERE state='open'").fetchall():
+        if row['check_id'] in checks and row['issue_id'] not in seen:
+            db.execute("UPDATE quality_issues SET state='resolved' WHERE issue_id=?", (row['issue_id'],))
     return cursor, n
 
 STAGES = [('discover', discover), ('incremental_fetch', incremental_fetch), ('change_detect', change_detect), ('extract', extract),

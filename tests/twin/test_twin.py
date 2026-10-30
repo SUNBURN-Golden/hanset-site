@@ -135,6 +135,11 @@ def test_representative_question_answers_with_evidence(env):
 def test_closure_rules():
     assert closed_on('closed 1st Wed monthly', date(2026, 11, 4)) is True
     assert closed_on('매주 월요일 휴무', date(2026, 10, 26)) is True
+
+def test_closed_on_open_every_day():
+    assert closed_on('연중무휴', date(2026, 11, 2)) is False
+    assert closed_on('open_every_day', date(2026, 11, 2)) is False
+    assert closed_on('연중무휴 (단, 설날 당일 휴관)', date(2026, 11, 2)) is None
     assert closed_on('가을 정기휴장', date(2026, 10, 26)) is None
 
 def test_daemon_retry_dead_letter_resume_and_cost_cap(env, tmp_path):
@@ -153,3 +158,100 @@ def test_daemon_retry_dead_letter_resume_and_cost_cap(env, tmp_path):
     with pytest.raises(CostCapExceeded): charge(twin, 'r', 'extract', 1)
     with ProcessLock(tmp_path / 'twin' / 'lock'):
         with pytest.raises(AlreadyRunning): run()
+
+@pytest.mark.parametrize('text,facilities,scopes', [
+    ('사우나 06:00~22:00 연중무휴, 찜질방 08:00~21:00, 노천탕 10:00~21:00',
+     {'sauna', 'jjimjil', 'outdoor_bath'}, {'unspecified'}),
+    ('sauna lounge (11:00-20:00), 세신 service (09:00-19:00); 06:00-22:00',
+     {'lounge', 'body_scrub', None}, {'unspecified'}),
+    ('hours weekdays 06:00-22:00, weekends 06:00-19:00', {None}, {'weekday', 'weekend'}),
+    ('온천 05:30~22:00 연중무휴, 찜질 06:30~21:00', {'hot_spring', 'jjimjil'}, {'unspecified'}),
+    ('fitness 06:00-22:00; pool 09:00-20:00; spa treatment 11:00-19:00',
+     {'fitness', 'pool', 'spa_treatment'}, {'unspecified'}),
+])
+def test_scoped_hours_do_not_conflict(env, text, facilities, scopes):
+    from hanset_active.extract.fields import extract
+    a, twin, run, _ = env
+    rows = [r for r in extract(text) if r['field'] in ('hours', 'closures')]
+    hours = [r['value'] for r in rows if r['field'] == 'hours']
+    assert {v.get('facility') for v in hours} == facilities
+    assert {v['scope'] for v in hours} == scopes
+    a.venue('alpha::', 'Sauna Alpha', URL)
+    a.doc(URL, '2026-10-01T09:00:00+09:00',
+          [(r['field'], r['value'], 'fact', r['quote']) for r in rows], 'alpha::')
+    assert run()[1] == 'ok'
+    assert not twin.execute("SELECT 1 FROM conflicts WHERE state='open'").fetchone()
+    assert len(hours_facts(twin)) == len(hours)
+    assert all(json.loads(r['value_json']) != 'open_every_day' for r in hours_facts(twin))
+    if '연중무휴' in text:
+        assert twin.execute("SELECT 1 FROM facts WHERE attribute='closure_rule' AND value_json=?", (json.dumps('연중무휴', ensure_ascii=False),)).fetchone()
+
+
+def test_unscoped_multiple_hours_are_reviewed(env):
+    a, twin, run, _ = env
+    a.venue('alpha::', 'Sauna Alpha', URL)
+    a.doc(URL, '2026-10-01T09:00:00+09:00', [
+        ('hours', {'hours': v}, 'fact', v) for v in ('06:00-22:00', '09:00-20:00')], 'alpha::')
+    assert run()[1] == 'ok'
+    assert len(hours_facts(twin)) == 2
+    assert twin.execute("SELECT 1 FROM review_queue WHERE kind='same_source_multiple_values' AND state='open'").fetchone()
+
+
+def test_quality_issues_follow_current_conditions(env):
+    from hanset_twin.stages import Ctx, quality_check
+    a, twin, run, csv = env
+    a.venue('alpha::', 'Example Crossfit', URL)
+    a.doc(URL, '2026-10-01T09:00:00+09:00', [
+        ('name', 'Visit Seoul Example', 'fact', 'Visit Seoul Example'),
+        ('hours', {'hours': '06:00-22:00'}, 'fact', '06:00-22:00')], 'alpha::')
+    run()
+    ctx = Ctx(twin, None, csv_path=csv, run_id='synthetic')
+    fid = twin.execute("SELECT fact_id FROM facts WHERE attribute='name'").fetchone()[0]
+    assert twin.execute("SELECT state FROM quality_issues WHERE ref=?", (fid,)).fetchone()[0] == 'open'
+    twin.execute("UPDATE facts SET effective_to='2026-10-02', closed_reason='evidence_removed' WHERE fact_id=?", (fid,))
+    quality_check(ctx, None)
+    assert twin.execute("SELECT state FROM quality_issues WHERE ref=?", (fid,)).fetchone()[0] == 'resolved'
+    assert twin.execute("SELECT state FROM quality_issues WHERE check_id='non_sauna_branch_suspect'").fetchone()[0] == 'open'
+    twin.execute("UPDATE entities SET name='Example Sauna' WHERE entity_type='branch'")
+    quality_check(ctx, None)
+    assert twin.execute("SELECT state FROM quality_issues WHERE check_id='non_sauna_branch_suspect'").fetchone()[0] == 'resolved'
+    twin.execute("UPDATE entities SET name='Example Crossfit' WHERE entity_type='branch'")
+    quality_check(ctx, None)
+    assert twin.execute("SELECT state FROM quality_issues WHERE check_id='non_sauna_branch_suspect'").fetchone()[0] == 'open'
+
+
+def test_reextract_closes_legacy_hours_slots(env, monkeypatch):
+    from hanset_twin import stages
+    a, twin, run, csv = env
+    a.venue('alpha::', 'Sauna Alpha', URL)
+    observations = [
+        ('hours', {'hours': '06:00-22:00'}, 'fact', 'sauna 06:00-22:00'),
+        ('hours', {'hours': '09:00-20:00'}, 'fact', 'pool 09:00-20:00'),
+        ('hours', {'hours': 'open_every_day'}, 'fact', '연중무휴')]
+    a.doc(URL, '2026-10-01T09:00:00+09:00', observations, 'alpha::')
+    def legacy(ctx, w):
+        for i, (field, value, label, quote) in enumerate(observations):
+            stages._add_candidate(ctx.db, w, 'active:alpha::', field, value, None,
+                                  label, 'own_site', URL, quote, {'char_offsets': [0, 5]},
+                                  deterministic_id(w['item_id'], i), w['fetched_at'])
+    # Seed an old-style unqualified slot without changing immutable fact values.
+    from hanset_twin import ontology
+    original_map = ontology.map_field
+    def legacy_map(field, value):
+        if field == 'hours':
+            return [('hours', 'regular', {'scope': 'unspecified'}, 'open_hours', value['hours'], None)]
+        return original_map(field, value)
+    with monkeypatch.context() as m:
+        m.setattr(stages, '_extract_active_item', legacy)
+        m.setattr(ontology, 'map_field', legacy_map)
+        assert run()[1] == 'ok'
+    old = hours_facts(twin)
+    assert len(old) == 3
+    ctx = stages.Ctx(twin, a.db, csv_path=csv, run_id='reextract')
+    stages.reextract(ctx)
+    assert all(twin.execute('SELECT effective_to FROM facts WHERE fact_id=?', (r['fact_id'],)).fetchone()[0] for r in old)
+    assert not twin.execute("SELECT 1 FROM conflicts WHERE state='open'").fetchone()
+    assert twin.execute("SELECT count(*) FROM facts WHERE attribute='open_hours' AND effective_to IS NULL AND value_json IS NOT NULL").fetchone()[0] == 2
+    count = twin.execute('SELECT count(*) FROM facts').fetchone()[0]
+    stages.reextract(ctx)
+    assert twin.execute('SELECT count(*) FROM facts').fetchone()[0] == count
