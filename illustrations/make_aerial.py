@@ -1,98 +1,243 @@
 # -*- coding: utf-8 -*-
-"""한셋 '조감도 손그림' (위에서 내려다본 평면 손그림), 2026-10-29.
-공식 안내에 글자로 공개된 층·구역 이름만 사용. 사진·공식 지도·로고를 따라 그리거나 복사하지 않음.
-칸의 크기·위치는 손그림 표현이며 실측이 아님. 가격·시간 미표기."""
-import os, sys, math, html as _h
+"""HANSET bird's-eye plans (2026-10-30, v3): a sauna-goer's notebook map, seen from straight above.
+Flat bold zones (yellow warm bath, red hot bath, blue cold bath, brown/orange saunas), shower icons, entrance box,
+English handwriting labels (Gaegu, outlined to paths). Only zones/numbers from official info or venue replies
+(site/content/venues_en.json, saunas.csv, boxes.csv); unknown values are left out. Positions/sizes are drawn, not measured.
+No photos, maps or logos traced. Usage: python3 make_aerial.py [out_dir]"""
+import os, sys, math, random, html as _h
 HERE = os.path.dirname(os.path.abspath(__file__)); sys.path.insert(0, HERE)
-from handdraw import *
 import handdraw as h
-from make_archive import wrap, fit, steam, waves
+from handdraw import text as _text, tw
 
-def cell(x, y, w, hh, label, kind, n=None):
-    s = rect(x, y, w, hh, 3.2, fill=None)
-    if kind == "pool":
-        s += ellipse(x + w/2, y + hh/2, w*0.40, hh*0.34, 3.0, fill=0.06) + waves(x + w*0.25, y + hh/2 - 6, w*0.5, 1, 14)
-    elif kind == "steam":
-        s += hatch(x + 6, y + 6, w - 12, hh - 12, gap=16, lw=1.4, op=0.35) + steam(x + w/2 - 30, y + hh*0.62, 3)
-    elif kind == "locker":
-        k = max(3, int(w // 34))
-        for i in range(k): s += rect(x + 12 + i*(w-24)/k, y + 12, (w-24)/k - 6, 22, 2.2, fill=0.12)
-    elif kind == "room":
-        s += hatch(x + 6, y + 6, w - 12, hh - 12, gap=22, ang=-1, lw=1.2, op=0.25)
-    elif kind == "gym":
-        s += line(x + w*0.3, y + hh*0.62, x + w*0.7, y + hh*0.62, 4.2) + rect(x + w*0.3 - 10, y + hh*0.62 - 16, 10, 32, 2.6, fill=0.5) + rect(x + w*0.7, y + hh*0.62 - 16, 10, 32, 2.6, fill=0.5)
-    elif kind == "car":
-        for i in range(3): s += rect(x + 14 + i*(w-28)/3, y + hh*0.35, (w-28)/3 - 10, hh*0.4, 2.2, dash="4 6")
-    if n is not None: s += numdot(x + 28, y + 28, n, 20)
-    sz = fit(label, 30, w - 20)
-    for i, l in enumerate(wrap(label, sz, w - 20)[:2]):
-        s += text(x + w/2, y + hh - 18 - (24 if len(wrap(label, sz, w-20)) > 1 and i == 0 else 0), l, sz, "middle")
+W, H = 1080, 1350
+INK = "#1d1d1d"
+C = dict(warm="#f7e64a", hot="#ef2b22", cold="#2a8de8", jac="#bfe8f6", dry="#b97834", wet="#9cc36a", steam="#f08a24",
+         scrub="#f29ad9", grey="#8a8a8a", dark="#5b5b5b", tan="#f3dfa6", green="#2fd23a", floor="#ffffff", pool="#56b8e6",
+         wood="#e3b77a", mat="#4a4a4a", lawn="#bfe0a0", sky="#2f7fe0")
+rnd = random.Random(7)
+_cid = [0]
+
+def T(x, y, s, size=30, anchor="middle", color=INK, op=1.0):
+    s = s.replace("–", "-").replace("↑", "upstairs").replace("①", "1.").replace("②", "2.").replace("③", "3.")
+    return _text(x, y, s, size, anchor, jitter=False, color=color, op=op)
+
+def speck(path_d, x, y, w, hh, n=None):
+    """light paint speckle inside a shape (like the marker texture in hand-made maps)"""
+    _cid[0] += 1; cid = f"k{_cid[0]}"
+    n = n or int(w * hh / 900)
+    dots = "".join(f'<circle cx="{x + rnd.random()*w:.0f}" cy="{y + rnd.random()*hh:.0f}" r="{rnd.uniform(.6, 2.2):.1f}"/>' for _ in range(n))
+    return f'<clipPath id="{cid}"><path d="{path_d}"/></clipPath><g clip-path="url(#{cid})" fill="#fff" opacity=".35">{dots}</g>'
+
+def zone(x, y, w, hh, color, label="", sub="", size=34, r=0, tc=INK, steam=False):
+    size = int(size * 1.25)
+    d = f"M{x+r},{y} H{x+w-r} Q{x+w},{y} {x+w},{y+r} V{y+hh-r} Q{x+w},{y+hh} {x+w-r},{y+hh} H{x+r} Q{x},{y+hh} {x},{y+hh-r} V{y+r} Q{x},{y} {x+r},{y} Z"
+    s = f'<path d="{d}" fill="{color}" stroke="{INK}" stroke-width="3"/>' + speck(d, x, y, w, hh)
+    cy = y + hh / 2 - (size * 0.35 if sub else -size * 0.35)
+    if label:
+        for i, l in enumerate(label.split("\n")): s += T(x + w/2, cy + i*size*1.05, l, size, color=tc)
+    if sub: s += T(x + w/2, cy + size * (0.95 + 1.05*(label.count("\n"))), sub, int(size*.85), color=tc)
+    if steam: s += steamy(x + w/2, y + hh*0.25 if not sub else y + 18)
     return s
 
-def plate(x, y, w, hh, tag, cells):
-    """한 층(또는 한 구역 묶음)을 위에서 본 판. cells: (label, kind, fx, fy, fw, fh)"""
-    s = rect(x - 8, y - 8, w + 16, hh + 16, 2.2, dash="5 8", op=0.7)  # 외벽 그림자선
-    s += rect(x, y, w, hh, 4.2, fill=0.03)
-    s += text(x, y - 22, tag, fit(tag, 34, w), "start")
-    for lab, kind, fx, fy, fw, fh in cells:
-        s += cell(x + fx*w + 6, y + fy*hh + 6, fw*w - 12, fh*hh - 12, lab, kind)
+def circ(cx, cy, rr, color, label="", sub="", size=34, tc=INK):
+    size = int(size * 1.15)
+    d = f"M{cx-rr},{cy} A{rr},{rr} 0 1,0 {cx+rr},{cy} A{rr},{rr} 0 1,0 {cx-rr},{cy} Z"
+    s = f'<path d="{d}" fill="{color}" stroke="{INK}" stroke-width="3"/>' + speck(d, cx-rr, cy-rr, 2*rr, 2*rr)
+    if label: s += T(cx, cy + (0 if sub else size*.35), label, size, color=tc)
+    if sub: s += T(cx, cy + size*1.1, sub, int(size*.85), color=tc)
     return s
 
-def compass():
-    s = ellipse(985, 245, 30, 30, 3) + line(985, 268, 985, 222, 3.4) + line(985, 222, 975, 238, 3) + line(985, 222, 995, 238, 3)
-    return s + text(985, 207, "위", 24, "middle")
+def steamy(x, y):
+    return "".join(f'<path d="M{x-16+i*16},{y+22} q-6,-7 0,-14 q6,-7 0,-14" stroke="{INK}" stroke-width="2.2" fill="none"/>' for i in range(3))
 
-def sheet(title, sub, plates):
-    b = header(title, sub) + compass()
-    for p in plates: b += plate(*p)
-    b += text(1020, 1312, "한셋 HANSET", 30, "end", rot=-1)
+def shower(x, y, standing=True):
+    s = f'<circle cx="{x}" cy="{y}" r="9" fill="{C["grey"]}" stroke="{INK}" stroke-width="1.6"/>'
+    if standing: s += "".join(f'<path d="M{x-6+i*6},{y+13} l{-2+i*2},10" stroke="{C["sky"]}" stroke-width="1.6"/>' for i in range(3))
+    return s
+
+def shower_row(x, y, n, gap=40, standing=True, wall="h"):
+    s = f'<rect x="{x-14}" y="{y-24}" width="{gap*(n-1)+28}" height="9" fill="{C["dark"]}"/>' if wall == "h" else ""
+    return s + "".join(shower(x + i*gap, y, standing) for i in range(n))
+
+def pillar(x, y, sz=26): return f'<rect x="{x}" y="{y}" width="{sz}" height="{sz}" fill="{C["grey"]}" stroke="{INK}" stroke-width="2"/>'
+
+def entrance(x, y, w=150, hh=70, label="IN / OUT"):
+    return zone(x, y, w, hh, C["green"], label, size=32)
+
+def onsen(x, y, s=1.0):
+    e = f'<ellipse cx="{x}" cy="{y+16*s}" rx="{30*s}" ry="{11*s}" fill="none" stroke="#e8463c" stroke-width="{4*s}"/>'
+    return e + "".join(f'<path d="M{x-14*s+i*14*s},{y+8*s} q-7,-9 0,-18 q7,-9 0,-18" stroke="#e8463c" stroke-width="{4*s}" fill="none"/>' for i in range(3))
+
+def frame(): return f'<rect x="12" y="12" width="{W-24}" height="{H-24}" fill="#fff" stroke="{INK}" stroke-width="14"/>'
+
+def title(x, y, t, size=54):
+    sz = size
+    while tw(t, sz) > W - x - 60 and sz > 30: sz -= 2
+    return onsen(x - 44, y - 34) + T(x, y, t, sz, "start", C["sky"])
+
+def notes(x, y, lines, size=27, lh=1.32, color=INK):
+    return "".join(T(x, y + i*size*lh, l, size, "start", color) for i, l in enumerate(lines))
+
+def arrow(x1, y1, x2, y2):
+    a = math.atan2(y2-y1, x2-x1)
+    hx = lambda d: (x2 - 12*math.cos(a+d), y2 - 12*math.sin(a+d))
+    p1, p2 = hx(.45), hx(-.45)
+    return f'<path d="M{x1},{y1} Q{(x1+x2)/2+10},{(y1+y2)/2-14} {x2},{y2} M{p1[0]:.0f},{p1[1]:.0f} L{x2},{y2} L{p2[0]:.0f},{p2[1]:.0f}" stroke="{INK}" stroke-width="2.4" fill="none"/>'
+
+def wall(x1, y1, x2, y2, w=9): return f'<path d="M{x1},{y1} L{x2},{y2}" stroke="{C["dark"]}" stroke-width="{w}"/>'
+
+def svgdoc(body, t, d):
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" width="{W}" height="{H}" role="img">'
+            f'<title>{_h.escape(t)}</title><desc>{_h.escape(d)}</desc>{body}</svg>')
+
+# ------------------------------------------------------------------ venues
+def haesurang():
+    b = frame()
+    b += title(110, 92, "Spa Haesurang, bird's-eye")
+    b += notes(70, 150, ["Busan · seawater spa · sauna floor"], 26, color=C["dark"])
+    b += notes(640, 150, ["checked 2026.10.18"], 26, color=C["dark"])
+    # showers: right wall rows
+    for r in range(4): b += shower_row(700, 250 + r*110, 8, 40)
+    b += T(840, 700, "~80 shower spots", 30) + T(840, 735, "(official)", 24, color=C["dark"])
+    b += zone(60, 210, 300, 210, C["dry"], "Dry sauna", steam=True)
+    b += zone(60, 440, 300, 190, C["wet"], "Wet sauna", steam=True)
+    b += circ(500, 360, 115, C["warm"], "Warm pool")
+    b += zone(400, 500, 250, 170, C["hot"], "Hot pool", tc="#fff")
+    b += zone(60, 660, 330, 220, C["cold"], "Cold pool", tc="#fff")
+    b += zone(420, 700, 230, 180, C["jac"], "Event bath")
+    b += pillar(372, 470) + pillar(372, 640)
+    b += zone(680, 770, 330, 110, C["tan"], "Powder room", size=30)
+    b += entrance(60, 905, 160, 70)
+    b += arrow(230, 945, 300, 945) + T(395, 955, "lockers 4–5F", 28)
+    b += notes(70, 1040, ["Sauna  ₩15,000 (weekday) · ₩18,000 (weekend)", "+ jjimjil  ₩20,000 · + open-air (7F)  ₩25,000",
+                          "All three  ₩30,000 · 6 hrs", "Sauna 06:00–22:00 · open-air bath 10:00–21:00 (swimwear)"], 30)
     return b
 
-# 판 좌표: (x, y, w, h, tag, cells)
+def heosimcheong():
+    b = frame()
+    b += title(110, 92, "Hurshimchung, bird's-eye")
+    b += notes(70, 150, ["Busan · Hotel Nongshim · 5F hot-spring baths", "up to 3,000 people at once (official)"], 26, color=C["dark"])
+    b += circ(330, 400, 140, C["warm"], "Longevity", "bath")
+    b += circ(560, 330, 80, C["jac"], "Event", "bath", 28)
+    b += zone(650, 250, 170, 130, "#7fc4b6", "Celadon", "bath", 28)
+    b += zone(850, 230, 170, 260, C["lawn"], "Open-air", "bath", 30)
+    b += zone(70, 580, 220, 150, "#9a8f84", "Cave bath", tc="#fff", size=30, r=40)
+    b += zone(310, 600, 180, 130, C["cold"], "Cold bath", tc="#fff", size=30)
+    b += zone(510, 600, 170, 130, C["warm"], "Half-body", "bath", 28)
+    b += zone(700, 520, 150, 110, "#f5f5f5", "Salt bath", size=28)
+    b += zone(700, 650, 150, 110, C["pool"], "Mini pool", size=28)
+    b += zone(870, 520, 150, 120, C["steam"], "Steam", "sauna", 28, steam=False)
+    b += zone(870, 660, 150, 120, C["dry"], "Dry sauna", size=28)
+    b += pillar(300, 560) + pillar(680, 560)
+    for r in range(2): b += shower_row(110 + r*0, 800 + r*90, 12, 44)
+    b += zone(680, 800, 340, 120, C["scrub"], "Scrub corner", size=30)
+    b += entrance(70, 960, 250, 70, "IN (4F desk)")
+    b += notes(340, 1000, ["get key at 4F, pay when you leave"], 26, color=C["dark"])
+    b += notes(70, 1090, ["Weekday ₩15,000 · Sat/Sun/holiday ₩18,000", "Jjimjil (3F) +₩4,000 robe · 4 hrs (6 hrs with jjimjil)",
+                          "Hot spring 05:30–22:00 · open all year"], 30)
+    b += notes(70, 1230, ["checked 2026.10.18"], 24, color=C["dark"])
+    return b
+
+def orakai():
+    b = frame()
+    b += title(110, 92, "Orakai Cheonggyesan, bird's-eye")
+    b += notes(70, 150, ["Seoul · hotel sauna · B1 (no room needed)"], 26, color=C["dark"])
+    b += zone(60, 220, 280, 260, C["dry"], "Dry sauna", steam=True)
+    b += zone(60, 500, 280, 230, C["wet"], "Wet sauna", steam=True)
+    b += zone(400, 260, 330, 260, C["pool"], "Pool", tc="#fff", r=30)
+    b += circ(560, 640, 100, C["jac"], "Pool")
+    b += zone(760, 520, 260, 220, C["scrub"], "Body scrub", "walk-in · closed Mon", 30)
+    for r in range(2): b += shower_row(790, 250 + r*120, 6, 40)
+    b += T(890, 470, "showers", 28, color=C["dark"])
+    b += notes(400, 230, ["several pools (official)"], 24, color=C["dark"])
+    b += pillar(370, 560)
+    b += entrance(60, 780, 170, 70)
+    b += arrow(240, 815, 330, 815) + T(470, 825, "B2: EV charging", 28)
+    b += notes(70, 960, ["Adult ₩24,000 · hotel guest ₩18,000", "Child (8–13) ₩14,000 · under 8 not admitted",
+                         "07:00–21:00 (last entry 20:30)", "Men's and women's sides are separate"], 30)
+    b += notes(70, 1230, ["checked 2026.10.18"], 24, color=C["dark"])
+    return b
+
+def sisu():
+    b = frame()
+    b += title(110, 92, "Sisu House, bird's-eye")
+    b += notes(70, 150, ["Seoul · Sinsa-dong · private sauna for one"], 26, color=C["dark"])
+    # private room (2-3F) big
+    b += f'<rect x="60" y="200" width="960" height="470" fill="#fff" stroke="{C["dark"]}" stroke-width="8"/>'
+    b += T(80, 240, "2–3F private room (one person)", 30, "start")
+    b += zone(90, 270, 330, 360, C["dry"], "Finnish", "sauna", steam=True)
+    b += zone(450, 300, 260, 160, C["warm"], "Warm bath", "+ bath salts", 30, r=60)
+    b += zone(450, 490, 260, 140, C["cold"], "Cold shower", "14°C", 30, tc="#fff")
+    b += shower(580, 525, True) if False else ""
+    b += circ(850, 360, 70, C["jac"], "Ice", "fountain", 26)
+    b += zone(740, 470, 250, 160, C["tan"], "Changing", "room", 28)
+    b += zone(60, 700, 470, 200, "#f6d6c8", "1.5F Touch care", "ritual first", 30)
+    b += zone(560, 700, 460, 200, C["tan"], "1F Check-in", "+ shop", 30)
+    b += entrance(840, 910, 170, 60)
+    b += notes(70, 1000, ["① touch care  →  ② warm bath  →  ③ sauna + 14°C cold shower"], 28)
+    b += notes(70, 1060, ["Spa Basic ₩79,000 · Deep ₩89,000 · Recovery ₩109,000", "11:00–21:45 · closed every Tuesday",
+                          "Booking only · one person per room"], 30)
+    b += notes(70, 1230, ["venue reply 2026.10.18"], 24, color=C["dark"])
+    return b
+
+def termeden():
+    b = frame()
+    b += title(110, 92, "Termeden, bird's-eye")
+    b += notes(70, 150, ["Icheon · pool & spa resort · four zones"], 26, color=C["dark"])
+    b += f'<rect x="60" y="190" width="960" height="770" fill="{C["lawn"]}" stroke="{INK}" stroke-width="3"/>'
+    for i in range(14): b += f'<circle cx="{80 + i*70}" cy="205" r="14" fill="#5f9e4a" stroke="{INK}" stroke-width="1.5"/>'
+    # outdoor
+    b += zone(90, 240, 380, 170, C["pool"], "Infinity pool", tc="#fff", r=60)
+    b += f'<path d="M520,250 C600,300 520,360 610,410 S560,500 650,520" stroke="{C["pool"]}" stroke-width="44" fill="none" stroke-linecap="round"/>'
+    b += T(700, 300, "Forest bath", 30, "start")
+    b += zone(760, 330, 230, 150, C["pool"], "Mountain pool", tc="#fff", size=28, r=40)
+    b += circ(720, 560, 46, C["warm"]) + circ(830, 560, 46, C["hot"]) + T(930, 570, "Terme", 28)
+    b += T(270, 450, "OUTDOOR POOL & SPA", 26, color=C["dark"])
+    # buildings
+    b += f'<rect x="90" y="620" width="900" height="310" fill="#fff" stroke="{C["dark"]}" stroke-width="8"/>'
+    b += zone(110, 640, 270, 270, C["pool"], "Indoor", "pool & spa", 30, tc="#fff")
+    b += zone(400, 640, 280, 160, C["warm"], "Hot-spring", "bathhouse", 30)
+    b += zone(400, 810, 135, 100, C["cold"], "Cold", tc="#fff", size=28) + zone(545, 810, 135, 100, C["dry"], "Saunas", size=26)
+    b += zone(700, 640, 270, 270, C["steam"], "Jjimjil spa", "cypress · salt · clay", 28)
+    b += arrow(540, 640, 560, 520) + T(470, 590, "open-air bath", 26)
+    b += entrance(440, 970, 200, 66, "IN / tickets")
+    b += notes(70, 1080, ["Day pass ₩49,000 (adult, Nov) · bathhouse only ₩18,000", "Jjimjil wear ₩5,000 · aqua shoes recommended"], 30)
+    b += notes(70, 1230, ["checked 2026.10.23"], 24, color=C["dark"])
+    return b
+
+def supersapiens():
+    b = frame()
+    b += title(110, 92, "CrossFit Super Sapiens, bird's-eye")
+    b += notes(70, 150, ["Seoul · Gangdong · 3-storey warehouse box"], 26, color=C["dark"])
+    b += zone(60, 200, 960, 470, C["mat"], "", "")
+    b += T(540, 250, "1F main training floor", 36, color="#fff")
+    for i in range(6): b += f'<rect x="{120+i*140}" y="300" width="14" height="150" fill="#d9d9d9"/>'
+    b += f'<rect x="110" y="300" width="730" height="12" fill="#d9d9d9"/>' + T(480, 480, "pull-up rig", 26, color="#fff")
+    for i in range(5): b += f'<rect x="{150+i*150}" y="540" width="110" height="10" fill="#e6e6e6"/><circle cx="{150+i*150}" cy="545" r="20" fill="#bbb"/><circle cx="{260+i*150}" cy="545" r="20" fill="#bbb"/>'
+    b += T(540, 620, "barbells", 26, color="#fff")
+    b += zone(60, 700, 470, 240, C["tan"], "2F accessory area", "weights · stretching", 28)
+    b += zone(560, 700, 220, 150, C["jac"], "2F", "showers", 28)
+    b += shower_row(610, 890, 4, 40)
+    b += zone(800, 700, 220, 240, C["wood"], "2F lockers", "", 28)
+    b += zone(60, 960, 470, 110, "#f4c26b", "3F tanning", "", 30)
+    b += zone(560, 960, 460, 110, "#ddd", "3F staff only", "", 30)
+    b += entrance(60, 1090, 170, 66)
+    b += notes(260, 1130, ["parking: front yard + church lot next door"], 26, color=C["dark"])
+    b += notes(70, 1200, ["Drop-in ₩30,000 · book by Instagram DM · first trial free", "Sat 09:00 · 10:30 · open gym Mon 12:00–17:00 · closed Sun"], 28)
+    b += notes(780, 1310, ["checked 2026.10.16"], 22, color=C["dark"])
+    return b
+
 SCENES = {
- "aerial-termeden": ("테르메덴 조감도", "위에서 내려다본 네 구역", [
-   (60, 300, 960, 900, "테르메덴 단지", [
-     ("입구 · 매표소", "room", 0.36, 0.86, 0.28, 0.14),
-     ("실내 풀&스파", "pool", 0.00, 0.50, 0.36, 0.36),
-     ("온천대욕장", "pool", 0.36, 0.50, 0.32, 0.36),
-     ("찜질스파", "steam", 0.68, 0.50, 0.32, 0.50),
-     ("노천온천", "pool", 0.36, 0.30, 0.32, 0.20),
-     ("인피니티풀", "pool", 0.00, 0.00, 0.36, 0.28),
-     ("포레스트바스", "pool", 0.36, 0.00, 0.32, 0.30),
-     ("마운틴풀 · 테르메", "pool", 0.68, 0.00, 0.32, 0.50),
-     ("실외 워터플레이", "pool", 0.00, 0.28, 0.36, 0.22)])],
-   "Bird's-eye hand drawing of Termeden in Icheon seen from above: the indoor pool and spa, the hot-spring bathhouse joined to its open-air bath, the jjimjil spa rooms, and the outdoor pools (infinity pool, forest bath, mountain pool, terme), with the entrance and ticket desk."),
- "aerial-spa-haesurang": ("스파 해수랑 조감도", "위에서 내려다본 층별 평면", [
-   (60, 300, 450, 400, "7F 노천탕 · 사우나", [("노천탕", "pool", 0, 0, 0.6, 0.6), ("핀란드 사우나", "steam", 0.6, 0, 0.4, 0.6), ("라운지바", "room", 0, 0.6, 0.5, 0.4), ("PDR룸", "room", 0.5, 0.6, 0.5, 0.4)]),
-   (570, 300, 450, 400, "5F 찜질방 · 락커룸", [("찜질방", "steam", 0, 0, 0.6, 1), ("락커룸", "locker", 0.6, 0, 0.4, 1)]),
-   (60, 790, 450, 400, "4F 락커룸 · 파우더룸", [("락커룸", "locker", 0, 0, 0.55, 1), ("파우더룸", "room", 0.55, 0, 0.45, 1)]),
-   (570, 790, 450, 400, "2F 로비 · 3F 파우더룸", [("로비", "room", 0, 0, 1, 0.5), ("3F 파우더룸", "room", 0, 0.5, 1, 0.5)])],
-   "Bird's-eye hand drawing of Spa Haesurang in Busan, floor plans seen from above: the 7th-floor open-air bath, Finnish sauna, lounge bar and PDR rooms, the 5th-floor jjimjil room and lockers, the 4th-floor lockers and powder room, and the 2nd-floor lobby with the 3rd-floor powder room."),
- "aerial-heosimcheong": ("허심청 조감도", "위에서 내려다본 층별 평면", [
-   (60, 300, 450, 400, "5F 온천탕", [("온천탕", "pool", 0, 0, 0.62, 1), ("사우나", "steam", 0.62, 0, 0.38, 1)]),
-   (570, 300, 450, 400, "4F 락카 · 안내데스크", [("락카", "locker", 0, 0, 0.6, 1), ("안내데스크", "room", 0.6, 0, 0.4, 1)]),
-   (60, 790, 450, 400, "3F 찜질방", [("찜질방", "steam", 0, 0, 0.6, 1), ("대휴게실 · 수면실", "room", 0.6, 0, 0.4, 1)]),
-   (570, 790, 450, 400, "1F 식당 · 2F 연회 · B1·B2 주차", [("1F 식당", "room", 0, 0, 0.5, 0.5), ("2F 연회", "room", 0.5, 0, 0.5, 0.5), ("B1·B2 주차장", "car", 0, 0.5, 1, 0.5)])],
-   "Bird's-eye hand drawing of Hurshimchung at Hotel Nongshim in Busan, floor plans seen from above: 5th-floor hot-spring baths, 4th-floor lockers and front desk, 3rd-floor jjimjil room, and the restaurant, banquet and parking floors below."),
- "aerial-orakai-cheonggyesan": ("오라카이 청계산 조감도", "위에서 내려다본 지하 사우나", [
-   (60, 300, 960, 560, "B1 사우나", [("건식 사우나", "steam", 0, 0, 0.3, 0.5), ("습식 사우나", "steam", 0, 0.5, 0.3, 0.5), ("여러 탕", "pool", 0.3, 0, 0.45, 1), ("세신", "room", 0.75, 0, 0.25, 1)]),
-   (60, 950, 960, 250, "B2 전기차 충전소", [("전기차 충전", "car", 0, 0, 1, 1)])],
-   "Bird's-eye hand drawing of Orakai Cheonggyesan Hotel seen from above: the basement-1 sauna with dry and wet saunas, several pools and a body-scrub area, and the basement-2 EV charging area."),
- "aerial-sisu-house": ("시수하우스 조감도", "위에서 내려다본 층별 평면", [
-   (60, 300, 450, 400, "1F Welcoming Zone", [("체크인", "room", 0, 0, 0.5, 1), ("숍", "room", 0.5, 0, 0.5, 1)]),
-   (570, 300, 450, 400, "1.5F Touch Zone", [("터치 케어", "room", 0, 0, 1, 1)]),
-   (60, 790, 960, 400, "2-3F Private Zone", [("핀란드 사우나", "steam", 0, 0, 0.4, 1), ("웜배스 · 콜드샤워", "pool", 0.4, 0, 0.3, 1), ("프라이빗 탈의실", "locker", 0.7, 0, 0.3, 1)])],
-   "Bird's-eye hand drawing of Sisu House in Seoul, floor plans seen from above: the 1st-floor Welcoming Zone (check-in and shop), the 1.5-floor Touch Zone, and the 2nd–3rd-floor Private Zone with sauna, warm bath, cold shower and private changing room."),
- "aerial-crossfit-super-sapiens": ("슈퍼사피엔스 조감도", "위에서 내려다본 층별 평면", [
-   (60, 300, 960, 440, "1F 메인 운동 공간", [("메인 트레이닝 플로어", "gym", 0, 0, 1, 1)]),
-   (60, 830, 450, 370, "2F", [("샤워 · 락커", "locker", 0, 0, 0.5, 1), ("보조 운동", "gym", 0.5, 0, 0.5, 1)]),
-   (570, 830, 450, 370, "3F", [("태닝", "room", 0, 0, 0.5, 1), ("스태프", "room", 0.5, 0, 0.5, 1)])],
-   "Bird's-eye hand drawing of CrossFit Super Sapiens seen from above: the 1st-floor main training floor, the 2nd floor with showers, lockers and an accessory training area, and the 3rd floor with tanning and staff space."),
+ "aerial-termeden": (termeden, "Termeden, bird's-eye", "Hand-drawn bird's-eye plan of Termeden in Icheon: outdoor infinity pool, forest bath, mountain pool and terme tubs; indoor pool and spa, hot-spring bathhouse with cold bath and saunas, and the jjimjil spa; day pass ₩49,000 (adult, November)."),
+ "aerial-spa-haesurang": (haesurang, "Spa Haesurang, bird's-eye", "Hand-drawn bird's-eye plan of Spa Haesurang's sauna floor in Busan: dry and wet saunas, warm, hot and cold pools, event bath, rows of showers (about 80) and powder room; sauna ₩15,000 on weekdays."),
+ "aerial-heosimcheong": (heosimcheong, "Hurshimchung, bird's-eye", "Hand-drawn bird's-eye plan of the 5th-floor hot-spring baths at Hurshimchung, Busan: longevity, event, celadon, cave, cold, half-body, salt and open-air baths, mini pool, steam and dry saunas, showers and scrub corner; ₩15,000 on weekdays."),
+ "aerial-orakai-cheonggyesan": (orakai, "Orakai Cheonggyesan, bird's-eye", "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools, showers and a walk-in body scrub; adult ₩24,000."),
+ "aerial-sisu-house": (sisu, "Sisu House, bird's-eye", "Hand-drawn bird's-eye plan of Sisu House in Seoul: a one-person private room with Finnish sauna, warm bath, 14°C cold shower, ice fountain and changing room, plus the touch-care room and check-in; from ₩79,000."),
+ "aerial-crossfit-super-sapiens": (supersapiens, "CrossFit Super Sapiens, bird's-eye", "Hand-drawn bird's-eye plan of CrossFit Super Sapiens in Seoul: 1st-floor training floor with rig and barbells, 2nd-floor accessory area, showers and lockers, 3rd-floor tanning and staff room; drop-in ₩30,000."),
 }
 
 if __name__ == "__main__":
     out = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "svg")
-    for k, (t, sub, plates, d) in SCENES.items():
-        h.rnd.seed(29); h._clip[0] = 0
-        open(f"{out}/{k}.svg", "w").write(svg(sheet(t, sub, plates), title=_h.escape(t), desc=_h.escape(d)))
-        print(k)
+    for k, (fn, t, d) in SCENES.items():
+        rnd.seed(7); _cid[0] = 0
+        open(f"{out}/{k}.svg", "w").write(svgdoc(fn(), t, d)); print(k)
