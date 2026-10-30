@@ -1,7 +1,7 @@
 """Explicit bilingual field rules. Offsets refer to sanitized input text."""
 import re
 from ..util.pii import strip_pii
-VERSION = '1.3.0'
+VERSION = '1.4.0'
 NAME = 'fields'
 
 # A sentence that explicitly says a fact is unconfirmed/unlisted yields nothing at all:
@@ -29,11 +29,38 @@ def _scope(text):
     if re.search(r'평일|weekdays?',text,re.I): return 'weekday'
     return 'unspecified'
 
+# Prefer the nearest explicit label in the current clause, never a page-wide guess.
+_HOURS_FACILITY = re.compile(
+    r'sauna lounge|spa treatment|세신|세화|찜질방?|노천탕|온천(?:탕)?|사우나|피트니스|수영장|라운지|'
+    r'fitness|gym|swimming pool|pool|sauna|lounge|spa', re.I)
+_FACILITY_NAMES = {'sauna lounge': 'lounge', '사우나': 'sauna', '피트니스': 'fitness',
+                   'gym': 'fitness', '수영장': 'pool', 'swimming pool': 'pool',
+                   '라운지': 'lounge', '온천탕': 'hot_spring', '온천': 'hot_spring',
+                   '찜질': 'jjimjil', '찜질방': 'jjimjil', '노천탕': 'outdoor_bath',
+                   '세신': 'body_scrub', '세화': 'body_care', 'spa treatment': 'spa_treatment'}
+
+def hours_qualifiers(text, start):
+    prefix = re.split(r'[;,\n.!?]', text[:start])[-1]
+    # A standalone heading immediately above a range is also local evidence.
+    if not prefix.strip() and start and text[start-1] == '\n':
+        prefix = text[:start].rstrip().split('\n')[-1]
+    # Do not borrow a facility/day label across an earlier range in the clause.
+    prefix = re.split(r'\d{1,2}:\d{2}\s*[~–—-]\s*\d{1,2}:\d{2}', prefix)[-1]
+    days = list(re.finditer(r'주말|평일|weekends?|weekdays?', prefix, re.I))
+    q = {'scope': _scope(days[-1][0]) if days else 'unspecified'}
+    facilities = list(_HOURS_FACILITY.finditer(prefix))
+    if facilities:
+        label = facilities[-1][0].lower()
+        q['facility'] = _FACILITY_NAMES.get(label, label)
+    return q
+
 def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
     text = strip_pii(text)
     results = []
     def emit(field, value, match, unit=None, ambiguous=False):
         start,end = match.span()
+        if field == 'hours':
+            value = {**value, **hours_qualifiers(text, start)}
         if field == 'hours':
             sentence_start = max(text.rfind(c, 0, start) for c in '\n.!?') + 1
             ends = [pos for c in '\n.!?' if (pos := text.find(c, end)) >= 0]
@@ -81,7 +108,10 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
         for m in matches(r'\b\d{1,2}:\d{2}\s*[~–—-]\s*\d{1,2}:\d{2}|24시간|24\s*hours|연중무휴'):
             times=re.findall(r'(\d{1,2}):(\d{2})',m[0])
             hours='-'.join(f'{int(h):02d}:{minute}' for h,minute in times) if times else '24_hours' if re.search(r'24',m[0]) else 'open_every_day'
-            add('hours',{'hours':hours,'scope':_scope(s)},m)
+            if hours == 'open_every_day':
+                add('closures', '연중무휴', m)
+            else:
+                add('hours',{'hours':hours,'scope':_scope(s)},m)
         for m in matches(r'(?:휴무|휴관)\s*[:：]\s*(?:매주|매월)[^;]{0,40}|(?:매주|매월)[^;]{0,50}(?:휴무|휴관)|closed (?:on |every )?(?:Mondays?|Tuesdays?|Wednesdays?|Thursdays?|Fridays?|Saturdays?|Sundays?)|\d{4}[-/]\d{2}[-/]\d{2}\s*[~–]\s*\d{4}[-/]\d{2}[-/]\d{2}[^;]{0,30}(?:closed|휴무|휴관)'):
             add('closures',m[0].strip(),m)
         for m in matches(r'(?:섭씨\s*)?\d+(?:\.\d+)?(?:\s*[~–-]\s*\d+(?:\.\d+)?)?\s*(?:℃|°\s*C|도)'):

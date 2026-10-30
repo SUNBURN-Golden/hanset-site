@@ -49,7 +49,12 @@ def map_field(field, value):
     if field in ('name', 'address', 'website'):
         out.append(('branch', None, {}, field, value, None))
     elif field == 'hours' and isinstance(value, dict):
-        out.append(('hours', 'regular', {'scope': value.get('scope', 'unspecified')}, 'open_hours', value.get('hours'), None))
+        if value.get('hours') == 'open_every_day':
+            out.append(('hours', 'closure', {}, 'closure_rule', '연중무휴', None))
+        else:
+            q = {'scope': value.get('scope', 'unspecified')}
+            if value.get('facility'): q['facility'] = value['facility']
+            out.append(('hours', 'regular', q, 'open_hours', value.get('hours'), None))
     elif field == 'closures':
         out.append(('hours', 'closure', {}, 'closure_rule', value, None))
     elif field == 'price_day_pass' and isinstance(value, dict):
@@ -171,7 +176,12 @@ def refresh_conflicts(db, clock=None):
         reason = 'same_source_multiple_values' if r['slots'] == 1 else 'sources_disagree'
         db.execute('INSERT OR IGNORE INTO conflicts VALUES (?,?,?,?,?,?,?,?)',
                    (cid, r['entity_id'], r['attribute'], json.dumps(ids), reason, 'open', at, at))
+        if reason == 'same_source_multiple_values':
+            db.execute('''INSERT INTO review_queue VALUES (?,?,?,?,?,?)
+                ON CONFLICT(review_id) DO UPDATE SET state='open', details=excluded.details''',
+                (deterministic_id('rq', cid), reason, cid, dumps({'fact_ids': ids}), 'open', at))
     for (cid,) in db.execute("SELECT conflict_id FROM conflicts WHERE state='open'").fetchall():
         if cid not in seen:
+            db.execute("UPDATE review_queue SET state='resolved' WHERE ref=? AND kind='same_source_multiple_values'", (cid,))
             db.execute("UPDATE conflicts SET state='obsolete', updated_at=? WHERE conflict_id=?", (at, cid))
     return len(seen)
