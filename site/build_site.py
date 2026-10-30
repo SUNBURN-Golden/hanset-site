@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """HANSET / 한셋 static site builder.
 
-Reads ../boxes.csv ../saunas.csv ../events.csv (single source of truth for numbers, dates, URLs) and
+Reads ./boxes.csv ./saunas.csv ./events.csv (single source of truth for numbers, dates, URLs) and
 content/venues.json + content/events.json (Korean copy for entries cleared to publish) and writes ./dist.
 Only stdlib required; fonttools+brotli (in .venv) are used to subset Pretendard into small woff2 files.
 Nothing is deployed, nothing is sent. No trackers, no external requests.
@@ -746,7 +746,6 @@ def build(site, venues, events, today, vevents=(), creators=()):
 
 <div class="slot" data-slot="kix-ticketing" hidden></div>
 <section class="sec"><div class="sec-h"><h2>Floor by floor.</h2><a href="/archive/">Archive ›</a></div>
-<p class="muted">Conceptual · May differ from the venue</p>
 <div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>View ›</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
 <p><a class="btn btn-d" href="/archive/">See every drawing ›</a></p></section>'''
     site.add("/", f"{BRAND_EN} — CrossFit, HYROX & Sauna Wellness Magazine in Korea", "CrossFit, HYROX, hotel and boutique saunas in Korea. A drop-in and sauna finder plus race dates. Every entry with an official source and check date.", body, "home", ("dday.js", "finder.js"))
@@ -796,7 +795,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
         aer_blk = (f'<!--aerial--><section class="archbox aerbox" id="aerial"><h2>Bird’s-eye drawing</h2><a class="illc" href="/archive/#aerial-{v["slug"]}"><picture><img src="/assets/img/aerial/{_ae[0]}-thumb.webp" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ae[2])}"></picture>'
                    f'<span><b>{E(v["title"])}</b><em>From above · Tap to view ›</em></span></a></section><!--/aerial-->') if _ae else ""
         arch_blk = (f'<section class="archbox"><h2>Hand-drawn sketch</h2><a class="illc" href="/archive/#{v["slug"]}"><picture><img src="/assets/img/archive/{_ar[0]}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(_ar[4])}"></picture>'
-                    f'<span><b>{E(_ar[2])}</b><em>Hand-drawn from the official guide · Tap to view ›</em></span></a></section>') if _ar else ""
+                    f'<span><b>{E(_ar[2])}</b><em>Tap to view ›</em></span></a></section>') if _ar else ""
         city_group = by_city.get(v["city_key"], [])
         same_city = len(city_group) > 1
         if same_city:
@@ -872,8 +871,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     items = "".join(
         f'<article class="arc" id="{vs}"><a class="arcimg" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener" aria-label="{E(t)}: view larger (new tab)">'
         f'<picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture></a>'
-        f'<div class="arcbody"><h2>{E(t)}</h2><p class="meta">Conceptual layout · Hand-drawn from the official guide · May differ from the actual venue</p>'
-        f'<p class="meta">Source <a href="{E(su)}" rel="noopener noreferrer">{E(sl)}</a> · Checked {ARCHIVE_DATE}</p>'
+        f'<div class="arcbody"><h2>{E(t)}</h2>'
         f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/archive/{f}.svg" target="_blank" rel="noopener">View larger ↗</a><a class="btn btn-d" href="/finder/{vs}/">Venue details</a></div></div></article>'
         for f, vs, t, st, d, sl, su in ARCHIVE)
     _vt = {a[1]: a[3] for a in ARCHIVE}
@@ -884,13 +882,13 @@ def build(site, venues, events, today, vevents=(), creators=()):
         f'<div class="btnrow"><a class="btn btn-d" href="/assets/img/aerial/{f}.svg" target="_blank" rel="noopener">View larger ↗</a><a class="btn btn-d" href="/finder/{vs}/">Venue details</a></div></div></article>'
         for f, vs, d in AERIAL)
     abody = f'''<div class="page"><h1>Venue Sketches</h1>
-<p class="muted">Conceptual · May differ from the venue · Tap to enlarge</p></div>
+<p class="muted">Tap to enlarge</p></div>
 <!--aerial--><div id="aerial" class="aerwrap"><div class="page"><h2>Bird’s-eye drawings</h2><p class="lead">Each venue seen from above, drawn by hand.</p></div>
 <div class="arcgrid aergrid">{aitems}</div></div><!--/aerial-->
 <div class="page"><h2 id="sketches">Floor-by-floor sketches</h2></div>
 <div class="arcgrid">{items}</div>
 <div class="page"><p class="muted">{SAFETY}</p></div>'''
-    site.add("/archive/", "Venue Sketches", "Hand-drawn sketches of floors and zones, based on official venue guides (conceptual layouts). May differ from the actual venue. Every drawing with a source and check date.", abody, "guide")
+    site.add("/archive/", "Venue Sketches", "Hand-drawn sketches of floors and zones.", abody, "guide")
 
     # ---- static pages
     for slug, title, desc, active in [("guide", "Guide", "How to read HANSET's finder, badges and check dates, and what to know before you go.", "guide"),
@@ -973,12 +971,12 @@ def leak_check(dist):
 ARCHIVE_DATE = "2026.10.18"
 # (file, venue slug, title, short title, alt text, source label, source URL)
 ARCHIVE = [
-    ("archive-sisu-house", "sisu-house", "Sisu House, floor by floor", "Sisu House", "Hand drawing stacking the floors from Sisu House’s official space guide (1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone) and its ritual sequence. Conceptual layout.", "sisu.house", "https://sisu.house/about"),
-    ("archive-spa-haesurang", "spa-haesurang-busan", "Spa Haesurang, floor by floor", "Spa Haesurang", "Hand drawing stacking the floors from Spa Haesurang’s official amenities guide (2F lobby, 3–4F powder rooms, 4–5F locker rooms, 5F jjimjil room, 7F open-air bath). No official info for 6F. Conceptual layout.", "spahaesurang.co.kr", "https://spahaesurang.co.kr/amenities"),
-    ("archive-heosimcheong", "heosimcheong-busan", "Hurshimchung, floor by floor", "Hurshimchung (Hotel Nongshim)", "Hand drawing stacking Hotel Nongshim Hurshimchung’s official floor guide (B1·B2 parking, 1F restaurant, 2F banquet, 3F jjimjil room, 4F lockers and front desk, 5F hot-spring baths). Conceptual layout.", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
-    ("archive-termeden", "termeden-icheon", "Termeden, zone by zone", "Termeden", "Hand drawing gathering the zones from Termeden’s official facility guide (indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa) on one sheet. Positions are not the real layout.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
-    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "Orakai Cheonggyesan, floor by floor", "Orakai Cheonggyesan", "Hand drawing stacking the B1 sauna (dry and wet saunas, several pools, walk-in body scrub) and the B2 EV charging area from Orakai Cheonggyesan Hotel’s official guide. The sauna’s interior layout is not drawn.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
-    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "CrossFit Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Hand drawing stacking the floors from CrossFit Super Sapiens’ official facility guide (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space). Conceptual layout within floors.", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
+    ("archive-sisu-house", "sisu-house", "Sisu House, floor by floor", "Sisu House", "Hand drawing stacking the floors of Sisu House (1F Welcoming Zone, 1.5F Touch Zone, 2-3F Private Zone) and its ritual sequence.", "sisu.house", "https://sisu.house/about"),
+    ("archive-spa-haesurang", "spa-haesurang-busan", "Spa Haesurang, floor by floor", "Spa Haesurang", "Hand drawing stacking the floors of Spa Haesurang (2F lobby, 3–4F powder rooms, 4–5F locker rooms, 5F jjimjil room, 7F open-air bath). No official info for 6F.", "spahaesurang.co.kr", "https://spahaesurang.co.kr/amenities"),
+    ("archive-heosimcheong", "heosimcheong-busan", "Hurshimchung, floor by floor", "Hurshimchung (Hotel Nongshim)", "Hand drawing stacking the floors of Hotel Nongshim Hurshimchung (B1·B2 parking, 1F restaurant, 2F banquet, 3F jjimjil room, 4F lockers and front desk, 5F hot-spring baths).", "hotelnongshim.com", "https://www.hotelnongshim.com/kr/?pCode=Hurshimchung"),
+    ("archive-termeden", "termeden-icheon", "Termeden, zone by zone", "Termeden", "Hand drawing of Termeden’s zones (indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa) on one sheet.", "termeden.com", "https://termeden.com/poolspa_explain.html"),
+    ("archive-orakai-cheonggyesan", "orakai-cheonggyesan", "Orakai Cheonggyesan, floor by floor", "Orakai Cheonggyesan", "Hand drawing stacking the B1 sauna (dry and wet saunas, several pools, walk-in body scrub) and the B2 EV charging area of Orakai Cheonggyesan Hotel. The sauna’s interior layout is not drawn.", "cgs.orakaihotels.com", "https://cgs.orakaihotels.com/kr/about/facilities_sauna.asp"),
+    ("archive-crossfit-super-sapiens", "crossfit-super-sapiens", "CrossFit Super Sapiens, floor by floor", "CrossFit Super Sapiens", "Hand drawing stacking the floors of CrossFit Super Sapiens (1F main training floor, 2F showers, lockers and accessory area, 3F tanning and staff space).", "crossfitsupersapiens.com", "https://crossfitsupersapiens.com/our-facility"),
 ]
 ARCHIVE_BY_VENUE = {a[1]: a for a in ARCHIVE}
 # 조감도 손그림 (위에서 내려다본 평면). illustrations/make_aerial.py
@@ -996,7 +994,7 @@ AERIAL_BY_VENUE = {a[1]: a for a in AERIAL}
 # 2026-10-29 owner order (준태님): the OLD floor-stacking venue sketches (archive-*) are NOT aerial views.
 # Never call them 조감도 / aerial / bird's-eye / from above / isometric.
 # 2026-10-30: the NEW true top-down drawings (/assets/img/aerial/, illustrations/*aerial*) ARE 조감도 and may use those words,
-# but only inside <!--aerial-->...<!--/aerial--> blocks in HTML and in their own asset/source files.
+# but only inside <!--aerial-->..<!--/aerial--> blocks in HTML and in their own asset/source files.
 VIEW_WORD_BAN = r"(?i)조감|aerial|bird[’'`]?s?[- ]?eye|from above|isometric|아이소메트릭|내려다[본보]"
 AERIAL_BLOCK = re.compile(r"(?s)<!--aerial-->.*?<!--/aerial-->")
 def _aerial_allowed(p):
@@ -1015,6 +1013,22 @@ def view_word_check(dist):
     for p in srcs:
         w = view_word_scan(p, p.read_text(errors="ignore"))
         if w: bad.append((str(p), w))
+    return bad
+
+# 2026-10-30 owner order (준태님): no "conceptual / not to scale / may differ / source" captions on drawings.
+DISCLAIMER_BAN = re.compile(r"(?i)conceptual|not to scale|may differ|not the real layout|hand-drawn from the official|based on official|개념도|제 비율|실제와 다를|출처")
+def disclaimer_check(dist):
+    bad = []
+    ill = Path(__file__).resolve().parent.parent / "illustrations"
+    srcs = list(ill.glob("svg/*.svg")) + [p for p in dist.rglob("*.svg")]
+    for p in srcs:
+        m = DISCLAIMER_BAN.search(p.read_text(errors="ignore"))
+        if m: bad.append((str(p), m.group(0)))
+    for p in dist.rglob("*.html"):
+        t = p.read_text(errors="ignore")
+        for fig in re.finditer(r"<(figure|article|a|section)\b[^>]*>(?:(?!</\1>).)*?(?:img/(?:aerial|archive|guide)/)(?:(?!</\1>).)*?</\1>", t, re.S):
+            m = DISCLAIMER_BAN.search(fig.group(0))
+            if m: bad.append((str(p), m.group(0))); break
     return bad
 
 # 2026-10-30 owner order: every drawing is English. Any Hangul in a drawing SVG fails the build.
@@ -1094,6 +1108,10 @@ def main():
     for b in dh: print("DRAWING-HANGUL CHECK FAIL:", b)
     if dh: sys.exit(6)
     print("drawing Hangul check OK (all drawing SVGs are English)")
+    dc = disclaimer_check(dist)
+    for b in dc: print("DRAWING-DISCLAIMER CHECK FAIL:", b)
+    if dc: sys.exit(8)
+    print("drawing disclaimer check OK (no conceptual / not-to-scale / source captions)")
     vw = view_word_check(dist)
     for b in vw: print("VIEW-WORD CHECK FAIL:", b)
     if vw: sys.exit(3)
