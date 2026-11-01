@@ -182,23 +182,35 @@ class Fetcher:
                     row=self.db.execute('SELECT * FROM robots_cache WHERE origin=?',(origin,)).fetchone()
                 if row and datetime.fromisoformat(row['expires_at'])>now:
                     body=row['body']; allowed=bool(row['allowed']); status=row['status']
+                    expires=datetime.fromisoformat(row['expires_at'])
                 else:
-                    response,raw,error=self._request(origin+'/robots.txt','robots')
+                    target=origin+'/robots.txt'
+                    # RFC 9309: at most five robots redirects, restricted to
+                    # this registrable domain and the /robots.txt path.
+                    for hop in range(6):
+                        response,raw,error=self._request(target,'robots')
+                        status=response.status_code if response is not None else None
+                        if error or status not in (301,302,303,307,308): break
+                        location=response.headers.get('Location')
+                        if hop==5 or not location: break
+                        try: redirect=canonicalize(urljoin(target,location))
+                        except (ValueError,UnicodeError): break
+                        if registrable_domain(redirect)!=domain or urlsplit(redirect).path!='/robots.txt' or self._reason_denied(redirect): break
+                        target=redirect
                     if error=='cap_reached':
                         return False,'cap_reached'
-                    status=response.status_code if response is not None else None
-                    allowed=not error and status in (200,404,410)
+                    allowed=not error and (status==200 or (status is not None and 400<=status<500 and status not in (401,403,429)))
                     body=strip_pii(raw.decode('utf-8',errors='replace')) if status==200 else ''
-                    # Never follow robots redirects or challenges through another route.
                     if status==200 and re.search('just a moment|captcha|verify you are human',body,re.I):
                         allowed=False
+                    now=self.clock.now(); expires=now+timedelta(hours=24)
                     with self._guard,self.db:
-                        self.db.execute('INSERT OR REPLACE INTO robots_cache VALUES (?,?,?,?,?,?,?)',(origin,body,status,now.isoformat(),(now+timedelta(hours=24)).isoformat(),int(allowed),'' if allowed else 'robots unavailable'))
+                        self.db.execute('INSERT OR REPLACE INTO robots_cache VALUES (?,?,?,?,?,?,?)',(origin,body,status,now.isoformat(),expires.isoformat(),int(allowed),'' if allowed else 'robots unavailable'))
                 parser=RobotFileParser()
                 parser.parse(body.splitlines() if allowed else ['User-agent: *','Disallow: /'])
                 delay=parser.crawl_delay(USER_AGENT) or parser.crawl_delay('*') or 0
                 self._delay[domain]=max(self._delay.get(domain,0),delay)
-                self._robots[origin]=(now+timedelta(hours=24),parser,allowed)
+                self._robots[origin]=(expires,parser,allowed)
             if not allowed or not parser.can_fetch(USER_AGENT,url):
                 self._inaccessible(domain,'robots_disallowed')
                 return False,'robots_disallowed'

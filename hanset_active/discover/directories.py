@@ -39,7 +39,8 @@ def detail(content, url, profile):
     from urllib.parse import urlsplit, urljoin
     from ..extract import html
     from ..util.pii import strip_pii
-    from ..util.urls import canonicalize, is_denied, is_excluded
+    from ..util.urls import canonicalize, is_denied, is_excluded, registrable_domain
+    from ..util.followups import portal_domains
     directory=next((d for d in profile.get('directories',[]) if d.get('directory') and
                     ((urlsplit(url).hostname or '')==urlsplit(d['url']).hostname or (urlsplit(url).hostname or '').endswith('.'+(urlsplit(d['url']).hostname or '')))),None)
     if not directory: return None
@@ -51,10 +52,12 @@ def detail(content, url, profile):
         title=node.get_text(' ',strip=True) if node else ''
     name=re.split(r'\s*[|｜]\s*|\s+[-–]\s+',title)[0].strip()
     doc=html.extract(content,url)
-    external=[]
+    external=[];portals=portal_domains(profile)|{registrable_domain(url)}
     for link in doc['links']:
         if link['kind']!='external' or is_denied(link['url']) or is_excluded(link['url'],link['text']): continue
         if urlsplit(link['url']).hostname==urlsplit(url).hostname: continue
+        # The portal's own sub-sites (e.g. other-language hosts) are never the venue website.
+        if registrable_domain(link['url']) in portals: continue
         external.append(link)
     labelled=set()
     for anchor in soup.select('a[href]'):

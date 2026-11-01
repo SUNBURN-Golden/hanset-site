@@ -9,6 +9,7 @@ from .db import deterministic_id
 from .util.pii import strip_pii
 from .util.timeutil import kst_now
 from .util.urls import canonicalize, registrable_domain, is_excluded, is_denied
+from .util.followups import portal_domains
 
 def normalize_name(name):
     return re.sub(r'[^a-z0-9가-힣]', '', re.sub(r'본점|지점|branch|main branch','',name.casefold()))
@@ -81,6 +82,7 @@ def upsert_venue(db, name, *, website='', city='', region='', venue_type='sauna'
     name,website,city,region,discovered_via=map(strip_pii,(name,website,city,region,discovered_via))
     if not name or is_excluded(name,website) or (website and is_denied(website)): return None
     website=canonicalize(website) if website else ''
+    if website and registrable_domain(website) in portal_domains(): website=''  # a portal is never a venue's own site
     norm=normalize_name(name); domain=registrable_domain(website) if website else ''
     key=f'{norm}:{normalize_name(region)}:{normalize_name(city)}'
     vid=deterministic_id(key)
