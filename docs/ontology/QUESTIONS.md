@@ -28,8 +28,15 @@ Run Q1: `python3 -m hanset_twin ask --date YYYY-MM-DD`. Summary: `python3 -m han
 - **Active-store relevance gate.** Stored HTML must be available; assets and stale feed hours,
   closures and prices are rejected. Other-domain pages must name the venue in their title.
   Evidence quotes must occur in main text or table cells after visitor reviews/comments are removed.
-  Rule-derived fields must still match the current field extractor on the quote (same field, not necessarily the same value), or receive `rule_no_longer_matches`.
+  Rule-derived fields must still match the current field extractor on the quote (same field, not necessarily the same value), or receive `rule_no_longer_matches`;
+  scalar tattoo/foreigner policies must also keep the same value (`value_no_longer_matches`), so a value stored by an older rule cannot conflict with the current one.
   Rejections remain auditable candidates; no network requests are made.
+- **Portals are never a venue's own site.** Directory/aggregator domains (profile `directories` +
+  `aggregator_domains`, e.g. a tourism portal) are subtracted from a venue's own domains, so a portal page
+  counts only when its title names the venue (`off_topic_page` otherwise), and no brand entity, website
+  or domain external id is derived from a portal URL.
+- **Transport timetables are not opening hours.** Times labelled by 운행/셔틀/픽업/배차/shuttle/bus/pick-up
+  never become `hours` (fields 1.5.0); such active observations are rejected as `transport_hours`.
 - **Baths and hours.** English bath words use whole-word boundaries and exclude identifiers.
   Explicit hot/cold bath lists preserve 온탕 and very-hot preserves 열탕; sauna (dry+wet)
   preserves both 건식 and 습식. Maintenance/cleaning sentences never produce opening hours.

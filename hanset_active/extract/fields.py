@@ -1,7 +1,9 @@
 """Explicit bilingual field rules. Offsets refer to sanitized input text."""
 import re
 from ..util.pii import strip_pii
-VERSION = '1.4.0'
+VERSION = '1.5.0'
+# Shuttle/transport timetables are never opening hours.
+TRANSPORT_CUE = re.compile(r'운행|셔틀|픽업|배차|shuttle|\bbus\b|pick-?up', re.I)
 NAME = 'fields'
 
 # A sentence that explicitly says a fact is unconfirmed/unlisted yields nothing at all:
@@ -86,7 +88,9 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
         class Offset:
             def __init__(self,m): self.m=m
             def span(self): return (block.start()+self.m.start(),block.start()+self.m.end())
-        def add(field,value,m,unit=None,ambiguous=False): emit(field,value,Offset(m),unit,ambiguous)
+        def add(field,value,m,unit=None,ambiguous=False):
+            if field=='hours' and TRANSPORT_CUE.search(re.split(r'[,;/·|\d]',s[max(0,m.start()-25):m.start()])[-1]): return
+            emit(field,value,Offset(m),unit,ambiguous)
         money=list(matches(r'₩\s*[\d,]+|[\d,]+\s*KRW|(?:\d+만(?:\d+천|\d+)?|\d+천|만|[\d,]+)\s*원'))
         price_context=text[max(0,block.start()-60):block.end()]
         if re.search(r'요금|이용료|입장료|1회|일일|이용권|drop.?in|day pass|single entry|admission|visit|price',price_context,re.I):

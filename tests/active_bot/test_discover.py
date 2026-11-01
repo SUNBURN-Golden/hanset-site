@@ -90,7 +90,7 @@ def test_mentions_links_reverse_and_guards(bot):
     doc={'text':'Silver Sauna in Seoul','mentions':[{'name':'Silver Sauna'}]}
     assert mention_discover(context,doc,parent_url='https://known.example',region='Seoul')
     assert not mention_discover(context,doc,depth=2,region='Seoul')
-    links=[{'url':'https://known.example/price','text':'요금','kind':'internal'}, {'url':'https://known.example/en/','text':'English','kind':'internal','hreflang':'en'}, {'url':'https://known.example/rates.pdf','text':'rates','kind':'attachment'}, {'url':'https://known.example/price.png','text':'price','kind':'image_notice'}, {'url':'https://instagram.com/silver','kind':'sns'}, {'url':'https://booking.naver.com/silver','kind':'excluded_link'}]
+    links=[{'url':'https://known.example/price','text':'요금','kind':'internal'}, {'url':'https://known.example/en/price','text':'English','kind':'internal','hreflang':'en'}, {'url':'https://known.example/rates.pdf','text':'rates','kind':'attachment'}, {'url':'https://known.example/price.png','text':'price','kind':'image_notice'}, {'url':'https://instagram.com/silver','kind':'sns'}, {'url':'https://booking.naver.com/silver','kind':'excluded_link'}]
     assert len(link_discover(context,{'links':links},parent_url='https://known.example',venue_id=vid))==4
     assert bot.db.execute('SELECT count(*) FROM venue_links').fetchone()[0]==2
     assert not link_discover(context,{'links':links},parent_url='https://known.example',depth=2)
@@ -128,3 +128,37 @@ def test_bad_sitemap_and_limits(bot,server):
     assert expand(context,server.base+'/bad.xml')==[]
     assert expand(context,server.base+'/bad.xml',depth=3)==[]
     assert expand(context,server.base+'/bad.xml',max_candidates=0)==[]
+
+@pytest.mark.parametrize('strategy,kind', [('site_links','internal'),('lang_counterpart','internal'),('attachments','attachment'),('images','image_notice')])
+@pytest.mark.parametrize('ownership',['domains','website','unknown'])
+def test_reverse_venue_focus_on_portal(bot,strategy,kind,ownership):
+    venue={'venue_id':'fixture','name':'Example Sauna','domains':'[]','website':''}
+    if ownership=='domains': venue['domains']='["example.com"]'
+    if ownership=='website': venue['website']='https://www.example.com'
+    links=[{'url':'https://portal.example/price','text':'price','kind':kind,'hreflang':'en'},
+        {'url':'https://portal.example/en/','text':'price','kind':kind,'hreflang':'en'},
+        {'url':'https://www.example.com/en/price','text':'price','kind':'external' if strategy=='site_links' else kind,'hreflang':'en'}]
+    tasks=followups(bot.db,venue,'price_day_pass',[{'links':links}],strategy=strategy,clock=bot.clock)
+    assert len(tasks)==(0 if ownership=='unknown' else 1)
+    assert all(r[0]=='https://www.example.com/en/price' for r in bot.db.execute('SELECT url FROM tasks'))
+
+@pytest.mark.parametrize('path',['','/','/en','/ko/','/en/home','/kr','/home','/en/index.html','/zh-cn/main','/EN/HOME/'])
+def test_reverse_language_home_rejected(bot,path):
+    venue={'venue_id':'fixture','name':'Example Sauna','domains':'["example.com"]'}
+    link={'url':'https://example.com'+path,'kind':'internal','hreflang':'en'}
+    assert followups(bot.db,venue,'price_day_pass',[{'links':[link]}],strategy='lang_counterpart')==[]
+
+def test_portal_website_is_not_an_own_domain(bot):
+    # A venue first seen on a directory portal may carry the portal URL as website.
+    from hanset_active.util.followups import allows_followup
+    portals={'portal.example'}
+    venue={'venue_id':'fixture','name':'Example Sauna','domains':'["portal.example"]','website':'https://ko.portal.example'}
+    assert not allows_followup(venue,'https://ko.portal.example/spa/price','site_links',portals)
+    venue['domains']='["portal.example","example.com"]'
+    assert allows_followup(venue,'https://example.com/price','site_links',portals)
+    assert not allows_followup(venue,'https://en.portal.example/spa/price','site_links',portals)
+
+def test_profile_directories_are_portals():
+    from hanset_active.util.followups import portal_domains
+    profile={'directories':[{'url':'https://ko.portal.example/sitemap.xml'}],'aggregator_domains':['blog.*','agg.example']}
+    assert portal_domains(profile)=={'portal.example','agg.example'}

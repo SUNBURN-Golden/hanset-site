@@ -51,6 +51,32 @@ SIGTERM completes the current task. Attempt three becomes dead; its final
 six-hour timestamp remains in the failure record. Freshness bootstrapping reopens
 due gaps and schedules known source pages using Stage B refresh intervals.
 
+## Venue follow-ups and robots recovery
+
+Reverse `site_links`, `lang_counterpart`, `attachments` and `images` follow only
+the venue's own registrable domains (`venues.domains` or `venues.website`). No
+known own domain means no follow-ups. Portal navigation stays off the queue;
+language counterparts also exclude root and bare language/home paths.
+`python3 -m hanset_active prune-followups` reports rejected pending tasks as JSON
+with counts by domain and discovery strategy; `--apply` marks them dead and adds
+`pruned_offsite_followup` failure records without deleting rows. Each non-dry run
+applies this idempotent repair before scheduling work.
+Directory detail pages never take the portal's own sub-sites as the venue website,
+`upsert_venue` never stores a portal domain, and each non-dry run first scrubs portal
+domains from existing `venues.domains`/`website` (audited as `portal_domain_scrubbed`
+in `review_queue`).
+
+Robots requests follow at most five redirects under RFC 9309, restricted to the
+same registrable domain and `/robots.txt`. Every hop uses the normal identity,
+rate limit and auxiliary/run budgets; the final decision is cached under the
+original origin. Cross-site/non-robots redirects, challenges and unresolved
+redirect chains remain disallowed. After that cache expires, a seed domain with
+a dead `robots_disallowed` trial may reopen one trial if the latest robots status
+was unavailable (NULL, 5xx, 429 or a redirect). Its source returns to candidate
+state for fresh evaluation. Task failure counters and `robots_unavailable_retry`
+audit records cap recovery at three retries per domain. Explicit Disallow rules
+and robots 401/403 never qualify; cached robots rows are left intact.
+
 ## Reports and CLI
 
 ```python

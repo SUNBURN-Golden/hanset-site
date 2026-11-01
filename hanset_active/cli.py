@@ -10,6 +10,7 @@ from .runner import run
 from .report import report, status, export_service_data, sanitize_output
 from .connectors.instagram import InstagramConnector, ConnectorPaused
 from .util.pii import strip_pii
+from .maintenance import prune_offsite_followups
 
 
 def parser():
@@ -32,6 +33,7 @@ def parser():
     commands.add_parser('gaps').add_argument('--venue')
     commands.add_parser('tasks')
     commands.add_parser('failures')
+    commands.add_parser('prune-followups').add_argument('--apply',action='store_true')
     commands.add_parser('export-service-data').add_argument('--out',type=Path,required=True)
     commands.add_parser('ig-stub-check')
     return p
@@ -54,6 +56,7 @@ def main(argv=None):
                 try: result = run(fetcher,max_minutes=args.max_minutes,max_requests=args.max_requests,classes=args.classes,dry_run=args.dry_run)
                 finally: fetcher.close()
             elif command=='status': result = status(db)
+            elif command=='prune-followups': result = prune_offsite_followups(db,apply=args.apply)
             elif command=='report': result = report(db)
             elif command=='gaps':
                 result = [dict(r) for r in db.execute('SELECT g.*,v.name FROM gaps g JOIN venues v USING(venue_id)') if not args.venue or args.venue in (r['name'],r['venue_id'])]

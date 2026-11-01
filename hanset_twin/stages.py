@@ -10,6 +10,16 @@ from hanset_active.db import deterministic_id
 from hanset_active.extract import fields as field_rules
 from hanset_active.util.pii import strip_pii
 from hanset_active.util.urls import is_denied, registrable_domain, canonicalize
+from hanset_active.util.followups import portal_domains
+from functools import lru_cache
+
+@lru_cache(maxsize=1)
+def _portals():
+    """Directory/aggregator domains: never a venue's own site."""
+    return frozenset(portal_domains())
+
+def _own_site(url):
+    return '' if url and registrable_domain(url) in _portals() else (url or '')
 from . import ontology as onto
 from .store import dumps
 
@@ -245,12 +255,16 @@ def _active_obs_verdict(ctx, obs, raw, venue):
         domains = {registrable_domain(d if '://' in d else 'https://' + d) for d in json.loads(venue['domains'] or '[]')}
         if venue['website']:
             domains.add(registrable_domain(venue['website']))
+        domains -= _portals()  # portal pages count only when their title names the venue
         norm = lambda t: ''.join(c for c in (t or '').casefold() if c.isalnum())
         names = [norm(venue[k]) for k in ('name', 'name_ko') if norm(venue[k])]
         if registrable_domain(url) not in domains and not any(n in norm(doc['title']) for n in names):
             return 'off_topic_page'
     if obs['field'] == 'hours' and re.search(r'maintenance|점검|정기\s*청소|cleaning', obs['quote'] or '', re.I):
         return 'maintenance_window'
+    if obs['field'] == 'hours' and field_rules.TRANSPORT_CUE.search(obs['quote'] or '') and \
+            not any(r['field'] == 'hours' for r in field_rules.extract(obs['quote'] or '')):
+        return 'transport_hours'
     if obs['field'] in _EVIDENCE_FIELDS:
         norm_quote = lambda t: re.sub(r'[\s|]+', '', t or '')
         tables = '\n'.join(' '.join(cells) for table in doc['structured']['tables'] for cells in table)
@@ -263,8 +277,12 @@ def _active_obs_verdict(ctx, obs, raw, venue):
         value = json.loads(obs['value_json']) if obs['value_json'] else None
         if expected_field == 'hours' and isinstance(value, dict) and value.get('hours') == 'open_every_day':
             expected_field = 'closures'
-        if not any(row['field'] == expected_field for row in field_rules.extract(obs['quote'] or '')):
+        current = [row for row in field_rules.extract(obs['quote'] or '') if row['field'] == expected_field]
+        if not current:
             return 'rule_no_longer_matches'
+        # Scalar policies: an observation stored by an older rule version must still give the same value.
+        if expected_field in ('tattoo_policy', 'foreigner_policy') and not any(row['value'] == value for row in current):
+            return 'value_no_longer_matches'
     return None
 
 def _extract_active_item(ctx, w):
@@ -340,7 +358,7 @@ def _match(db, c):
     for k in keys:
         hit = db.execute("SELECT a.entity_id FROM aliases a JOIN entities e USING(entity_id) WHERE e.entity_type='branch' AND a.normalized=?", (k,)).fetchall()
         if len(hit) == 1: return hit[0][0], 'name_exact'
-    if c['website']:
+    if _own_site(c['website']):
         u = _url_key(c['website'])
         hit = db.execute("SELECT entity_id FROM external_ids WHERE system='website' AND external_id=?", (u,)).fetchall()
         if len(hit) == 1: return hit[0][0], 'website_exact'
@@ -352,11 +370,11 @@ def _match(db, c):
     return None, 'new'
 
 def _make_branch(db, c, clock):
-    dom = registrable_domain(c['website']) if c['website'] else None
+    dom = registrable_domain(c['website']) if _own_site(c['website']) else None
     venue = onto.ensure_entity(db, 'venue', None, 'brand:' + (dom or onto.branch_key(c['name'])), name=dom or c['name'], origin=c['origin'], clock=clock)
     bid = onto.ensure_entity(db, 'branch', venue, 'branch', name=c['name'], qualifiers={'key': onto.branch_key(c['name']), 'city': c['city']}, origin=c['origin'], clock=clock)
     for alias, lang in ((c['name'], 'en'), (c['name_ko'], 'ko')): onto.add_alias(db, bid, alias, lang)
-    if c['website']:
+    if dom:  # portal URLs are not branch identifiers
         db.execute('INSERT OR IGNORE INTO external_ids VALUES (?,?,?)', (bid, 'website', _url_key(c['website'])))
         db.execute('INSERT OR IGNORE INTO external_ids VALUES (?,?,?)', (bid, 'domain', dom))
     return bid

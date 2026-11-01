@@ -15,6 +15,7 @@ from . import gaps
 from .discover.search import queries, usable_providers
 from .util.timeutil import kst_now
 from .util.pii import strip_pii
+from .maintenance import prune_offsite_followups, requeue_robots_trials, scrub_portal_venue_domains
 
 BACKOFF_SECONDS = (600, 3600, 21600)
 
@@ -102,6 +103,10 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
         with RunLock(db,fetcher.settings.data_dir,run_id,clock=clock) as lock:
             if dry_run:
                 return {'state':'dry_run','tasks':[dict(r) for r in db.execute("SELECT * FROM tasks WHERE state='pending'") if r['task_class'] in selected], 'requests':0}
+            scrub_portal_venue_domains(db,clock=clock)
+            prune_offsite_followups(db,clock=clock,apply=True)
+            for domain in requeue_robots_trials(db,clock=clock):
+                fetcher._stopped.pop(domain,None)
             recover(db,clock=clock)
             # With exclusive flock, all remaining running tasks are orphaned:
             # do not wait for a killed process's future lease to expire.
