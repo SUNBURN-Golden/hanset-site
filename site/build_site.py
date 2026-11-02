@@ -538,8 +538,29 @@ def map_lattice(city):
 
 MAP_DISTRICTS = {city: [key for row in rows for key, label, _ in row if key is not None and (label or key == "")]
                  for city, rows in MAP_LAYOUT.items() if city != "all"}
+def map_zones(city):
+    """All Korea view: outline each region's pin block so the grid reads as regions, not one icon wall."""
+    if city != "all":
+        return ""
+    blocks = []  # [key, x0, x1, y0, y1]; same-key same-span segments in consecutive rows merge
+    for r, row in enumerate(MAP_LAYOUT[city]):
+        y, col = MAP_TOP + r * MAP_PITCH_Y, 0
+        for key, _, cols in row:
+            x0, x1 = MAP_LEFT + col * MAP_PITCH_X, MAP_LEFT + (col + cols - 1) * MAP_PITCH_X
+            col += cols
+            if key is None:
+                continue
+            prev = next((b for b in blocks if b[0] == key and b[1] == x0 and b[2] == x1 and b[4] == y - MAP_PITCH_Y), None)
+            if prev:
+                prev[4] = y
+            else:
+                blocks.append([key, x0, x1, y, y])
+    return "".join(f'<rect class="map-zone map-zone-{k}" x="{x0-25}" y="{y0-38}" width="{x1-x0+50}" height="{y1-y0+64}" rx="14"/>'
+                   for k, x0, x1, y0, y1 in blocks)
+
+
 def map_drawing(city, h):
-    land = f'<rect class="map-land" x="8" y="8" width="384" height="{h-16}" rx="28"/>'
+    land = f'<rect class="map-land" x="8" y="8" width="384" height="{h-16}" rx="28"/>' + map_zones(city)
     if city == "seoul":
         y = MAP_RIVER_Y  # between the north and south rows
         land += f'<path class="map-river" d="M8 {y}C80 {y-10} 140 {y+10} 200 {y}S320 {y-10} 392 {y}"/><text class="river-label" x="56" y="{y-9}" text-anchor="middle">Han River</text>'
