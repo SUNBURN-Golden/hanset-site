@@ -14,7 +14,7 @@ def test_rules(text,field,value):
     assert rows[0]['quote'] and len(rows[0]['quote'])<=240 and rows[0]['locator']['char_offsets']
     assert rows[0]['rule_id'] and rows[0]['rule_version']==VERSION
 
-@pytest.mark.parametrize('text,field',[('평일 09:00 ~ 22:00','hours'),('24시간','hours'),('연중무휴','closures'),('매주 화요일 휴무','closures'),('매월 첫째 주 월요일 휴무','closures'),('closed on Mondays','closures'),('2026-11-01 ~ 2026-11-03 closed','closures'),('건식 습식 온탕 냉탕 스팀','bath_composition')])
+@pytest.mark.parametrize('text,field',[('평일 09:00 ~ 22:00','hours'),('24시간 운영','hours'),('연중무휴','closures'),('매주 화요일 휴무','closures'),('매월 첫째 주 월요일 휴무','closures'),('closed on Mondays','closures'),('2026-11-01 ~ 2026-11-03 closed','closures'),('건식 습식 온탕 냉탕 스팀','bath_composition')])
 def test_scoped_rules(text,field):
     assert any(r['field']==field for r in extract(text))
 

@@ -1,7 +1,7 @@
 """Explicit bilingual field rules. Offsets refer to sanitized input text."""
 import re
 from ..util.pii import strip_pii
-VERSION = '1.6.0'
+VERSION = '1.7.0'
 # Shuttle/transport timetables are never opening hours.
 TRANSPORT_CUE = re.compile(r'운행|셔틀|픽업|배차|shuttle|\bbus\b|pick-?up', re.I)
 BREAK_CUE = re.compile(r'lunch\s*break|break\s*time|브레이크\s*타임|휴게\s*시간|점심\s*시간|청소\s*시간|cleaning\s*time', re.I)
@@ -117,6 +117,10 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
         for m in matches(r'\b\d{1,2}:\d{2}\s*[~–—-]\s*\d{1,2}:\d{2}|24시간|24\s*hours|연중무휴'):
             times=re.findall(r'(\d{1,2}):(\d{2})',m[0])
             hours='-'.join(f'{int(h):02d}:{minute}' for h,minute in times) if times else '24_hours' if re.search(r'24',m[0]) else 'open_every_day'
+            clause = re.split(r'[,;，；]', s[:m.start()])[-1] + m[0] + re.split(r'[,;，；]', s[m.end():])[0]
+            if hours == '24_hours' and (not re.search(r'운영|영업|이용|\bopen\b|\bhours\b', clause, re.I) or
+                    re.search(r'보관|파기|이내|동안|\bwithin\b|\bretain', clause, re.I)):
+                continue
             if hours == 'open_every_day':
                 add('closures', '연중무휴', m)
             else:
