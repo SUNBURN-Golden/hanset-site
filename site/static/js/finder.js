@@ -131,6 +131,16 @@
     }
   }
   window.addEventListener('popstate', function () { readState(); apply(false); });
+  // Keep the open select list below its field so it never covers the labels above (mobile).
+  if (window.CSS && CSS.supports('appearance', 'base-select')) {
+    document.querySelectorAll('.filters select').forEach(function (sel) {
+      sel.addEventListener('pointerdown', function () {
+        var room = window.innerHeight - sel.getBoundingClientRect().bottom;
+        var need = sel.options.length * 48 + 24;
+        if (room < need) window.scrollBy(0, need - room);
+      });
+    });
+  }
   readState();
   apply(false);
 })();
