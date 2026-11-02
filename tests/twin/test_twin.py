@@ -118,7 +118,7 @@ def test_representative_question_answers_with_evidence(env):
     a.venue('alpha::', 'Sauna Alpha', URL)
     a.venue('beta::', 'Sauna Beta', 'https://sauna-beta.example')
     a.doc(URL, '2026-10-01T09:00:00+09:00', [
-        ('rapid_cold_plunge', True, 'fact', '급냉탕 운영 (5도)'), ('foreigner_policy', 'accepted', 'fact', 'Foreign visitors welcome'),
+        ('rapid_cold_plunge', True, 'fact', '급냉탕 운영 (5도)'), ('foreigner_policy', 'accepted', 'fact', 'Sauna foreign visitors welcome'),
         ('price_day_pass', {'amount': 25000, 'ticket': 'day_pass', 'scope': 'unspecified'}, 'fact', '1회 이용권 25,000원'),
         ('closures', '매월 첫째 수요일 휴무', 'fact', '매월 첫째 수요일 휴무')], 'alpha::')
     a.doc('https://sauna-beta.example', '2026-10-01T09:00:00+09:00', [('rapid_cold_plunge', False, 'fact', '급냉탕 없음')], 'beta::')

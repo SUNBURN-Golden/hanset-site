@@ -6,7 +6,7 @@ from hanset_active.extract.fields import extract, amount, VERSION
  ('사우나 80~100℃','sauna_temp_c',[80.,100.]),('냉탕 10°C','cold_bath_temp_c',10.),('건식 섭씨 90도','sauna_temp_c',90.),
  ('급냉탕 있음','rapid_cold_plunge',True),('급냉탕 없음','rapid_cold_plunge',False),('rapid cold plunge available','rapid_cold_plunge',True),
  ('문신 불가','tattoo_policy','not_allowed'),('tattoos not allowed','tattoo_policy','not_allowed'),('tattoos must be covered','tattoo_policy','cover_required'),('문신 허용','tattoo_policy','allowed'),
- ('외국인 이용 가능','foreigner_policy','accepted'),('foreigners not accepted','foreigner_policy','not_allowed'),('Passport required','foreigner_policy','id_required'),('English guide available','foreigner_policy','english_guide')])
+ ('외국인 이용 가능','foreigner_policy','accepted'),('Sauna foreigners not accepted','foreigner_policy','not_allowed'),('Sauna Passport required','foreigner_policy','id_required'),('Sauna English guide available','foreigner_policy','english_guide')])
 def test_rules(text,field,value):
     rows=[r for r in extract(text) if r['field']==field]
     assert rows

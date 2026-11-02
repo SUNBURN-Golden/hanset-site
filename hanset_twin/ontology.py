@@ -67,7 +67,8 @@ def map_field(field, value):
     elif field == 'rapid_cold_plunge':
         out.append(('facility', 'rapid_cold_plunge', {}, 'exists', bool(value), None))
     elif field == 'bath_composition' and isinstance(value, list):
-        out.append(('facility', 'layout', {}, 'bath_list', sorted(value), None))
+        value = sorted({'습식' if word == '스팀' else word for word in value})
+        out.append(('facility', 'layout', {}, 'bath_list', value, None))
         for word in value:
             if word in BATH_WORDS:
                 out.append(('facility', BATH_WORDS[word], {}, 'exists', True, None))
@@ -171,6 +172,10 @@ def refresh_conflicts(db, clock=None):
         GROUP BY entity_id, attribute HAVING n>1''').fetchall()
     for r in rows:
         ids = sorted(json.loads(r['ids']))
+        if r['attribute'] == 'bath_list':
+            values = [json.loads(db.execute('SELECT value_json FROM facts WHERE fact_id=?', (fid,)).fetchone()[0]) for fid in ids]
+            if len({dumps(sorted({'습식' if w == '스팀' else w for w in v})) for v in values}) == 1:
+                continue
         cid = deterministic_id('conflict', r['entity_id'], r['attribute'], ids)
         seen.add(cid)
         reason = 'same_source_multiple_values' if r['slots'] == 1 else 'sources_disagree'

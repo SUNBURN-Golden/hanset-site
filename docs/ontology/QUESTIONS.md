@@ -37,9 +37,18 @@ Run Q1: `python3 -m hanset_twin ask --date YYYY-MM-DD`. Summary: `python3 -m han
   or domain external id is derived from a portal URL.
 - **Transport timetables are not opening hours.** Times labelled by 운행/셔틀/픽업/배차/shuttle/bus/pick-up
   never become `hours` (fields 1.5.0); such active observations are rejected as `transport_hours`.
+- **Break ranges (fields 1.6.0).** Lunch Break/break time/브레이크타임/휴게시간/점심시간/청소시간/cleaning time
+  labels drop only their local range; adjacent opening ranges survive. Stored break ranges get `break_hours`.
+- **Steam is wet sauna.** Steam sauna/room and 스팀 normalize to 습식; legacy 스팀 candidates and
+  bath-list conflict comparisons remain compatible and still map to `wet_sauna.exists`.
+- **Policy evidence.** Review-style tattoo/foreigner quotes get `user_review_text`. Foreigner policy
+  requires a same-sentence sauna/spa/bath/facility/이용/입장/admission cue, excluding generic pass/passport chrome.
+  Explicit 외국인 이용 가능/고객, foreign guests/international visitors, and English staff/availability are supported.
+- **Rapid plunge.** 급냉탕/급랭탕/초냉탕 and rapid/extra-cold/ice-cold plunge require explicit
+  presence (including features/equipped) or absence; temperature alone gives no rapid-plunge fact.
 - **Baths and hours.** English bath words use whole-word boundaries and exclude identifiers.
   Explicit hot/cold bath lists preserve 온탕 and very-hot preserves 열탕; sauna (dry+wet)
-  preserves both 건식 and 습식. Maintenance/cleaning sentences never produce opening hours.
+  preserves both 건식 and 습식. Maintenance windows never produce opening hours.
 - **Answer hygiene.** Branches with an open `non_sauna_branch_suspect` quality issue (e.g. CrossFit
   boxes typed sauna) are excluded from Q1's candidate list and reported separately
   (`report` → `q1_excluded_branches`). Hours facts flagged `maintenance_window_as_hours` never count
@@ -49,7 +58,7 @@ Run Q1: `python3 -m hanset_twin ask --date YYYY-MM-DD`. Summary: `python3 -m han
   stating the fact is unconfirmed/unlisted/미확인/확인 안 됨 etc.; tattoo maps to
   not_allowed/cover_required/conditional exactly as stated; "hot/cold baths", "one cold",
   "cold bath(s)", 냉탕 and "cold plunge" give `cold_plunge.exists=true` while "cold shower" does not;
-  nothing infers `rapid_cold_plunge` unless 급냉탕/"rapid cold plunge" is explicitly named.
+  nothing infers `rapid_cold_plunge` unless an explicit rapid-plunge name and presence/absence cue are stated.
 
 ## Re-extraction after a rule change
 

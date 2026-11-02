@@ -116,16 +116,16 @@ def test_legacy_null_task_recovery_and_dry_smoke(bot,server):
  ('휴무: 매주 화요일','closures','휴무: 매주 화요일'),
  ('문신 안내: 문신 고객은 입장이 제한됩니다','tattoo_policy','not_allowed'),
  ('외국인 안내: 외국인 입장 가능합니다','foreigner_policy','accepted'),
- ('외국인 고객은 여권 지참이 필요합니다','foreigner_policy','id_required'),
+ ('Sauna 외국인 고객은 여권 지참이 필요합니다','foreigner_policy','id_required'),
  ('일일 이용권 성인 요금 2만5천원','price_day_pass',{'amount':25000,'scope':'unspecified','ticket':'day_pass','audience':'adult'}),
  ('이용시간 평일 09:00 ~ 23:00','hours',{'hours':'09:00-23:00','scope':'weekday'}),
  ('Opening hours weekdays 9 am to 10 pm','hours',{'hours':'09:00-22:00','scope':'weekday'}),
  ('Closed every Tuesday','closures','Closed every Tuesday'),
  ('Tattoos are not permitted','tattoo_policy','not_allowed'),
- ('Foreign visitors are welcome','foreigner_policy','accepted'),
- ('Foreigners must bring a passport','foreigner_policy','id_required'),
+ ('Sauna Foreign visitors are welcome','foreigner_policy','accepted'),
+ ('Sauna Foreigners must bring a passport','foreigner_policy','id_required'),
  ('Single entry admission 25000 KRW','price_day_pass',{'amount':25000,'scope':'unspecified','ticket':'day_pass'}),
- ('English guide available','foreigner_policy','english_guide'),
+ ('Sauna English guide available','foreigner_policy','english_guide'),
 ])
 def test_additional_bilingual_rules(text,field,value):
     assert any(r['field']==field and r['value']==value and r['quote'] for r in extract(text))

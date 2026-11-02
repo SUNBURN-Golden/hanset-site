@@ -18,7 +18,7 @@ def test_gate_and_reextract_history(tmp_path, monkeypatch):
         ('https://spa.example/missing', '', '', 'hours', {'hours': '08:00-20:00'}, '08:00-20:00', 'raw_unavailable'),
         ('https://portal.example/food', 'Example Spa | Portal', '<p>Example Spa serves agwi jjim (steamed anglerfish with bean sprouts).</p>', 'bath_composition', ['스팀'], 'Example Spa serves agwi jjim (steamed anglerfish with bean sprouts).', 'rule_no_longer_matches'),
         ('https://portal.example/saunas', 'Example Spa | Portal', '<p>Example Spa has a dry sauna and steam room.</p>', 'bath_composition', ['스팀'], 'Example Spa has a dry sauna and steam room.', None),
-        ('https://spa.example/cleaning', 'Schedule', '<p>청소 시간 09:00-10:00</p>', 'hours', {'hours': '09:00-10:00'}, '청소 시간 09:00-10:00', 'rule_no_longer_matches'),
+        ('https://spa.example/cleaning', 'Schedule', '<p>청소 시간 09:00-10:00</p>', 'hours', {'hours': '09:00-10:00'}, '청소 시간 09:00-10:00', 'break_hours'),
     ]
     for i, (url, title, body, field, value, quote, reason) in enumerate(cases):
         raw = a.doc(url, f'2026-10-{i+1:02d}T09:00:00+09:00', [(field, value, 'fact', quote)], 'example', 'official_directory' if 'portal' in url else 'own_site')

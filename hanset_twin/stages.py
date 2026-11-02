@@ -260,7 +260,16 @@ def _active_obs_verdict(ctx, obs, raw, venue):
         names = [norm(venue[k]) for k in ('name', 'name_ko') if norm(venue[k])]
         if registrable_domain(url) not in domains and not any(n in norm(doc['title']) for n in names):
             return 'off_topic_page'
-    if obs['field'] == 'hours' and re.search(r'maintenance|점검|정기\s*청소|cleaning', obs['quote'] or '', re.I):
+    quote = obs['quote'] or ''
+    if obs['field'] in ('foreigner_policy', 'tattoo_policy') and field_rules.USER_REVIEW.search(quote):
+        return 'user_review_text'
+    if obs['field'] == 'hours' and field_rules.BREAK_CUE.search(quote):
+        value = json.loads(obs['value_json']) if obs['value_json'] else {}
+        for m in re.finditer(r'\b\d{1,2}:\d{2}\s*[~–—-]\s*\d{1,2}:\d{2}', quote):
+            hours = '-'.join(f'{int(h):02d}:{minute}' for h, minute in re.findall(r'(\d{1,2}):(\d{2})', m[0]))
+            if hours == value.get('hours') and field_rules.BREAK_CUE.search(field_rules.hours_prefix(quote, m.start())):
+                return 'break_hours'
+    if obs['field'] == 'hours' and re.search(r'maintenance|점검|정기\s*청소', obs['quote'] or '', re.I):
         return 'maintenance_window'
     if obs['field'] == 'hours' and field_rules.TRANSPORT_CUE.search(obs['quote'] or '') and \
             not any(r['field'] == 'hours' for r in field_rules.extract(obs['quote'] or '')):
