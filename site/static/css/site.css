@@ -133,7 +133,7 @@ p,li{max-width:38em}
  .filters select{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer}
  .filters select::picker-icon{color:var(--muted);transition:rotate .2s}
  .filters select:open::picker-icon{rotate:180deg}
- .filters select::picker(select){margin-top:4px;padding:4px;border:1.5px solid var(--line);border-radius:var(--r);background:var(--surface);color:var(--ink);box-shadow:0 8px 24px rgba(0,0,0,.14)}
+ .filters select::picker(select){position-area:block-end span-inline-end;position-try-fallbacks:none;max-block-size:min(60dvh,320px);overflow-y:auto;overscroll-behavior:contain;z-index:3;margin-top:4px;padding:4px;border:1.5px solid var(--line);border-radius:var(--r);background:var(--surface);color:var(--ink);box-shadow:0 8px 24px rgba(0,0,0,.14)}
  .filters select option{min-height:44px;padding:10px 12px;border-radius:10px;display:flex;align-items:center;gap:8px}
  .filters select option:hover,.filters select option:focus-visible{background:var(--surface-2)}
  .filters select option:checked{font-weight:700}
