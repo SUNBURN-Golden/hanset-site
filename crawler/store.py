@@ -1,6 +1,7 @@
 """External SQLite state with atomic reservations and append-only observations."""
 import contextlib
 import os
+import time
 import sqlite3
 from .config import external_path, state_path
 
@@ -37,19 +38,37 @@ CREATE TABLE IF NOT EXISTS reviews(seq INTEGER PRIMARY KEY AUTOINCREMENT, record
 '''
 
 
+BUSY_TIMEOUT_S = 30
+INIT_ATTEMPTS = 6
+
+
 class Store:
     def __init__(self, path=None, readonly=False):
         self.path = external_path(path) if path else state_path() / 'collector.sqlite3'
         if not readonly:
             self.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.path.as_uri() + '?mode=ro' if readonly else str(self.path),
-                                  uri=readonly, timeout=30, isolation_level=None)
+                                  uri=readonly, timeout=BUSY_TIMEOUT_S, isolation_level=None)
         self.db.row_factory = sqlite3.Row
+        self.db.execute(f'PRAGMA busy_timeout={int(BUSY_TIMEOUT_S * 1000)}')
         self.db.execute('PRAGMA foreign_keys=ON')
         if not readonly:
             os.chmod(self.path, 0o600)
-            self.db.execute('PRAGMA journal_mode=WAL')
-            self.db.executescript(SQL)
+            self._init_with_retry()
+
+    def _init_with_retry(self, attempts=None, base_delay=0.5):
+        # Startup can race a worker holding a write lock; journal_mode switches and DDL may
+        # raise 'database is locked' despite busy_timeout, so retry with exponential backoff.
+        attempts = attempts or INIT_ATTEMPTS
+        for i in range(attempts):
+            try:
+                self.db.execute('PRAGMA journal_mode=WAL')
+                self.db.executescript(SQL)
+                return
+            except sqlite3.OperationalError as e:
+                if 'locked' not in str(e) and 'busy' not in str(e) or i == attempts - 1:
+                    raise
+                time.sleep(min(base_delay * (2 ** i), 8))
 
     @contextlib.contextmanager
     def transaction(self):
