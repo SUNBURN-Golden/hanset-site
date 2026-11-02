@@ -508,3 +508,20 @@ console.log('interaction checks OK');
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class AllKoreaZones(unittest.TestCase):
+    def test_all_korea_view_outlines_each_region_without_overlap(self):
+        zones = re.findall(r'<rect class="map-zone map-zone-(\w+)" x="(-?\d+)" y="(-?\d+)" width="(\d+)" height="(\d+)"', B.map_zones('all'))
+        self.assertEqual({z[0] for z in zones}, {'seoul', 'busan', 'jeju', 'gyeonggi'})
+        self.assertEqual(B.map_zones('seoul'), '')
+        boxes = [(k, int(x), int(y), int(x) + int(w), int(y) + int(h)) for k, x, y, w, h in zones]
+        for i, a in enumerate(boxes):
+            self.assertTrue(8 <= a[1] and a[3] <= 392, a)
+            for b in boxes[i + 1:]:
+                if a[0] != b[0]:
+                    self.assertFalse(a[1] < b[3] and b[1] < a[3] and a[2] < b[4] and b[2] < a[4], (a, b))
+        _, slots, _, _ = B.map_lattice('all')
+        for k, pts in slots.items():  # every pin sits inside one of its region's zones
+            for x, y in pts:
+                self.assertTrue(any(z[0] == k and z[1] < x < z[3] and z[2] < y < z[4] for z in boxes), (k, x, y))
