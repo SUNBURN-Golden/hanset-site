@@ -126,7 +126,20 @@ p,li{max-width:38em}
 .seg{display:flex;flex-wrap:wrap;gap:6px}
 .seg button,.seg label{font:inherit;font-size:.88rem;border:1.5px solid var(--line);background:var(--field);color:var(--ink);padding:6px 13px;border-radius:999px;cursor:pointer;display:inline-flex;align-items:center;min-height:44px}
 .seg button[aria-pressed=true]{background:var(--contrast);color:var(--on-contrast);border-color:var(--contrast)}
-.filters input[type=search],.filters select{font:inherit;font-size:1rem;padding:9px 12px;border:1.5px solid var(--line);border-radius:10px;background:var(--field);width:100%;color:var(--ink)}
+.filters input[type=search],.filters select{font:inherit;font-size:1rem;padding:9px 12px;border:1.5px solid var(--line);border-radius:10px;background:var(--field);width:100%;color:var(--ink);min-height:44px}
+/* Customizable native select (Chrome 135+); other browsers keep the select above. */
+@supports (appearance:base-select){
+ .filters select,.filters select::picker(select){appearance:base-select}
+ .filters select{display:flex;align-items:center;justify-content:space-between;gap:8px;cursor:pointer}
+ .filters select::picker-icon{color:var(--muted);transition:rotate .2s}
+ .filters select:open::picker-icon{rotate:180deg}
+ .filters select::picker(select){margin-top:4px;padding:4px;border:1.5px solid var(--line);border-radius:var(--r);background:var(--surface);color:var(--ink);box-shadow:0 8px 24px rgba(0,0,0,.14)}
+ .filters select option{min-height:44px;padding:10px 12px;border-radius:10px;display:flex;align-items:center;gap:8px}
+ .filters select option:hover,.filters select option:focus-visible{background:var(--surface-2)}
+ .filters select option:checked{font-weight:700}
+ .filters select option::checkmark{color:var(--accent-d)}
+}
+@media (prefers-reduced-motion:reduce){.filters select::picker-icon{transition:none}}
 .chk{display:flex;align-items:center;gap:8px;font-size:.95rem}
 .chk input{width:20px;height:20px;accent-color:var(--accent-d)}
 .count{font-size:.9rem;color:var(--muted);margin:6px 0 12px}
