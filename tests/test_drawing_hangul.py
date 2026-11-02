@@ -17,3 +17,12 @@ def test_english_drawing_svg_passes(tmp_path):
 def test_repo_drawings_have_no_hangul():
     for p in [*(ROOT / "illustrations" / "svg").glob("aerial-*.svg"), *(ROOT / "illustrations" / "svg").glob("archive-*.svg")]:
         assert not bs.drawing_hangul_scan(p.read_text()), p.name
+
+def test_hangul_in_guide_svg_fails(tmp_path):
+    d = tmp_path / "assets/img/guide"; d.mkdir(parents=True)
+    (d / "sauna-guide.svg").write_text('<svg><title>\uc0ac\uc6b0\ub098</title></svg>')
+    assert any("sauna-guide.svg" in b[0] for b in bs.drawing_hangul_check(tmp_path))
+
+def test_repo_guide_drawings_have_no_hangul():
+    for p in (ROOT / "site" / "static" / "img" / "guide").glob("*.svg"):
+        assert not bs.drawing_hangul_scan(p.read_text()), p.name
