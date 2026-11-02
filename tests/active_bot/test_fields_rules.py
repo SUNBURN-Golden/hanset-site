@@ -78,7 +78,7 @@ def test_rapid_cold_plunge_only_when_explicitly_named(text, value):
     assert ('rapid_cold_plunge', value) in fields(text)
 
 def test_english_bath_words_map_to_canonical_tokens():
-    assert set(bath_tokens('Finnish dry and wet saunas, steam and ice bath')) >= {'건식', '습식', '스팀', '아이스배스'}
+    assert set(bath_tokens('Finnish dry and wet saunas, steam and ice bath')) >= {'건식', '습식', '아이스배스'}
     assert '건식' in bath_tokens('wet+dry sauna')
 
 @pytest.mark.parametrize('text', ['hot baths and one cold shower', 'cold room beside hot baths', 'cold air and baths'])

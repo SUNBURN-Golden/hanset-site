@@ -15,7 +15,7 @@ def test_no_bath_fragments(text):
     ('hot/cold baths', {'온탕', '냉탕'}), ('cold & hot baths', {'온탕', '냉탕'}),
     ('hot/cold/very-hot baths', {'온탕', '냉탕', '열탕'}), ('cold and very hot baths', {'냉탕', '열탕'}),
     ('sauna (dry+wet)', {'건식', '습식'}), ('saunas (dry and wet)', {'건식', '습식'}),
-    ('sauna (wet/dry)', {'건식', '습식'}), ('steam', {'스팀'}),
+    ('sauna (wet/dry)', {'건식', '습식'}), ('steam', {'습식'}),
 ])
 def test_explicit_baths(text, expected):
     assert set(next(r['value'] for r in fields.extract(text) if r['field'] == 'bath_composition')) == expected

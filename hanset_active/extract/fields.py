@@ -1,9 +1,12 @@
 """Explicit bilingual field rules. Offsets refer to sanitized input text."""
 import re
 from ..util.pii import strip_pii
-VERSION = '1.5.0'
+VERSION = '1.6.0'
 # Shuttle/transport timetables are never opening hours.
 TRANSPORT_CUE = re.compile(r'운행|셔틀|픽업|배차|shuttle|\bbus\b|pick-?up', re.I)
+BREAK_CUE = re.compile(r'lunch\s*break|break\s*time|브레이크\s*타임|휴게\s*시간|점심\s*시간|청소\s*시간|cleaning\s*time', re.I)
+USER_REVIEW = re.compile(r'\bI\s+(?:think|was)\b|\bme\s|저는|후기|\breviews?\b', re.I)
+POLICY_CONTEXT = re.compile(r'\b(?:sauna|spa|baths?|facility|admission)\b|사우나|이용|입장', re.I)
 NAME = 'fields'
 
 # A sentence that explicitly says a fact is unconfirmed/unlisted yields nothing at all:
@@ -14,7 +17,7 @@ _UNCONFIRMED = re.compile(
     r'|\bnot public\b|\bnot applicable\b|\bnot read\b|\bno price\b|\bprice not\b', re.I)
 
 # Canonical (Korean) tokens so ontology mapping works for English mentions too.
-_BATH_TOKEN = {'dry sauna': '건식', 'wet sauna': '습식', 'steam': '스팀', 'hot bath': '온탕',
+_BATH_TOKEN = {'dry sauna': '건식', 'wet sauna': '습식', 'steam': '습식', 'steam sauna': '습식', 'steam room': '습식', '스팀': '습식', '스팀사우나': '습식', '스팀 사우나': '습식', 'hot bath': '온탕',
                'cold bath': '냉탕', 'ice bath': '아이스배스', 'cold plunge': '냉탕'}
 
 def amount(text):
@@ -41,13 +44,17 @@ _FACILITY_NAMES = {'sauna lounge': 'lounge', '사우나': 'sauna', '피트니스
                    '찜질': 'jjimjil', '찜질방': 'jjimjil', '노천탕': 'outdoor_bath',
                    '세신': 'body_scrub', '세화': 'body_care', 'spa treatment': 'spa_treatment'}
 
-def hours_qualifiers(text, start):
+def hours_prefix(text, start):
     prefix = re.split(r'[;,\n.!?]', text[:start])[-1]
     # A standalone heading immediately above a range is also local evidence.
     if not prefix.strip() and start and text[start-1] == '\n':
         prefix = text[:start].rstrip().split('\n')[-1]
     # Do not borrow a facility/day label across an earlier range in the clause.
     prefix = re.split(r'\d{1,2}:\d{2}\s*[~–—-]\s*\d{1,2}:\d{2}', prefix)[-1]
+    return prefix
+
+def hours_qualifiers(text, start):
+    prefix = hours_prefix(text, start)
     days = list(re.finditer(r'주말|평일|weekends?|weekdays?', prefix, re.I))
     q = {'scope': _scope(days[-1][0]) if days else 'unspecified'}
     facilities = list(_HOURS_FACILITY.finditer(prefix))
@@ -63,11 +70,9 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
         start,end = match.span()
         if field == 'hours':
             value = {**value, **hours_qualifiers(text, start)}
-        if field == 'hours':
-            sentence_start = max(text.rfind(c, 0, start) for c in '\n.!?') + 1
-            ends = [pos for c in '\n.!?' if (pos := text.find(c, end)) >= 0]
-            if re.search(r'maintenance|점검|정기\s*청소|cleaning|청소\s*시간', text[sentence_start:min(ends) if ends else len(text)], re.I):
-                return
+        if field == 'hours' and (BREAK_CUE.search(hours_prefix(text, start)) or
+                re.search(r'maintenance|점검|정기\s*청소|cleaning', hours_prefix(text, start), re.I)):
+            return
         line_start=text.rfind('\n',0,start)+1
         line_end=text.find('\n',end)
         evidence_start=max(line_start,start-50)
@@ -125,19 +130,19 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
                 cold=bool(re.search(r'냉탕|냉수|cold plunge|ice bath|아이스',cues[-1][0],re.I))
                 nums=[float(n) for n in re.findall(r'\d+(?:\.\d+)?',m[0])]
                 add('cold_bath_temp_c' if cold else 'sauna_temp_c',nums[0] if len(nums)==1 else nums,m,'C',bool(re.search(r'아님|아니|not confirmed|not actually',s,re.I)))
-        for m in matches(r'급냉탕|rapid cold plunge'):
+        for m in matches(r'급냉탕|급랭탕|초냉탕|rapid cold plunge|extra-cold plunge|ice-cold plunge'):
             tail=re.split(r'[,;]',s[m.end():m.end()+30])[0]
-            prefix=s[max(0,m.start()-4):m.start()]
-            if re.search(r'없|불가|미운영|not available|absent',tail,re.I) or re.search(r'\bno\s*$',prefix,re.I): value=False
-            elif re.search(r'있|운영|제공|구비|available|present|yes',tail,re.I): value=True
+            prefix=s[max(0,m.start()-40):m.start()]
+            if re.search(r'없|불가|미운영|not available|absent|not provided',tail,re.I) or re.search(r'\bno\s*$|not equipped(?: with)?\s*$',prefix,re.I): value=False
+            elif re.search(r'있|운영|제공|구비|available|present|yes',tail,re.I) or re.search(r'features|equipped(?: with)?\s*$',prefix,re.I): value=True
             else: continue
             add('rapid_cold_plunge',value,m)
         baths=[]
         def bath(tok,m):
             if not re.search(r'^\s*(?:없|미운영|not available)',s[m.end():],re.I) and not re.search(r'\bno\s*$',s[:m.start()],re.I):
                 baths.append((tok,m))
-        for m in matches(r'건식|습식|온탕|냉탕|열탕|스팀|한증막|아이스배스|(?<![\w.\-_])(?:dry saunas?|wet saunas?|steam|hot baths?|cold baths?|ice baths?|cold plunge)(?![\w\-_])'):
-            token = m[0].lower().rstrip('s')
+        for m in matches(r'건식|습식|온탕|냉탕|열탕|스팀\s*사우나|스팀|한증막|아이스배스|(?<![\w.\-_])(?:dry saunas?|wet saunas?|steam saunas?|steam rooms?|steam|hot baths?|cold baths?|ice baths?|cold plunge)(?![\w\-_])'):
+            token = re.sub(r'\s+', ' ', m[0].lower()).rstrip('s')
             if token == 'hot bath' and re.search(r'\bvery[- ]$', s[:m.start()], re.I):
                 bath('열탕', m)
             else:
@@ -157,6 +162,7 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
                 bath('냉탕',m)
         if baths: add('bath_composition',sorted({t for t,_ in baths}),baths[0][1])
         for m in matches(r'문신|tattoos?'):
+            if USER_REVIEW.search(s): continue
             tail=re.split(r'[,;]',s[m.end():m.end()+160])[0]
             if re.search(r'커버.*(?:불필요|필요 없)|cover.*not required',tail,re.I): value='allowed'
             elif re.search(r'금지하지 않|불가하지 않|not prohibited|not forbidden|not banned',tail,re.I): value='allowed'
@@ -168,12 +174,13 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
             elif re.search(r'조건|conditional',tail,re.I): value='conditional'
             else: continue
             add('tattoo_policy',value,m)
-        for m in matches(r'외국인|foreign visitors?|foreigners?|tourists?|English|passport|여권|영어|\bID\b'):
+        for m in matches(r'외국인|foreign visitors?|foreign guests?|international visitors?|foreigners?|tourists?|English|passport|여권|영어|\bID\b'):
+            if USER_REVIEW.search(s) or not POLICY_CONTEXT.search(s): continue
             if re.search(r'허용하지 않|가능하지 않|불가|금지|not allowed|not accepted',s,re.I): value='not_allowed'
             elif re.search(r'여권|passport|\bID\b',s,re.I) and re.search(r'필요|지참|required|bring',s,re.I): value='id_required'
             elif re.search(r'English|영어',m[0],re.I) and re.search(r'미제공|없|not available|no guide',s,re.I): value='english_unavailable'
-            elif re.search(r'English|영어',m[0],re.I) and re.search(r'안내|guide|available',s,re.I): value='english_guide'
-            elif re.search(r'가능|환영|허용|accepted|welcome|allowed|permitted',s,re.I): value='accepted'
+            elif re.search(r'English|영어',m[0],re.I) and re.search(r'안내|guide|available|speaking staff',s,re.I): value='english_guide'
+            elif re.search(r'가능|환영|허용|고객|accepted|welcome|allowed|permitted',s,re.I): value='accepted'
             else: continue
             add('foreigner_policy',value,m)
     unique={ (r['field'],repr(r['value']),repr(r['locator'])):r for r in results }
