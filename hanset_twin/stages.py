@@ -232,6 +232,42 @@ def _extract_csv_item(db, w, line, row):
 _EVIDENCE_FIELDS = set(('foreigner_policy tattoo_policy bath_composition hours closures price_day_pass '
                         'cold_bath_temp_c sauna_temp_c rapid_cold_plunge min_age access_policy').split())
 
+def _policy_page(url, title=''):
+    from urllib.parse import unquote
+    return bool(re.search(r'privacy|policy|terms|약관|개인정보', unquote(urlsplit(url).path) + ' ' + title, re.I))
+
+
+def _roundup_section(doc, url, quote):
+    """Return the local section (or None for a non-roundup document)."""
+    text = doc['text']
+    headings = doc['structured'].get('headings', [])
+    starts = {0}
+    for heading in headings:
+        starts.update(m.start() for m in re.finditer(r'(?m)^' + re.escape(heading) + r'$', text))
+    labels = list(re.finditer(r'(?im)^.*?(?:영업시간|운영시간|opening hours)\s*[:：]', text))
+    # Portals also use paragraph labels rather than semantic HTML headings.
+    preceding = []
+    for label in labels:
+        prefix = text[:label.start()].rstrip()
+        line = prefix.split('\n')[-1] if prefix else ''
+        if line:
+            preceding.append((len(prefix) - len(line), line))
+    roundup = bool(re.search(r'editors-?picks|/list|best', urlsplit(url).path, re.I)) or len({line for _, line in preceding}) >= 2
+    if not roundup:
+        return None
+    if len(starts) == 1:
+        starts.update(offset for offset, _ in preceding)
+    boundaries = sorted(starts) + [len(text)]
+    # Reject ambiguous repeated quotes unless every occurrence belongs to the same section.
+    locations = [m.start() for m in re.finditer(re.escape(quote), text)] if quote else []
+    sections = {(a, b) for at in locations for a, b in zip(boundaries, boundaries[1:]) if a <= at < b}
+    if len(sections) != 1:
+        return ''
+    a, b = sections.pop()
+    at = locations[0]
+    return text[max(a, at - 600):b]
+
+
 def _active_obs_verdict(ctx, obs, raw, venue):
     if raw is None:
         return 'raw_unavailable'
@@ -251,6 +287,20 @@ def _active_obs_verdict(ctx, obs, raw, venue):
     doc = cache[raw['raw_id']]
     if doc is None:
         return 'raw_unavailable'
+    if obs['field'] == 'website':
+        value = json.loads(obs['value_json']) if obs['value_json'] else ''
+        if not isinstance(value, str) or _policy_page(value) or registrable_domain(value) in _portals() or _policy_page(url, doc['title']):
+            return 'not_venue_website'
+    if obs['field'] == 'hours' and _policy_page(url, doc['title']):
+        return 'policy_page'
+    section = _roundup_section(doc, url, obs['quote'] or '')
+    if section is not None:
+        norm = lambda t: ''.join(c for c in (t or '').casefold() if c.isalnum())
+        names = [norm(venue[k]) for k in ('name', 'name_ko') if venue is not None and norm(venue[k])]
+        # Only preceding local context establishes ownership; later venues cannot lend their name.
+        prefix = section.split(obs['quote'], 1)[0] if obs['quote'] else ''
+        if not any(n in norm(prefix + (obs['quote'] or '')) for n in names):
+            return 'roundup_other_section'
     if venue is not None:
         domains = {registrable_domain(d if '://' in d else 'https://' + d) for d in json.loads(venue['domains'] or '[]')}
         if venue['website']:
@@ -258,7 +308,7 @@ def _active_obs_verdict(ctx, obs, raw, venue):
         domains -= _portals()  # portal pages count only when their title names the venue
         norm = lambda t: ''.join(c for c in (t or '').casefold() if c.isalnum())
         names = [norm(venue[k]) for k in ('name', 'name_ko') if norm(venue[k])]
-        if registrable_domain(url) not in domains and not any(n in norm(doc['title']) for n in names):
+        if section is None and registrable_domain(url) not in domains and not any(n in norm(doc['title']) for n in names):
             return 'off_topic_page'
     quote = obs['quote'] or ''
     if obs['field'] in ('foreigner_policy', 'tattoo_policy') and field_rules.USER_REVIEW.search(quote):
@@ -296,9 +346,24 @@ def _active_obs_verdict(ctx, obs, raw, venue):
 
 def _extract_active_item(ctx, w):
     raw = ctx.active.execute('SELECT * FROM raw_documents WHERE raw_id=?', (w['item_id'],)).fetchone()
-    for o in ctx.active.execute('SELECT * FROM observations WHERE raw_id=?', (w['item_id'],)):
+    observations = ctx.active.execute('SELECT * FROM observations WHERE raw_id=?', (w['item_id'],)).fetchall()
+    bath_groups = {}
+    for o in observations:
+        venue = ctx.active.execute('SELECT * FROM venues WHERE venue_key=?', (o['venue_key'],)).fetchone()
+        if o['field'] != 'bath_composition' or _active_obs_verdict(ctx, o, raw, venue):
+            continue
+        doc = ctx._active_docs.get(raw['raw_id'])
+        if doc is None:
+            continue
+        section = _roundup_section(doc, raw['canonical_url'] or raw['url'], o['quote'] or '')
+        key = (o['venue_key'], section)
+        bath_groups.setdefault(key, set()).update(json.loads(o['value_json']))
+    for o in observations:
         value = json.loads(o['value_json']) if o['value_json'] else None
         field = o['field']
+        if field == 'bath_composition' and raw is not None and raw['raw_id'] in ctx._active_docs and ctx._active_docs[raw['raw_id']] is not None:
+            section = _roundup_section(ctx._active_docs[raw['raw_id']], raw['canonical_url'] or raw['url'], o['quote'] or '')
+            value = sorted(bath_groups.get((o['venue_key'], section), value or []))
         if field == 'hours' and isinstance(value, dict):
             if value.get('hours') == 'open_every_day':
                 field, value = 'closures', '연중무휴'

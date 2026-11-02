@@ -17,6 +17,9 @@ Run Q1: `python3 -m hanset_twin ask --date YYYY-MM-DD`. Summary: `python3 -m han
 
 ## Extraction rules the questions rely on
 
+- Editorial roundups require the venue name in the quote’s own section (within 600 preceding characters); other sections yield `roundup_other_section`. Bath tokens merge within a page section.
+- Privacy/terms pages yield no hours (`policy_page`); 24시간 requires a same-clause operation cue and no retention cue. Portal and policy URLs cannot be venue websites (`not_venue_website`).
+
 - **Day-pass classification (Q1/Q2).** A curated CSV `price_krw` becomes a `day_pass` only when the
   amount itself appears in `price_note` next to a general/adult single-admission cue (정상가 1인,
   일반/일반객, 대인, 성인/adult, 종일권, 일일, 입장료/입장권/admission/entry, day pass, `day (…)`,
