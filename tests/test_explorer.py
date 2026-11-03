@@ -321,7 +321,7 @@ class Explorer(unittest.TestCase):
             self.assertIn(f'href="/finder/{v["slug"]}/"', card)
             self.assertNotIn('fact-source', card)
             self.assertNotIn('Checked ', card)
-            self.assertIn('card-placeholder', card)
+            self.assertIn('card-placeholder' if B.venue_image_path(v) is None else f'/assets/venue-sketch/{v["slug"]}.', card)
             page = self.site.pages[f'/finder/{v["slug"]}/']
             self.assertIn(B.E(B.map_url(v)), page)
             self.assertLess(page.index('detail-actions'), page.index('detail-glance'))

@@ -188,13 +188,13 @@ def load(today, ads_path):
         x = en.get(c["slug"])
         if x is None: sys.exit(f"ERROR: no English copy for {c['slug']} in venues_en.json")
         if len(x["facts"]) != len(c["facts"]): sys.exit(f"ERROR: English facts mismatch for {c['slug']}")
-        facts = [[k, fill(v)] for k, v in x["facts"]]
+        facts = [[k, en_fact(k, fill(v), en_only(x["location"]))] for k, v in x["facts"]]
         facts_ko = [[k, v] for k, v in c["facts"]]
         lv = ymd(r["last_verified"])
         a = ads.get(c["slug"], {})
-        v = dict(c=c, name=name, slug=c["slug"], kind_key=kind_key, kind=KIND_EN[c["kind"]], status=status, confidence=conf, title=x["title"], title_ko=c["title"],
+        v = dict(c=c, name=name, slug=c["slug"], kind_key=kind_key, kind=KIND_EN[c["kind"]], status=status, confidence=conf, title=en_only(x["title"]), title_ko=c["title"],
                  city=r["city"], city_ko=CITY_EN.get(r["city"], r["city"]), city_key=CITY_KEY.get(r["city"], r["city"].lower()),
-                 location=x["location"], location_ko=c["location"], area=x.get("area", ""), summary=x["summary"], facts=facts, facts_ko=facts_ko, tips=x.get("tips", []), unverified=[fill(u) for u in x.get("unverified", [])],
+                 location=en_only(x["location"]), location_ko=c["location"], area=x.get("area", ""), summary=x["summary"], facts=facts, facts_ko=facts_ko, tips=x.get("tips", []), unverified=[fill(u) for u in x.get("unverified", [])],
                  tags=x.get("tags", []), price=price, price_label=x.get("price_label", "Price"),
                  sunday=sunday, last_verified=lv, stale=(today - lv).days > STALE_DAYS, source=src, extra_sources=extra,
                  website=site, booking=book, address=addr, hyrox=c.get("hyrox") is True, pick=bool(c.get("pick")),
@@ -619,6 +619,27 @@ def venue_facts(v):
     return '<dl class="card-facts">' + "".join(groups) + '</dl>'
 
 
+HANGUL = re.compile(r"[\u3131-\u318e\uac00-\ud7a3]")
+
+def en_only(s):
+    """Visitor-facing English: drop Hangul. Addresses keep only the verified English rendering; '' if none."""
+    if not s or not HANGUL.search(s): return s
+    lead = s[:HANGUL.search(s).start()]
+    lead = lead if lead.rstrip().endswith("·") else ""
+    parens = [m for m in re.finditer(r"\(([^()]*)\)", s) if not HANGUL.search(m.group(1)) and re.search(r"\d", m.group(1))]
+    if parens:  # address: English rendering given in parentheses (+ any English tail)
+        m = max(parens, key=lambda p: len(p.group(1))); tail = s[m.end():]
+        out = lead + m.group(1) + ("" if HANGUL.search(tail) else tail)
+    else:
+        out = re.sub(r"\s*\([^()]*[\u3131-\u318e\uac00-\ud7a3][^()]*\)", "", s)
+        out = " ".join(w for w in out.split() if not HANGUL.search(w))
+    out = re.sub(r"\s+", " ", out).strip(" ·,")
+    return out if re.search(r"[A-Za-z]", out) else ""
+
+def en_fact(k, v, loc=""):
+    if k in ("Address", "Location", "Name & address"): return en_only(v) or (loc if v.strip() else v)
+    return re.sub(r"\s*\([\u3131-\u318e\uac00-\ud7a3\s]+\)", "", v)  # e.g. "Body scrub (세신)"
+
 SKETCH_DIR = ROOT / "static/venue-sketch"
 
 def venue_sketch(v, cls="venue-sketch", lazy=True):
@@ -762,6 +783,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     fbody = f'''
 <div class="finder-head"><h1>{FINDER_LABEL}</h1>
 <p class="lead"><b>{cnt_box}</b> boxes · <b>{cnt_sauna}</b> saunas</p></div>
+<h2 class="sr-only">All venues</h2>
 {explorer}'''
     site.add("/finder/", f"{FINDER_LABEL} — Korea", "CrossFit and HYROX boxes, hotel and boutique saunas in Korea. Filter by city, type, Sunday hours and confirmed prices. Every entry with a check date and source.", fbody, "finder", ("finder.js",))
 
