@@ -19,6 +19,7 @@ import verified as VF
 ROOT = Path(__file__).resolve().parent
 DATA = ROOT.parent
 DIST = ROOT / "dist"
+VENUE_SKETCH = ROOT / "static/venue-sketch"
 VERIFIED = DATA / "data/verified"
 SITE_URL = "https://hanset.soulbound.co.kr"
 BRAND_KO, BRAND_EN = "한셋", "HANSET"
@@ -109,10 +110,10 @@ def fchk(v):
     d = FOREIGNER.get(v["slug"], {})
     keys = SAUNA_PKG_KEYS if (v["kind_key"] == "sauna" and "public_access" in d) else FCHK_KEYS
     rows = "".join(
-        f'<tr><th>{lab}</th>' + (f'<td>{E(d[k])}</td>' if _is_confirmed(d.get(k, "")) else '<td class="unk">Not confirmed</td>') + '</tr>'
+        f'<tr><th>{lab}</th>' + (f'<td>{E(d[k])}{fact_provenance(v, d[k])}</td>' if _is_confirmed(d.get(k, "")) else '<td class="unk">Not confirmed</td>') + '</tr>'
         for k, lab in keys
     )
-    return f'<h2>Foreigner &amp; visitor access checklist</h2><table class="facts"><tbody>{rows}</tbody></table><p class="muted">Official source · {dot(v["last_verified"])}</p>'
+    return f'<h2>Foreigner &amp; visitor access checklist</h2><table class="facts"><tbody>{rows}</tbody></table>'
 
 GUIDES = [  # (slug, title, description); page bodies are built in guides()
     ("tattoo-friendly-saunas-korea", "Tattoos and saunas in Korea", "What official pages of Korean hotel saunas and spas say about tattoos. Verified, dated, sourced."),
@@ -191,12 +192,12 @@ def load(today, ads_path):
         facts_ko = [[k, v] for k, v in c["facts"]]
         lv = ymd(r["last_verified"])
         a = ads.get(c["slug"], {})
-        v = dict(c=c, name=name, slug=c["slug"], kind_key=kind_key, kind=KIND_EN[c["kind"]], status=status, title=x["title"], title_ko=c["title"],
+        v = dict(c=c, name=name, slug=c["slug"], kind_key=kind_key, kind=KIND_EN[c["kind"]], status=status, confidence=conf, title=x["title"], title_ko=c["title"],
                  city=r["city"], city_ko=CITY_EN.get(r["city"], r["city"]), city_key=CITY_KEY.get(r["city"], r["city"].lower()),
                  location=x["location"], location_ko=c["location"], area=x.get("area", ""), summary=x["summary"], facts=facts, facts_ko=facts_ko, tips=x.get("tips", []), unverified=[fill(u) for u in x.get("unverified", [])],
                  tags=x.get("tags", []), price=price, price_label=x.get("price_label", "Price"),
                  sunday=sunday, last_verified=lv, stale=(today - lv).days > STALE_DAYS, source=src, extra_sources=extra,
-                 website=site, booking=book, address=addr, hyrox=bool(c.get("hyrox")), pick=bool(c.get("pick")),
+                 website=site, booking=book, address=addr, hyrox=c.get("hyrox") is True, pick=bool(c.get("pick")),
                  price_caveat=x.get("price_caveat", ""), sub=("box" if kind_key == "box" else (c.get("sub") or ("hotel" if "호텔" in c["kind"] else "boutique"))), ad=bool(a.get("ad", c.get("ad", False))), ad_note=a.get("note", ""), flags=c.get("flags", {}), order=len(venues), off=off)
         venues.append(v)
     for kind in rows:
@@ -259,6 +260,137 @@ IG_URL = "https://www.instagram.com/hanset.mag/"
 IG_SVG = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true" focusable="false"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4"/><circle cx="17.3" cy="6.7" r="1.1" fill="currentColor" stroke="none"/></svg>'
 IG_ATTRS = f'href="{IG_URL}" target="_blank" rel="noopener noreferrer" aria-label="HANSET on Instagram @hanset.mag"'
 
+TABS = (("sauna", "Sauna"), ("crossfit", "CrossFit"), ("hyrox", "HYROX"), ("gym", "Gym"), ("magazine", "Magazine"))
+TAB_PATHS = {
+    "sauna": '<path d="M5 19h14M7 15c-4-4 4-5 0-10m5 10c-4-4 4-5 0-10m5 10c-4-4 4-5 0-10"/>',
+    "crossfit": '<path d="M3 12h18M5 6v12m3-10v8m8-8v8m3-10v12"/>',
+    "hyrox": '<path d="m4 8 4-3 5 4-3 4 5 6m-5-6-6 5m9-9 4 3h4"/><circle cx="15" cy="4" r="2"/>',
+    "gym": '<path d="m7 7 10 10M3 7l4-4m-2 9 7-7m0 14 7-7m-2 9 4-4"/>',
+    "magazine": '<path d="M12 5v15M3 4c4-1 6 0 9 1 3-1 5-2 9-1v15c-4-1-6 0-9 1-3-1-5-2-9-1z"/>',
+}
+
+
+def tab_icon(key):
+    return ('<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
+            f'stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">{TAB_PATHS[key]}</svg>')
+
+
+def venue_categories(v):
+    """Only published records enter here; never infer HYROX from a name/directory."""
+    out = []
+    kind = v["c"]["kind"]
+    if v["kind_key"] == "sauna": out.append("sauna")
+    if kind == "크로스핏 박스": out.append("crossfit")
+    if v["c"].get("hyrox") is True: out.append("hyrox")
+    if kind == "HYROX·스트렝스 짐" and any(k == "Open gym" and evidence_status(v, val) == "fact" for k, val in v["facts"]):
+        out.append("gym")
+    return out
+
+
+def search_text(v):
+    return " ".join((v["title"], v["title_ko"], v.get("name") or v["title"], v["location"], v["location_ko"],
+                     v["area"], v["city"], CITY_KO.get(v["city"], ""), v["kind"], v["c"]["kind"],
+                     " ".join(venue_categories(v)))).lower()
+
+
+def category_body(key, label, venues):
+    header = f'<div class="category-head"><h1>{label}</h1></div>'
+    safety = f'<p class="safety">{SAFETY}</p>' if key == "sauna" else ""
+    if not venues:
+        return header + '<p class="count">0 places</p><div class="empty"><p>Coming soon</p></div>' + safety
+    return (header + '<form class="filters category-search" role="search"><label class="vh" for="f-q">Search name or area</label>'
+            '<input id="f-q" name="q" type="search" placeholder="Search name or area" autocomplete="off"></form>'
+            f'<p class="count" id="f-count" role="status" aria-live="polite">{len(venues)} {"place" if len(venues) == 1 else "places"}</p>'
+            f'<div class="grid" id="finder-list">{"".join(venue_card(v) for v in venues)}</div>'
+            '<div class="empty" id="f-empty" hidden><p>No matching places.</p>'
+            '<button type="button" class="btn btn-d" data-reset>Clear search</button></div>' + safety)
+
+
+def evidence_status(v, value):
+    """Legacy public evidence only, following twin's fact/source_claim/unverified boundary.
+
+    A venue-wide verification badge does not verify every field. Private twin stores
+    are deliberately not imported: only the operations-owned published fields are used.
+    """
+    if not value or re.search(r"not confirmed|not verified|not yet|pending|unconfirmed|unverified|not stated|not announced|not listed|conflict|확인 중", value, re.I):
+        return "unverified"
+    if re.search(r"third.party|blog|roundup|source claim|not official|venue reply|hotel reply", value, re.I):
+        # A future reply/booking procedure is not a received venue reply.
+        if not re.search(r"awaiting official hotel reply|after an email reply|official page and hotel reply", value, re.I):
+            return "source_claim"
+    url = (v.get("source") or "").lower()
+    if any(token in url for token in ("realtime.seoul", "blog.", "hospitalk.net", "crossfit.com/gym/", "hyrox.com/")):
+        return "source_claim"
+    # Keep the CSV's verification provenance: a plausible URL is not verification.
+    # As in legacy intake, an official-page confidence marker is positive evidence;
+    # an explicit non-official/unreachable marker always takes precedence.
+    confidence = v.get("confidence", v.get("status", "")).strip().lower()
+    official = confidence == "verified" or (
+        confidence.startswith("high") and "official" in confidence and
+        not re.search(r"not official|third.party|roundup|unreachable|licence record only|instagram|operator-run", confidence))
+    if url and official:
+        return "fact"
+    return "source_claim" if url else "unverified"
+
+
+def display_value(v, key, value):
+    # Third-party prices and hours never become public copy, even as clues.
+    if re.search(r"third.party|unverified clue|blog", value, re.I) and (
+            re.search(r"price|hours|closed|day pass", key, re.I) or "₩" in value or
+            re.search(r"\b24\s*(?:h\b|hours)|\b\d{1,2}:\d{2}\b", value, re.I)):
+        return "Unconfirmed · 확인 중 (official price / hours unavailable)"
+    return value or UNKNOWN
+
+
+def amenity_labels(v):
+    """Small, conservative badges from positive own-source statements only."""
+    rows = [(k.lower(), val.lower()) for k, val in v["facts"] if evidence_status(v, val) == "fact"]
+    # Reject the whole ambiguous/negative row instead of guessing a positive clause.
+    rows = [(k, val) for k, val in rows if not re.search(r"\bno\b|\bnot\b|unavailable|except|without", val)]
+    labels = []
+    def has(pattern): return any(re.search(pattern, k + " " + val) for k, val in rows)
+    if v["kind_key"] == "sauna":
+        def cold_plunge(key, value):
+            # Bind the temperature to the bath, not a sauna or a cold shower.
+            text = key + ": " + value
+            if "급냉탕" in text: return True
+            matches = re.findall(r"cold (?:bath|plunge|pool)(?: temperature)?[\s:=(]*(\d+(?:\.\d+)?)(?:\s*[~–-]\s*(\d+(?:\.\d+)?))?\s*(?:°\s*c|℃)", text)
+            return bool(matches) and all(float(t) <= 15 for pair in matches for t in pair if t)
+        cold = any(cold_plunge(k, val) for k, val in rows)
+        if cold: labels.append("Great cold plunge")
+        if has(r"dry (?:and wet )?sauna|wet and dry sauna|건식"): labels.append("Dry sauna")
+        if has(r"wet (?:and dry )?sauna|dry and wet (?:\(steam\) )?sauna|steam sauna|습식"): labels.append("Wet/Steam")
+        if has(r"private sauna|one.person sauna|sauna for one"): labels.append("Private")
+    else:
+        if has(r"\bshowers?\b"): labels.append("Showers")
+        if has(r"\bparking\b"): labels.append("Parking")
+        if has(r"drop.in.*(?:welcome|available|book|₩)|(?:welcome|book).*drop.in"): labels.append("Drop-in OK")
+        if has(r"english.speaking coach|coach.*speaks english|english coach"): labels.append("English coach")
+    return labels
+
+
+def amenity_badges(v, limit=None):
+    labels = amenity_labels(v)
+    return ('<div class="amenity-badges" aria-label="Verified amenities">' +
+            "".join(badge(label) for label in labels[:limit]) + '</div>') if labels else ""
+
+
+def venue_image_path(v):
+    """Consume optional assets from the separate image job; never generate images."""
+    for extension in ("webp", "png"):
+        path = VENUE_SKETCH / f'{v["slug"]}.{extension}'
+        if path.is_file(): return path
+    return None
+
+
+def venue_media(v):
+    path = venue_image_path(v)
+    if path:
+        return (f'<img class="card-image venue-image" src="/assets/venue-sketch/{E(path.name)}" '
+                f'width="800" height="600" loading="lazy" decoding="async" alt="{E(v["title"])}">')
+    return '<div class="card-image card-placeholder" aria-hidden="true"></div>'
+
+
 class Site:
     def __init__(self, today, release):
         self.today, self.release = today, release
@@ -284,16 +416,15 @@ class Site:
                 f'<link rel="stylesheet" href="/assets/css/site.css?v={asset_ver("css/site.css")}"></head>')
 
     def nav(self, active):
-        def cur(k): return ' aria-current="page"' if active == k else ""
-        return (f'<a class="skip" href="#main">Skip to content</a><header class="site-header"><div class="wrap">'
-                f'<div class="hrow"><a class="brand" href="/"><i></i>{BRAND_EN}<small lang="ko">{BRAND_KO}</small></a>'
-                f'<div class="hact"><a class="pin" href="/finder/"{cur("finder")}>{FINDER_LABEL}</a><a class="ig" {IG_ATTRS}>{IG_SVG}</a></div></div>'
-                f'<nav class="nav" aria-label="Main menu"><a href="/"{cur("home")}>Home</a>'
-                f'{MAG_NAV(cur) if ARTICLES else ""}<a href="/guide/"{cur("guide")}>Guide</a><a href="/guides/"{cur("visitors")}>Visitors</a></nav></div></header>')
+        tabs = "".join(f'<a href="/{key}/"' + (' aria-current="page"' if active == key else '')
+                       + f'>{tab_icon(key)}<span>{label}</span></a>' for key, label in TABS)
+        return ('<a class="skip" href="#main">Skip to content</a><header class="site-header"><div class="wrap">'
+                f'<a class="brand" href="/">{BRAND_EN}</a><nav class="section-tabs" aria-label="Explore">{tabs}</nav>'
+                '</div></header>')
 
     def foot(self, active):
         return (f'<footer class="site-footer"><div class="wrap"><strong>{BRAND_EN}</strong> · Train. Sweat. One set.'
-                f'<div class="flinks"><a href="/join/">Join</a><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a>{CREATORS_LINK if self.creators else ""}<a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
+                f'<div class="flinks"><a href="/finder/">Finder</a><a href="/join/">Join</a><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a>{CREATORS_LINK if self.creators else ""}<a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
                 f'<a href="/privacy/">Privacy</a></div>'
                 f'<p class="fsocial"><a class="ig ig-f" {IG_ATTRS}>{IG_SVG}<span>@hanset.mag</span></a></p>'
                 f'<p>Prices and closing days change. Every entry shows its check date and source. Confirm with the venue before you go.</p>'
@@ -303,7 +434,11 @@ class Site:
         if noindex: self.noindex.add(path)
         sc = "".join(f'<script src="/assets/js/{s}?v={asset_ver("js/"+s)}" defer></script>' for s in scripts)
         out_path = path
-        self.pages[out_path] = (self.head(title, desc, path, noindex) + f'<body>{self.nav(active)}<main id="main" class="wrap">{body}</main>{self.foot(active)}{sc}</body></html>')
+        self.pages[out_path] = (self.head(title, desc, path, noindex)
+            + (f'<body class="home"><a class="skip" href="#main">Skip to content</a><main id="main" class="wrap">{body}</main>'
+               '<footer class="home-footer"><a href="mailto:hanset@soulbound.co.kr">hanset@soulbound.co.kr</a></footer>'
+               if active == "home" else f'<body>{self.nav(active)}<main id="main" class="wrap">{body}</main>{self.foot(active)}')
+            + f'{sc}</body></html>')
 
 def clip(t, n=160):
     """Meta description: never cut inside a word or number; prefer a sentence end."""
@@ -318,9 +453,7 @@ def v_badges(v, full=False):
     b.append(badge("Box" if v["kind_key"] == "box" else "Sauna", "badge-box" if v["kind_key"] == "box" else "badge-sauna"))
     b.append(badge(v["kind"]))
     if v["c"].get("opening_soon"): b.append(badge("Opening soon", "badge-part"))
-    b.append(badge("Verified" if v["status"] == "verified" else "Partly verified", "badge-ok" if v["status"] == "verified" else "badge-part"))
     if v["stale"]: b.append(badge("오래됨 (outdated)", "badge-old"))
-    for t in v["tags"]: b.append(badge(t))
     return '<div class="chips">' + "".join(b) + "</div>"
 def off_marks(v):
     o = v["off"]; out = []
@@ -402,12 +535,26 @@ def fact_groups(v):
                 group.append((label, value))
     if visitor.get("english") and not (v["kind_key"] == "sauna" and "english" in visitor) and not any(k == "Language" for k, _ in access):
         access.append(("English support", visitor["english"]))
-    return [("Hours & Closed", hours), ("Access / Booking", access), ("Visitor / Tattoo rules", rules)]
+    facilities = [(k, val) for k, val in facts if re.search(r"facilit|temperature|sauna|bath|amenit|equipment|floors|areas|sequence|concept", k, re.I)
+                  and (k, val) not in hours + access + rules]
+    programs = [(k, val) for k, val in facts if re.search(r"program|classes|beginner|hybrid|training", k, re.I)
+                and (k, val) not in hours + access + rules + facilities]
+    if v["kind_key"] == "sauna":
+        # No measurements are inferred from a drawing, marketing summary or venue type.
+        confirmed_facilities = [(k, val) for k, val in facilities if evidence_status(v, val) == "fact"]
+        for label, pattern in (("Sauna temperature", r"sauna(?: temperature)?[\s:=(]*\d+\s*[°℃]"),
+                               ("Cold bath temperature", r"cold (?:bath|plunge|pool)(?: temperature)?[\s:=(]*\d+\s*[°℃]"),
+                               ("Cold plunge", r"cold (?:bath|plunge|pool)"),
+                               ("Hot / warm baths", r"(?:hot|warm) (?:bath|pool)")):
+            if not any(re.search(pattern, k + " " + val, re.I) for k, val in confirmed_facilities):
+                facilities.append((label, UNKNOWN))
+    return [("Hours & Closed", hours), ("Access / Booking", access), ("Visitor / Tattoo rules", rules),
+            ("Facilities & temperatures", facilities), ("Programs", programs or [("Programs", UNKNOWN)])]
 
 
 def fact_provenance(v, value):
     """A venue reply is not evidence available at the representative website."""
-    if value.startswith(UNKNOWN) or value.lower() in ("pending", "not confirmed", "not yet announced"):
+    if not value or value.startswith(UNKNOWN) or value.lower() in ("pending", "not confirmed", "not yet announced"):
         return ""
     citations = re.findall(
         r"\((?:official page and )?(?:venue|hotel) reply\b[^()]*\)"
@@ -418,21 +565,27 @@ def fact_provenance(v, value):
                  re.findall(r"\b20\d{2}[-.]\d{2}[-.]\d{2}\b|\b\d{1,2}/\d{1,2}\b", citation)]
         if dates or not any(c.lower().startswith("(official page and ") for c in citations):
             checked = ", ".join(dict.fromkeys(dates)) if dates else "date not confirmed"
-            return f'<small class="fact-source">Venue reply · {E(checked)} · Public source: {UNKNOWN}</small>'
+            status = "Unconfirmed" if evidence_status(v, value) == "unverified" else "Source claim"
+            return f'<small class="fact-source">Venue reply · {E(checked)} · {status} · Public source: {UNKNOWN}</small>'
+    status = evidence_status(v, value)
+    label = {"fact": "Official source", "source_claim": "Source claim", "unverified": "Unconfirmed · 확인 중"}[status]
+    stale = " · 오래됨 (outdated)" if v["stale"] or "older than 90 days" in value else ""
+    source = (f'<a href="{E(v["source"])}" rel="noopener noreferrer">{label}</a>'
+              if status == "fact" else label)
     return (f'<small class="fact-source">Checked {dot(v["last_verified"])} · '
-            f'<a href="{E(v["source"])}" rel="noopener noreferrer">Official source</a></small>')
+            f'{source}{stale}</small>')
 
 
 def fact_lines(rows, v=None):
-    return "".join(f'<span class="fact-line"><strong>{E(k)}:</strong> {E(val)}'
-                   f'{fact_provenance(v, val) if v else ""}</span>' for k, val in rows) or f'<span class="unk">{UNKNOWN}</span>'
+    return "".join(f'<span class="fact-line"><strong>{E(k)}:</strong> {E(display_value(v, k, val) if v else val)}'
+                   f'{fact_provenance(v, display_value(v, k, val)) if v else ""}</span>' for k, val in rows) or f'<span class="unk">Unconfirmed · 확인 중</span>'
 
 
 def price_html(v):
     # The numeric CSV value is a sortable hint, not a replacement for the terms.
     context = [(k, val) for k, val in v["facts"] if
                (k.startswith("Price") or k.startswith("Drop-in") or k in
-                ("Group session", "Open gym", "Traveler pass", "Trial", "Guest discount rate", "Jjimjil", "Jjimjil wear"))
+                ("Day pass", "Group session", "Open gym", "Traveler pass", "Trial", "Guest discount rate", "Jjimjil", "Jjimjil wear"))
                and val.strip() and val != PENDING]
     numeric = (f'<div class="price"><span class="price-label">{E(v["price_label"])}:</span> '
                f'<strong>{E(v["price"])}</strong></div>{cav(v)}') if v["price"] else ""
@@ -441,9 +594,8 @@ def price_html(v):
 
 
 def price_short(v):
-    # List cards: headline price only. Full terms stay on the venue page.
-    return (f'<div class="price"><span class="price-label">{E(v["price_label"])}:</span> <strong>{E(v["price"])}</strong></div>'
-            if v["price"] else f'<span class="unk">Price: {UNKNOWN}</span>')
+    # Preserve the price-plan label; a class price is not a day pass.
+    return (f'<span class="price-short">{E(v["price_label"])} {E(v["price"])}</span>' if v["price"] else "")
 
 def venue_facts(v):
     groups = []
@@ -468,23 +620,18 @@ def venue_facts(v):
 
 
 def venue_contents(v):
-    title = f'<a href="/finder/{v["slug"]}/">{E(v["title"])}</a>'
-    footer = (f'<div class="meta">Checked {dot(v["last_verified"])} · Official reference '
-              f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></div>')
-    actions = f'<a class="card-details" href="/finder/{v["slug"]}/">Details &amp; facts →</a>'
-    return (f'{v_badges(v)}<h3>{title}</h3><div class="loc">{E(v["location"])}</div>{price_short(v)}'
-            + f'{footer}{actions}')
+    return (f'<a class="card-media" href="/finder/{v["slug"]}/" tabindex="-1" aria-hidden="true">{venue_media(v)}</a>'
+            f'<div class="card-body"><h3><a href="/finder/{v["slug"]}/">{E(v["title"])}</a></h3>'
+            f'<p class="card-type">{E(v["kind"])}</p><p class="card-meta">{E(v["area"] or v["location"])}'
+            f'{(" · " + price_short(v)) if v["price"] else ""}</p>{amenity_badges(v, limit=3)}</div>')
 
 def venue_card(v):
     attrs = (f'data-slug="{v["slug"]}" data-city="{v["city_key"]}" data-type="{v["kind_key"]}" data-sunday="{v["sunday"]}" data-price="{1 if v["price"] else 0}" data-cf="{1 if v["off"]["cf"] else 0}" data-hyrox="{1 if v["off"]["hyrox"] else 0}" data-sub="{v["sub"]}" data-order="{v["order"]}" data-date="{v["last_verified"].isoformat()}" data-title="{E(v["title"])}" '
-             f'data-name="{E((v["title"] + " " + v["name"] + " " + v["location"] + " " + v["area"] + " " + v["kind"] + " " + v["title_ko"] + " " + v["location_ko"]).lower())}"')
+             f'data-name="{E((v["title"] + " " + (v.get("name") or v["title"]) + " " + v["location"] + " " + v["area"] + " " + v["kind"] + " " + v["title_ko"] + " " + v["location_ko"]).lower())}"')
     return f'<article class="card venue-card" {attrs}>{venue_contents(v)}</article>'
 
 def mini_card(v):
-    price = (f'{E(v["price_label"])} {E(v["price"])}' if v["price"] else "Price pending")
-    return (f'<article class="card">{v_badges(v)}<h3><a href="/finder/{v["slug"]}/">{E(v["title"])}</a></h3>'
-            f'<div class="loc">{E(v["location"])}</div><div class="price{"" if v["price"] else " unk"}">{price}</div>{off_html(v)}'
-            f'<div class="meta">Checked {dot(v["last_verified"])}</div></article>')
+    return f'<article class="card venue-card">{venue_contents(v)}</article>'
 
 def event_card(e, today, detail_link=True):
     d = (e["start"] - today).days
@@ -503,8 +650,7 @@ HYROX_STATIONS = [("SkiErg", "1,000m"), ("Sled Push", "50m"), ("Sled Pull", "50m
 
 
 # ------------------------------------------------------------------ magazine (articles)
-MAG_NAV = lambda cur: f'<a href="/magazine/"{cur("magazine")}>Magazine</a>'
-ARTICLES = [  # newest first; source markdown lives in content/articles/. Empty = magazine hidden (nav, home, /magazine/ not built).
+ARTICLES = [  # newest first; the Magazine index remains available when empty.
     # 2026-10-20: old Wellness Report removed (archived in content/articles/_archive/). New English articles go here.
     {"slug": "bryan-johnson-sauna-protocol", "file": "bryan-johnson-sauna-protocol.md", "date": "2026-10-22", "category": "Sauna", "lang": "en",
      "title_en": "Bryan Johnson's Sauna Protocol, Read Closely", "deck_en": "Hot room, ice on the face. Here is what he says, and what the research says."},
@@ -587,42 +733,20 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <div class="empty" id="f-empty" hidden><p>Nothing here yet.</p><p class="muted">Try fewer filters. More verified places are on the way.</p><button type="button" class="btn btn-d" data-reset>Start over</button></div>
 <div class="note">"Verified" means we read the info directly on the venue’s official page. "Partly verified" means only some items, like the address. Sunday is filled in only when the official page says so. "CrossFit affiliate verified" and "HYROX official gym list verified" appear only where we saw the place ourselves in that official page or list on the check date. No mark means still checking.</div>
 <noscript><p class="muted">Filters need JavaScript. The full list still works without it.</p></noscript>'''
-    # ---- home
-    race_strip = ""
-    if feat["end"] >= today:
-        d = max((feat["start"] - today).days, 0)
-        started = today >= feat["start"]
-        btxt = "Live now" if started else ("D-DAY" if d == 0 else f"D-{d}")
-        ds = f'{feat["start"].month}/{feat["start"].day}~{feat["end"].month}/{feat["end"].day}'
-        race_strip = (f'<div class="race-strip" data-end="{feat["end"].isoformat()}">'
-                      f'<a class="race-strip-link race-strip-narrow" href="/hyrox-seoul/"><span>HYROX Seoul</span><span>·</span>'
-                      f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>Guide ›</span></a>'
-                      f'<a class="race-strip-link race-strip-wide" href="/hyrox-seoul/"><span>HYROX Seoul</span><span>·</span>'
-                      f'<b data-dday="{feat["start"].isoformat()}">{btxt}</b><span>·</span><span>{ds}</span><span>·</span><span>KINTEX</span><span>·</span><span>Guide ›</span></a>'
-                      f'</div>')
-    home_mag = (f'''<section class="sec home-mag"><div class="sec-h"><h2>Read first. Every claim cited.</h2><a href="/magazine/">All articles ›</a></div>
-<div class="grid">{"".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))}{"" if a.get("lang") == "en" else " · Article in Korean"}</div></article>' for a in [parse_article(m) for m in ARTICLES])}</div></section>''' if ARTICLES else '')
-    guide_rows = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _ in GUIDES)
-    body = f'''
-<section class="hero home-hero"><span class="home-kicker">Wellness in Korea, for visitors</span><h1>Can I go?</h1>
-<div class="hero-ctas"><a class="btn btn-ghost" href="/guides/">Visitors guide</a></div></section>
+    # ---- home: search records stay hidden until a nonblank query.
+    records = "".join(f'<li data-search="{E(search_text(v))}" hidden><a href="/finder/{v["slug"]}/">{E(v["title"])}</a>'
+                      f'<span>{E(v["city"])} · {E(v["kind"])}</span></li>' for v in venues)
+    body = f'''<div class="home-search"><h1>HANSET, Sweat on Korea</h1>
+<form class="search-form" action="/finder/" role="search"><label class="vh" for="home-q">Where do you want to sweat in Korea?</label>
+<input id="home-q" name="q" type="search" placeholder="Where do you want to sweat in Korea?" autocomplete="off" aria-controls="search-results"></form>
+<div class="home-switch" role="group" aria-label="Browse"><a class="selected" href="/sauna/">Sweat</a><a href="/magazine/">Magazine</a></div>
+<div id="search-results" hidden><p id="search-count" role="status" aria-live="polite"></p><ul class="search-records">{records}</ul></div></div>'''
+    site.add("/", "HANSET, Sweat on Korea", "Find saunas, CrossFit, HYROX and gyms in Korea.", body, "home", ("search.js",))
 
-<section class="sec home-results"><h2>Explore {len(venues)} boxes &amp; saunas</h2>
-{explorer}</section>
-
-<section class="sec home-guides"><h2>Visitors guide</h2>
-<ul class="guide-list">{guide_rows}</ul></section>
-
-{race_strip}
-<p class="safety-line">{SAFETY}</p>
-
-{home_mag}
-
-<div class="slot" data-slot="kix-ticketing" hidden></div>
-<section class="sec"><div class="sec-h"><h2>Floor by floor.</h2><a href="/archive/">Archive ›</a></div>
-<div class="illrow arcrow">{"".join(f'<a class="illc" href="/archive/#{vs}"><picture><source media="(min-width:720px)" srcset="/assets/img/archive/{f}-mid.png"><img src="/assets/img/archive/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}"></picture><span><b>{E(st)}</b><em>View ›</em></span></a>' for f, vs, t, st, d, sl, su in ARCHIVE)}</div>
-<p><a class="btn btn-d" href="/archive/">See every drawing ›</a></p></section>'''
-    site.add("/", f"{BRAND_EN} — CrossFit, HYROX & Sauna Wellness Magazine in Korea", "CrossFit, HYROX, hotel and boutique saunas in Korea. A drop-in and sauna finder plus race dates. Every entry with an official source and check date.", body, "home", ("dday.js", "finder.js"))
+    # ---- category lists: shared classification, scoped URL-searchable cards.
+    for key, label in TABS[:-1]:
+        selected = [v for v in ordered if key in venue_categories(v)]
+        site.add(f"/{key}/", label, f"Explore {label} in Korea.", category_body(key, label, selected), key, ("finder.js",))
 
     # ---- finder
     fbody = f'''
@@ -643,7 +767,9 @@ def build(site, venues, events, today, vevents=(), creators=()):
         def rows():
             out = []
             for k, val in v["facts"]:
-                cell = f'<td class="unk">{PENDING}</td>' if not val.strip() else f'<td>{E(val)}{fact_provenance(v, val)}</td>'
+                if k == "Operator": continue
+                shown = display_value(v, k, val)
+                cell = f'<td>{E(shown)}{fact_provenance(v, shown)}</td>'
                 out.append(f'<tr><th>{E(k)}</th>{cell}</tr>')
             return "".join(out)
         links = []
@@ -655,8 +781,8 @@ def build(site, venues, events, today, vevents=(), creators=()):
         srcs = [f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a>'] + [f'<a href="{E(u)}" rel="noopener noreferrer">{E(l)}</a>' for l, u in v["extra_sources"]]
         adnote = (f'<div class="note ad"><strong>Ad</strong> · This entry is labeled as an ad. Verified info still comes from official sources. '
                   f'{E(v["ad_note"])}</div>' if v["ad"] else "")
-        tips = ("<h2>Tips · Heads-up</h2><ul class='clean'>" + "".join(f"<li>{E(t)}</li>" for t in v["tips"]) + "</ul>") if v["tips"] else ""
-        unv = ("<h2>Not yet verified</h2><ul class='clean'>" + "".join(f"<li>{E(t)}</li>" for t in v["unverified"]) + "</ul>") if v["unverified"] else ""
+        tips = ("<h2>Tips · Heads-up</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Tip', t))}{fact_provenance(v, t)}</li>" for t in v["tips"]) + "</ul>") if v["tips"] else ""
+        unv = ("<h2>Unconfirmed</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Unconfirmed', t))}<small class='fact-source'>Unconfirmed · 확인 중</small></li>" for t in v["unverified"]) + "</ul>") if v["unverified"] else ""
         stale = (f'<div class="note">오래됨 (outdated) · Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if v["stale"] else "")
         safety = f'<p class="safety">{SAFETY}</p>' if v["kind_key"] == "sauna" else ""
         offrows = "".join(f'<tr><th>Official list</th><td>{E(t)}</td></tr>' for t in off_marks(v))
@@ -681,18 +807,20 @@ def build(site, venues, events, today, vevents=(), creators=()):
         next_label = f'Next in this city: {E(nxt["title"])} ›' if same_city else f'Next: {E(nxt["title"])} ›'
         next_html = f'<p class="next-venue"><a href="/finder/{nxt["slug"]}/">{next_label}</a></p>'
         body = f'''<div class="detail"><p class="crumb"><a href="/finder/">{FINDER_LABEL}</a> › {E(v["city_ko"])}</p>
-{v_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{adnote}{stale}
+{v_badges(v)}{amenity_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{adnote}{stale}
+<div class="detail-media">{venue_media(v)}</div>
 <div class="btnrow detail-actions">{"".join(links)}</div>
 <section class="detail-glance" aria-labelledby="glance-heading"><h2 id="glance-heading">At a glance</h2>
 <div class="glance-grid"><div><h3>Price</h3>{price_html(v)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v)}</div>' for label, values in fact_groups(v))}</div>
-<p class="meta">Checked {dot(v["last_verified"])} · Official reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></p></section>
-<table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{closed_row(v)}{offrows}</tbody></table>
+<p class="meta">Checked {dot(v["last_verified"])} · Reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></p></section>
+<h2>Source notes</h2><table class="facts"><tbody>{rows()}{extra_addr}{sunrow}{closed_row(v)}{offrows}</tbody></table>
 {tips}{unv}{fchk(v)}{aer_blk}{arch_blk}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong></p><p>Source: {" · ".join(srcs)}</p>
 <p><a href="/corrections/">Report a correction</a></p></div>
 {next_html}
 <div class="btnrow">{"".join(links)}</div>{safety}</div>'''
-        site.add(f"/finder/{v['slug']}/", f"{v['title']}", clip(f"{v['title']} — {v['summary']}"), body, "finder")
+        site.add(f"/finder/{v['slug']}/", f"{v['title']}", clip(f"{v['title']} — {v['kind']} in {v['city']}. Sources, verification status and visitor information."), body,
+                 next((key for key in ("sauna", "crossfit", "gym", "hyrox") if key in venue_categories(v)), ""))
 
     # ---- events
     cards = "".join(event_card(e, today) for e in upcoming)
@@ -729,7 +857,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <div class="grid g3">{hv}</div>
 <div class="page"><p class="muted">Saunas and boxes around Goyang and Ilsan go into the <a href="/finder/?city=gyeonggi">Finder</a> as we verify them.</p>
 <p class="muted">{SAFETY}</p><p class="muted">Checked {dot(feat["last_verified"])} · Source <a href="{E(feat["url"])}" rel="noopener noreferrer">HYROX Korea</a> · <a href="https://hyrox.com/the-fitness-race/" rel="noopener noreferrer">HYROX official</a></p></div>'''
-    site.add("/hyrox-seoul/", "HYROX Seoul Race Week Guide (11/13–15, KINTEX)", "AirAsia HYROX Seoul dates, the 8 stations, and drop-in spots to train first.", hbody, "hyrox", ("dday.js",))
+    site.add("/hyrox-seoul/", "HYROX Seoul Race Week Guide (11/13–15, KINTEX)", "AirAsia HYROX Seoul dates, the 8 stations, and drop-in spots to train first.", hbody, "", ("dday.js",))
 
 
     # ---- magazine
@@ -738,8 +866,8 @@ def build(site, venues, events, today, vevents=(), creators=()):
         site.add(f"/magazine/{a['slug']}/", a["title_en"], clip(a["deck_en"]), article_html(a), "magazine")
     mcards = "".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3>'
                      f'<div class="loc">{E(a["deck_en"])}</div><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))}{"" if a.get("lang") == "en" else " · Article in Korean"}</div></article>' for a in arts)
-    if arts: site.add("/magazine/", "Magazine", "Wellness reports from HANSET editors. Research and official sources, made easy to read.",
-             f'<div class="page"><h1>Magazine</h1><p class="muted">Articles are currently in Korean.</p></div><div class="grid">{mcards}</div>', "magazine")
+    site.add("/magazine/", "Magazine", "Wellness reports from HANSET editors. Research and official sources, made easy to read.",
+             f'<div class="page"><h1>Magazine</h1></div><div class="grid">{mcards or "<p class=muted>Coming soon</p>"}</div>', "magazine")
 
     # ---- archive (손그림 아카이브)
     items = "".join(
@@ -959,6 +1087,12 @@ def main():
         p = dist / path.lstrip("/") if path.endswith(".html") else dist / path.lstrip("/") / "index.html"
         p.parent.mkdir(parents=True, exist_ok=True); p.write_text(h, encoding="utf-8")
     (dist / "assets").mkdir(); shutil.copytree(ROOT / "static/css", dist / "assets/css"); shutil.copytree(ROOT / "static/js", dist / "assets/js"); shutil.copytree(ROOT / "static/img", dist / "assets/img")
+    for v in venues:
+        image = venue_image_path(v)
+        if image:
+            destination = dist / "assets/venue-sketch" / image.name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(image, destination)
     shutil.copy(ROOT / "static/favicon.svg", dist / "favicon.svg")
     for _f in (ROOT / "static/root").glob("*"):  # 루트 정적 파일(구글 서치콘솔 소유확인 등; 지우지 말 것)
         if _f.is_file(): shutil.copy(_f, dist / _f.name)
