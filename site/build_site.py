@@ -241,6 +241,7 @@ def initials(name):
     w = [x for x in re.split(r"[\s._-]+", name) if x]
     return "".join(x[0] for x in w[:2]).upper() or "?"
 def creator_card(c):
+    c = dict(c, display_name=en_only(c["display_name"]) or c["handle"].lstrip("@"))
     focus = " · ".join(CAT_LABEL.get(f, f.capitalize()) for f in c["focus"])
     city = f' · {E(c["city"])}' if c["city"] else ""
     return (f'<article class="vcard vcreator" id="c-{c["id"]}"><span class="vinit" aria-hidden="true">{E(initials(c["display_name"]))}</span>'
@@ -286,7 +287,7 @@ class Site:
     def nav(self, active):
         def cur(k): return ' aria-current="page"' if active == k else ""
         return (f'<a class="skip" href="#main">Skip to content</a><header class="site-header"><div class="wrap">'
-                f'<div class="hrow"><a class="brand" href="/"><i></i>{BRAND_EN}<small lang="ko">{BRAND_KO}</small></a>'
+                f'<div class="hrow"><a class="brand" href="/"><i></i>{BRAND_EN}</a>'
                 f'<div class="hact"><a class="pin" href="/finder/"{cur("finder")}>{FINDER_LABEL}</a><a class="ig" {IG_ATTRS}>{IG_SVG}</a></div></div>'
                 f'<nav class="nav" aria-label="Main menu"><a href="/"{cur("home")}>Home</a>'
                 f'{MAG_NAV(cur) if ARTICLES else ""}<a href="/guide/"{cur("guide")}>Guide</a><a href="/guides/"{cur("visitors")}>Visitors</a></nav></div></header>')
@@ -559,7 +560,7 @@ def cite(text):
         return "(" + ", ".join(f'<a class="cite" href="#ref-{n}">{n}</a>' for n in nums) + ")"
     return re.sub(r"\((\d+(?:,\s*\d+)*)\)", sub, E(text))
 
-BYLINE = 'Editor Cheon Han-saem (<span lang="ko">천한샘</span>)'
+BYLINE = 'Editor Cheon Han-saem'
 
 def article_html(a):
     d = dt.date.fromisoformat(a["date"])
@@ -692,7 +693,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
         stale = (f'<div class="note">오래됨 (outdated) · Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if v["stale"] else "")
         safety = f'<p class="safety">{SAFETY}</p>' if v["kind_key"] == "sauna" else ""
         offrows = "".join(f'<tr><th>Official list</th><td>{E(t)}</td></tr>' for t in off_marks(v))
-        extra_addr = f'<tr><th>Address</th><td><span lang="ko">{E(v["address"])}</span></td></tr>' if v["address"] and not any(k == "주소" for k, _ in v["facts_ko"]) else ""
+        extra_addr = f'<tr><th>Address</th><td>{E(en_only(v["address"]))}</td></tr>' if en_only(v["address"] or "") and not any(k == "주소" for k, _ in v["facts_ko"]) else ""
         sunrow = f'<tr><th>Sunday</th><td{"" if v["sunday"] != "unk" else " class=unk"}>{SUN_TXT[v["sunday"]] if v["sunday"] != "unk" else PENDING}</td></tr>' if v["kind_key"] == "box" or v["sunday"] != "unk" else ""
         if v["kind_key"] == "box" and any("일요일" in k or "휴무" in k for k, _ in v["facts_ko"]) and v["sunday"] != "unk": sunrow = ""
         if v["kind_key"] == "box" and v["sunday"] == "unk" and any("일요일" in k for k, _ in v["facts_ko"]): sunrow = ""
