@@ -822,7 +822,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
                   f'{E(v["ad_note"])}</div>' if v["ad"] else "")
         tips = ("<h2>Tips · Heads-up</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Tip', t))}{fact_provenance(v, t)}</li>" for t in v["tips"]) + "</ul>") if v["tips"] else ""
         unv = ("<h2>Unconfirmed</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Unconfirmed', t))}<small class='fact-source'>Unconfirmed</small></li>" for t in v["unverified"]) + "</ul>") if v["unverified"] else ""
-        stale = (f'<div class="note">오래됨 (outdated) · Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if v["stale"] else "")
+        stale = (f'<div class="note">Outdated · Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if v["stale"] else "")
         safety = f'<p class="safety">{SAFETY}</p>' if v["kind_key"] == "sauna" else ""
         offrows = "".join(f'<tr><th>Official list</th><td>{E(t)}</td></tr>' for t in off_marks(v))
         extra_addr = f'<tr><th>Address</th><td>{E(en_only(v["address"]))}</td></tr>' if en_only(v["address"] or "") and not any(k == "주소" for k, _ in v["facts_ko"]) else ""
