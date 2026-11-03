@@ -153,7 +153,7 @@ def test_third_party_price_and_hour_clues_are_redacted_everywhere(venues):
             if any(word in value.lower() for word in ('unverified clue', 'third-party', 'blog')) and (
                     key.lower().startswith(('price', 'hours')) or '₩' in value):
                 shown = B.display_value(v, key, value)
-                assert '확인 중' in shown and '₩' not in shown
+                assert 'Unconfirmed' in shown and '₩' not in shown
                 assert value not in B.fact_lines([(key, value)], v)
                 assert 'Unconfirmed' in B.fact_provenance(v, shown)
 
@@ -161,6 +161,6 @@ def test_third_party_price_and_hour_clues_are_redacted_everywhere(venues):
 def test_explicit_stale_marker_and_venue_staleness_survive(venues):
     v = deepcopy(venues['orakai-cheonggyesan'])
     v['stale'] = True
-    assert '오래됨 (outdated)' in B.fact_provenance(v, 'Dry sauna')
+    assert 'Outdated' in B.fact_provenance(v, 'Dry sauna')
     v['stale'] = False
-    assert '오래됨 (outdated)' in B.fact_provenance(v, 'Dry sauna (older than 90 days)')
+    assert 'Outdated' in B.fact_provenance(v, 'Dry sauna (older than 90 days)')

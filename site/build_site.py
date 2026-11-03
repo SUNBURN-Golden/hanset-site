@@ -242,6 +242,7 @@ def initials(name):
     w = [x for x in re.split(r"[\s._-]+", name) if x]
     return "".join(x[0] for x in w[:2]).upper() or "?"
 def creator_card(c):
+    c = dict(c, display_name=en_only(c["display_name"]) or c["handle"].lstrip("@"))
     focus = " · ".join(CAT_LABEL.get(f, f.capitalize()) for f in c["focus"])
     city = f' · {E(c["city"])}' if c["city"] else ""
     return (f'<article class="vcard vcreator" id="c-{c["id"]}"><span class="vinit" aria-hidden="true">{E(initials(c["display_name"]))}</span>'
@@ -301,7 +302,7 @@ def category_body(key, label, venues):
     return (header + '<form class="filters category-search" role="search"><label class="vh" for="f-q">Search name or area</label>'
             '<input id="f-q" name="q" type="search" placeholder="Search name or area" autocomplete="off"></form>'
             f'<p class="count" id="f-count" role="status" aria-live="polite">{len(venues)} {"place" if len(venues) == 1 else "places"}</p>'
-            f'<div class="grid" id="finder-list">{"".join(venue_card(v) for v in venues)}</div>'
+            f'<h2 class="vh">Places</h2><div class="grid" id="finder-list">{"".join(venue_card(v) for v in venues)}</div>'
             '<div class="empty" id="f-empty" hidden><p>No matching places.</p>'
             '<button type="button" class="btn btn-d" data-reset>Clear search</button></div>' + safety)
 
@@ -338,7 +339,7 @@ def display_value(v, key, value):
     if re.search(r"third.party|unverified clue|blog", value, re.I) and (
             re.search(r"price|hours|closed|day pass", key, re.I) or "₩" in value or
             re.search(r"\b24\s*(?:h\b|hours)|\b\d{1,2}:\d{2}\b", value, re.I)):
-        return "Unconfirmed · 확인 중 (official price / hours unavailable)"
+        return "Unconfirmed (official price / hours unavailable)"
     return value or UNKNOWN
 
 
@@ -453,7 +454,7 @@ def v_badges(v, full=False):
     b.append(badge("Box" if v["kind_key"] == "box" else "Sauna", "badge-box" if v["kind_key"] == "box" else "badge-sauna"))
     b.append(badge(v["kind"]))
     if v["c"].get("opening_soon"): b.append(badge("Opening soon", "badge-part"))
-    if v["stale"]: b.append(badge("오래됨 (outdated)", "badge-old"))
+    if v["stale"]: b.append(badge("Outdated", "badge-old"))
     return '<div class="chips">' + "".join(b) + "</div>"
 def off_marks(v):
     o = v["off"]; out = []
@@ -568,8 +569,8 @@ def fact_provenance(v, value):
             status = "Unconfirmed" if evidence_status(v, value) == "unverified" else "Source claim"
             return f'<small class="fact-source">Venue reply · {E(checked)} · {status} · Public source: {UNKNOWN}</small>'
     status = evidence_status(v, value)
-    label = {"fact": "Official source", "source_claim": "Source claim", "unverified": "Unconfirmed · 확인 중"}[status]
-    stale = " · 오래됨 (outdated)" if v["stale"] or "older than 90 days" in value else ""
+    label = {"fact": "Official source", "source_claim": "Source claim", "unverified": "Unconfirmed"}[status]
+    stale = " · Outdated" if v["stale"] or "older than 90 days" in value else ""
     source = (f'<a href="{E(v["source"])}" rel="noopener noreferrer">{label}</a>'
               if status == "fact" else label)
     return (f'<small class="fact-source">Checked {dot(v["last_verified"])} · '
@@ -578,7 +579,7 @@ def fact_provenance(v, value):
 
 def fact_lines(rows, v=None):
     return "".join(f'<span class="fact-line"><strong>{E(k)}:</strong> {E(display_value(v, k, val) if v else val)}'
-                   f'{fact_provenance(v, display_value(v, k, val)) if v else ""}</span>' for k, val in rows) or f'<span class="unk">Unconfirmed · 확인 중</span>'
+                   f'{fact_provenance(v, display_value(v, k, val)) if v else ""}</span>' for k, val in rows) or f'<span class="unk">Unconfirmed</span>'
 
 
 def price_html(v):
@@ -594,8 +595,14 @@ def price_html(v):
 
 
 def price_short(v):
-    # Preserve the price-plan label; a class price is not a day pass.
-    return (f'<span class="price-short">{E(v["price_label"])} {E(v["price"])}</span>' if v["price"] else "")
+    # One visible line on cards ('₩49,000~'); the full price-plan label and terms stay in the
+    # accessible name and tooltip (a class price is not a day pass) and in full on the detail page.
+    if not v["price"]: return ""
+    full = f'{v["price_label"]} {v["price"]}'
+    m = re.search(r"₩\s?[\d,]+", v["price"])
+    short = (m.group(0).replace(" ", "") + "~") if m else v["price"]
+    return (f'<span class="price-short" title="{E(full)}"><span aria-hidden="true">{E(short)}</span>'
+            f'<span class="vh">{E(full)}</span></span>')
 
 def venue_facts(v):
     groups = []
@@ -705,7 +712,7 @@ def cite(text):
         return "(" + ", ".join(f'<a class="cite" href="#ref-{n}">{n}</a>' for n in nums) + ")"
     return re.sub(r"\((\d+(?:,\s*\d+)*)\)", sub, E(text))
 
-BYLINE = 'Editor Cheon Han-saem (<span lang="ko">천한샘</span>)'
+BYLINE = 'Editor Cheon Han-saem'
 
 def article_html(a):
     d = dt.date.fromisoformat(a["date"])
@@ -814,11 +821,11 @@ def build(site, venues, events, today, vevents=(), creators=()):
         adnote = (f'<div class="note ad"><strong>Ad</strong> · This entry is labeled as an ad. Verified info still comes from official sources. '
                   f'{E(v["ad_note"])}</div>' if v["ad"] else "")
         tips = ("<h2>Tips · Heads-up</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Tip', t))}{fact_provenance(v, t)}</li>" for t in v["tips"]) + "</ul>") if v["tips"] else ""
-        unv = ("<h2>Unconfirmed</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Unconfirmed', t))}<small class='fact-source'>Unconfirmed · 확인 중</small></li>" for t in v["unverified"]) + "</ul>") if v["unverified"] else ""
-        stale = (f'<div class="note">오래됨 (outdated) · Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if v["stale"] else "")
+        unv = ("<h2>Unconfirmed</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Unconfirmed', t))}<small class='fact-source'>Unconfirmed</small></li>" for t in v["unverified"]) + "</ul>") if v["unverified"] else ""
+        stale = (f'<div class="note">Outdated · Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if v["stale"] else "")
         safety = f'<p class="safety">{SAFETY}</p>' if v["kind_key"] == "sauna" else ""
         offrows = "".join(f'<tr><th>Official list</th><td>{E(t)}</td></tr>' for t in off_marks(v))
-        extra_addr = f'<tr><th>Address</th><td><span lang="ko">{E(v["address"])}</span></td></tr>' if v["address"] and not any(k == "주소" for k, _ in v["facts_ko"]) else ""
+        extra_addr = f'<tr><th>Address</th><td>{E(en_only(v["address"]))}</td></tr>' if en_only(v["address"] or "") and not any(k == "주소" for k, _ in v["facts_ko"]) else ""
         sunrow = f'<tr><th>Sunday</th><td{"" if v["sunday"] != "unk" else " class=unk"}>{SUN_TXT[v["sunday"]] if v["sunday"] != "unk" else PENDING}</td></tr>' if v["kind_key"] == "box" or v["sunday"] != "unk" else ""
         if v["kind_key"] == "box" and any("일요일" in k or "휴무" in k for k, _ in v["facts_ko"]) and v["sunday"] != "unk": sunrow = ""
         if v["kind_key"] == "box" and v["sunday"] == "unk" and any("일요일" in k for k, _ in v["facts_ko"]): sunrow = ""
@@ -896,10 +903,10 @@ def build(site, venues, events, today, vevents=(), creators=()):
     arts = [parse_article(m) for m in ARTICLES]
     for a in arts:  # magazine pages only when there are articles
         site.add(f"/magazine/{a['slug']}/", a["title_en"], clip(a["deck_en"]), article_html(a), "magazine")
-    mcards = "".join(f'<article class="card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3>'
+    mcards = "".join(f'<article class="card mag-card"><div class="chips">{badge(a["category"])}</div><h3><a href="/magazine/{a["slug"]}/">{E(a["title_en"])}</a></h3>'
                      f'<div class="loc">{E(a["deck_en"])}</div><div class="meta">{BYLINE} · {dot(dt.date.fromisoformat(a["date"]))}{"" if a.get("lang") == "en" else " · Article in Korean"}</div></article>' for a in arts)
     site.add("/magazine/", "Magazine", "Wellness reports from HANSET editors. Research and official sources, made easy to read.",
-             f'<div class="page"><h1>Magazine</h1></div><div class="grid">{mcards or "<p class=muted>Coming soon</p>"}</div>', "magazine")
+             f'<div class="page"><h1>Magazine</h1></div><h2 class="vh">Articles</h2><div class="grid">{mcards or "<p class=muted>Coming soon</p>"}</div>', "magazine")
 
     # ---- archive (손그림 아카이브)
     items = "".join(

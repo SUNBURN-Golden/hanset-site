@@ -329,7 +329,7 @@ class Explorer(unittest.TestCase):
             if v['kind_key'] == 'sauna':
                 self.assertIn(B.SAFETY, page)
         v = {**self.venues[0], 'stale': True}
-        self.assertIn('오래됨', B.v_badges(v))
+        self.assertIn('Outdated', B.v_badges(v))
 
     @unittest.skipUnless(shutil.which('node'), 'Node is needed for browser-free interaction checks')
     def test_url_filters_list_sorting_reset_and_empty_results_without_map(self):
