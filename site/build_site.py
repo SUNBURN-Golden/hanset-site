@@ -619,6 +619,16 @@ def venue_facts(v):
     return '<dl class="card-facts">' + "".join(groups) + '</dl>'
 
 
+SKETCH_DIR = ROOT / "static/venue-sketch"
+
+def venue_sketch(v, cls="venue-sketch", lazy=True):
+    """Hand-drawn venue illustration at static/venue-sketch/<venue_id>.(webp|svg|png); '' if none."""
+    for ext in ("webp", "svg", "png"):
+        if (SKETCH_DIR / f'{v["slug"]}.{ext}').exists():
+            return (f'<img class="{cls}" src="/assets/venue-sketch/{v["slug"]}.{ext}" width="1200" height="900"'
+                    f'{" loading=\"lazy\"" if lazy else ""} decoding="async" alt="Hand-drawn illustration of {E(v["title"])}">')
+    return ""
+
 def venue_contents(v):
     return (f'<a class="card-media" href="/finder/{v["slug"]}/" tabindex="-1" aria-hidden="true">{venue_media(v)}</a>'
             f'<div class="card-body"><h3><a href="/finder/{v["slug"]}/">{E(v["title"])}</a></h3>'

@@ -398,3 +398,6 @@ body{padding-bottom:calc(56px + env(safe-area-inset-bottom))}
 .venue-image{height:auto;object-fit:cover}
 .detail-media{margin-block:var(--space-3)}
 .detail-media .card-image{border-radius:var(--card-radius)}
+/* hand-drawn venue sketches */
+.venue-sketch{display:block;width:100%;height:auto;aspect-ratio:4/3;object-fit:cover;border-radius:20px;margin:0 0 12px}
+.venue-sketch-hero{max-width:720px}
