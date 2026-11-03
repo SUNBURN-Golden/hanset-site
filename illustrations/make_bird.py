@@ -203,7 +203,7 @@ def sisu():
 def orakai():
     b = base("Orakai Cheonggyesan, floor by floor", "Seoul · hotel B1 sauna")
     fl = [
-        dict(tag="B1", title="Sauna (official: B1)", items=["Dry sauna · wet sauna", "Several pools", "Body scrub: walk-in sign-up only", "'LEVEL B1' restaurant on the same floor"], blocks=[("steam", 30), ("wave", 22), ("plain", 20)]),
+        dict(tag="B1", title="Sauna (official: B1)", items=["Dry sauna · wet sauna", "Several pools", "'LEVEL B1' restaurant on the same floor"], blocks=[("steam", 30), ("wave", 22), ("plain", 20)]),
         dict(tag="B2", title="Parking · EV charging", items=["EV chargers on B2 (official guide)"], blocks=[("car", 20), ("plain", 16)]),
     ]
     sv, S = tower(fl, 270, 200, top=246, bottom=790, t=28)

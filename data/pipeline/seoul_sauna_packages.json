@@ -166,14 +166,14 @@
       "conditions": {
         "public_access": "Yes. Explicitly open to non-guests as well as hotel guests.",
         "restriction": "Open to general public and hotel guests (hotel guests receive a discounted rate).",
-        "booking": "Walk-in entry; body scrub (세신) is on-site sign-up only.",
+        "booking": "Walk-in entry.",
         "kr_phone": "Not required for walk-in ticket purchase at the B1 front desk.",
         "card": "Not confirmed",
         "english": "Not confirmed",
         "full_price": "Adult non-guest ₩24,000 · Hotel guest ₩18,000 · Child (ages 8–13) ₩14,000 (official hotel guide, checked 2026-10-18).",
-        "scrub_fee": "Available on site (walk-in sign-up only, closed Mondays; exact fee not listed on official page).",
+        "scrub_fee": "Not confirmed (not listed on official page).",
         "last_entry": "20:30 (operating hours 07:00–21:00).",
-        "closures": "Monthly maintenance closures in 2026: Oct 12, Nov 9, Dec 14 (body scrub closed every Monday).",
+        "closures": "Monthly maintenance closures in 2026: Oct 12, Nov 9, Dec 14.",
         "age_tattoo_attire": "Under age 8 not admitted · Ages 8–16 require an accompanying guardian · Tattoo rule not stated."
       }
     },
