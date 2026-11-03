@@ -34,19 +34,16 @@ class Explorer(unittest.TestCase):
         cls.site = B.Site(cls.today, True)
         B.build(cls.site, cls.venues, events, cls.today)
 
-    def test_shared_explorer_dom_order_and_home_illustrations_last(self):
+    def test_minimal_home_and_finder_explorer_order(self):
         home, finder = (self.site.pages[p] for p in ('/', '/finder/'))
-        def explorer(page):
-            return page[page.index('<form class="filters"'):page.index('</noscript>')]
-        self.assertEqual(explorer(home), explorer(finder))
-        for page in (home, finder):
-            positions = [page.index(token) for token in (
-                '<form class="filters"',
-                'id="f-count"', 'id="finder-list"')]
-            self.assertEqual(positions, sorted(positions))
-            self.assertIn('/assets/js/finder.js?v=', page)
-        self.assertIn(f'Explore {len(self.venues)} boxes &amp; saunas', home)
-        self.assertNotIn('<section', home[home.index('See every drawing ›</a></p></section>') + len('See every drawing ›</a></p></section>'):home.index('</main>')])
+        self.assertNotIn('<form class="filters"', home)
+        self.assertNotIn('class="illrow', home)
+        self.assertIn('HANSET, Sweat on Korea', home)
+        self.assertIn('/assets/js/search.js?v=', home)
+        positions = [finder.index(token) for token in (
+            '<form class="filters"', 'id="f-count"', 'id="finder-list"')]
+        self.assertEqual(positions, sorted(positions))
+        self.assertIn('/assets/js/finder.js?v=', finder)
         self.assertIn('id="pictures"', self.site.pages['/guide/'])
         self.assertNotIn('/ads/', self.site.pages)
 
@@ -73,7 +70,7 @@ class Explorer(unittest.TestCase):
                     self.assertNotIn(token, page)
 
     def test_all_regional_venues_remain_in_the_list_once(self):
-        for path in ('/', '/finder/'):
+        for path in ('/finder/',):
             elements = Elements(self.site.pages[path]).elements
             cards = [a for tag, a in elements if tag == 'article' and 'data-slug' in a]
             self.assertEqual(len(cards), len(self.venues))
@@ -84,7 +81,7 @@ class Explorer(unittest.TestCase):
                                  {v['slug'] for v in self.venues if v['city_key'] == city})
 
     def test_city_filter_is_single_control_without_map_tabs(self):
-        for path in ('/', '/finder/'):
+        for path in ('/finder/',):
             page = self.site.pages[path]
             self.assertEqual(page.count('data-seg="city"'), 1)
             group = re.search(r'<div class="seg" data-seg="city".*?</div>', page)[0]
@@ -97,8 +94,9 @@ class Explorer(unittest.TestCase):
                       '.pin-', '.river-label', '.selected-venue'):
             self.assertNotIn(token, css)
         self.assertIn('[hidden]{display:none!important}', css)
-        mobile = css[css.rindex('@media(max-width:719px)'):]
-        self.assertIn('.home-hero{padding:14px 16px;margin:10px 0 8px}', mobile)
+        self.assertIn('.home-search h1{font-size:40px;', css)
+        self.assertIn('.search-form input{', css)
+        self.assertNotIn('.home-hero', css)
 
     def test_default_order_prioritizes_price_then_verification(self):
         elements = Elements(self.site.pages['/finder/']).elements
@@ -110,7 +108,7 @@ class Explorer(unittest.TestCase):
         for v in self.venues:
             for key, value in v['facts']:
                 if key.startswith(('Price', 'Drop-in')) and value.strip():
-                    self.assertIn(B.E(value), B.price_html(v), v['slug'])
+                    self.assertIn(B.E(B.display_value(v, key, value)), B.price_html(v), v['slug'])
             if v['price']:
                 self.assertIn(B.E(v['price']), B.price_html(v))
                 if v['price_caveat']:
@@ -148,21 +146,27 @@ class Explorer(unittest.TestCase):
         self.assertIn('2026-10-18', note)
         self.assertNotIn('href=', note)
 
-    def test_pending_reply_and_booking_procedure_use_official_provenance(self):
+    def test_pending_reply_is_unlinked_and_confirmed_booking_keeps_official_provenance(self):
         grand = self.by_slug['grand-hyatt-seoul']
         zest = self.by_slug['crossfit-zest']
         cases = (
-            (grand, B.FOREIGNER[grand['slug']]['restriction'], 'awaiting official hotel reply'),
+            (grand, B.FOREIGNER[grand['slug']]['restriction'], 'awaiting official hotel reply', False),
             (zest, next(value for _, value in zest['facts'] if 'after an email reply' in value),
-             'after an email reply'),
+             'after an email reply', True),
         )
-        for v, value, phrase in cases:
+        for v, value, phrase, confirmed in cases:
             with self.subTest(venue=v['slug']):
                 self.assertIn(phrase, value)
                 note = B.fact_provenance(v, value)
                 self.assertNotIn('Venue reply', note)
                 self.assertIn(f'Checked {B.dot(v["last_verified"])}', note)
-                self.assertIn(f'href="{B.E(v["source"])}"', note)
+                if confirmed:
+                    self.assertIn('Official source', note)
+                    self.assertIn(f'href="{B.E(v["source"])}"', note)
+                else:
+                    self.assertIn('Unconfirmed', note)
+                    self.assertNotIn('Official source', note)
+                    self.assertNotIn('href=', note)
                 self.assertIn(B.E(value) + note, self.site.pages[f'/finder/{v["slug"]}/'])
 
     def test_shared_official_and_reply_citation_does_not_use_closure_date(self):
@@ -293,7 +297,7 @@ class Explorer(unittest.TestCase):
             self.assertIn('Foreigner &amp; visitor access checklist', checklist)
             self.assertEqual(checklist.count('<tr>'), len(keys))
             for key, label in keys:
-                cell = f'<td>{B.E(values[key])}</td>' if B._is_confirmed(values.get(key, '')) else '<td class="unk">Not confirmed</td>'
+                cell = f'<td>{B.E(values[key])}{B.fact_provenance(v, values[key])}</td>' if B._is_confirmed(values.get(key, '')) else '<td class="unk">Not confirmed</td>'
                 self.assertIn(f'<tr><th>{label}</th>{cell}</tr>', checklist)
         for slug, kind, key in (
                 ('tattoo-friendly-saunas-korea', 'sauna', 'tattoo'),
@@ -315,8 +319,9 @@ class Explorer(unittest.TestCase):
             self.assertIn(B.price_short(v), card)
             self.assertNotIn('<table', card)
             self.assertIn(f'href="/finder/{v["slug"]}/"', card)
-            self.assertIn(B.E(v['source']), card)
-            self.assertIn(B.dot(v['last_verified']), card)
+            self.assertNotIn('fact-source', card)
+            self.assertNotIn('Checked ', card)
+            self.assertIn('card-placeholder' if B.venue_image_path(v) is None else f'/assets/venue-sketch/{v["slug"]}.', card)
             page = self.site.pages[f'/finder/{v["slug"]}/']
             self.assertIn(B.E(B.map_url(v)), page)
             self.assertLess(page.index('detail-actions'), page.index('detail-glance'))
