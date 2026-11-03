@@ -286,7 +286,7 @@ SCENES = {
     "archive-spa-haesurang": (haesurang, "Spa Haesurang, floor by floor", "Hand-drawn floor-by-floor sketch of Spa Haesurang from its official amenities page: 2F lobby, 3-4F powder rooms, 4-5F lockers, 5F jjimjil, 7F open-air bath; 6F is not listed."),
     "archive-heosimcheong": (heosimcheong, "Hurshimchung, floor by floor", "Hand-drawn floor-by-floor sketch of Hurshimchung at Hotel Nongshim: B1-B2 parking, 1F food, 2F banquet, 3F jjimjil, 4F lockers and desk, 5F hot-spring baths."),
     "archive-termeden": (termeden, "Termeden, zone by zone", "Hand-drawn zone-by-zone sketch of Termeden from its official facility guide: indoor pool & spa, hot-spring bathhouse, jjimjil spa, outdoor pool & spa."),
-    "archive-orakai-cheonggyesan": (orakai, "Orakai Cheonggyesan, floor by floor", "Hand-drawn floor-by-floor sketch of the Orakai Cheonggyesan Hotel sauna: B1 dry and wet saunas, several pools and walk-in body scrub; B2 EV charging."),
+    "archive-orakai-cheonggyesan": (orakai, "Orakai Cheonggyesan, floor by floor", "Hand-drawn floor-by-floor sketch of the Orakai Cheonggyesan Hotel sauna: B1 dry and wet saunas, several pools; B2 EV charging."),
     "archive-crossfit-super-sapiens": (supersapiens, "CrossFit Super Sapiens, floor by floor", "Hand-drawn floor-by-floor sketch of CrossFit Super Sapiens: 1F main training floor, 2F showers, lockers and accessory training, 3F tanning and staff space."),
 }
 
