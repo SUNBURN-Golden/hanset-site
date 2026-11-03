@@ -445,7 +445,7 @@ def price_short(v):
     return (f'<div class="price"><span class="price-label">{E(v["price_label"])}:</span> <strong>{E(v["price"])}</strong></div>'
             if v["price"] else f'<span class="unk">Price: {UNKNOWN}</span>')
 
-def venue_facts(v, preview=False):
+def venue_facts(v):
     groups = []
     for label, rows in fact_groups(v):
         essential, extra = [], []
@@ -453,8 +453,6 @@ def venue_facts(v, preview=False):
             # Keep access, tattoo, age, capacity and time limits visible in full.
             target = extra if (label == "Hours & Closed" and len(value) > 160) or key in (
                 "House rules", "Open-air bath rules", "Body scrub", "English support", "Language") else essential
-            if preview and label == "Hours & Closed":
-                target = extra
             if access_conflict(v) and key in ("Who can use", "Non-guests", "Entry"):
                 target = extra
             if key == "Entry restriction" and any(value == val for k, val in essential):
@@ -469,13 +467,11 @@ def venue_facts(v, preview=False):
     return '<dl class="card-facts">' + "".join(groups) + '</dl>'
 
 
-def venue_contents(v, preview=False):
-    title = E(v["title"]) if preview else f'<a href="/finder/{v["slug"]}/">{E(v["title"])}</a>'
+def venue_contents(v):
+    title = f'<a href="/finder/{v["slug"]}/">{E(v["title"])}</a>'
     footer = (f'<div class="meta">Checked {dot(v["last_verified"])} · Official reference '
               f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></div>')
-    actions = (f'<div class="btnrow"><a class="btn btn-d" href="/finder/{v["slug"]}/">View full details →</a>'
-               f'<a class="btn map-link" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map ↗</a></div>' if preview else
-               f'<a class="card-details" href="/finder/{v["slug"]}/">Details &amp; facts →</a>')
+    actions = f'<a class="card-details" href="/finder/{v["slug"]}/">Details &amp; facts →</a>'
     return (f'{v_badges(v)}<h3>{title}</h3><div class="loc">{E(v["location"])}</div>{price_short(v)}'
             + f'{footer}{actions}')
 
@@ -483,148 +479,6 @@ def venue_card(v):
     attrs = (f'data-slug="{v["slug"]}" data-city="{v["city_key"]}" data-type="{v["kind_key"]}" data-sunday="{v["sunday"]}" data-price="{1 if v["price"] else 0}" data-cf="{1 if v["off"]["cf"] else 0}" data-hyrox="{1 if v["off"]["hyrox"] else 0}" data-sub="{v["sub"]}" data-order="{v["order"]}" data-date="{v["last_verified"].isoformat()}" data-title="{E(v["title"])}" '
              f'data-name="{E((v["title"] + " " + v["name"] + " " + v["location"] + " " + v["area"] + " " + v["kind"] + " " + v["title_ko"] + " " + v["location_ko"]).lower())}"')
     return f'<article class="card venue-card" {attrs}>{venue_contents(v)}</article>'
-
-# Presentation coordinates for schematic regions only, never entrance coordinates.
-# Membership comes solely from existing location/area text. Unknowns are off-map.
-# Schematic lattice: pins sit on a 54x66 grid so 52-unit hit areas never overlap
-# (>=44px on a 390px phone) and labels sit in the gap above each row.
-MAP_PITCH_X, MAP_PITCH_Y, MAP_TOP, MAP_LEFT, MAP_HIT = 54, 66, 58, 38, 52
-MAP_RIVER_ROW = 2  # Seoul: the Han River runs just above this row
-MAP_RIVER_Y = MAP_TOP + MAP_RIVER_ROW * MAP_PITCH_Y - 35
-# Each row: (group key, label or "" for continuation, columns); key None = empty cell.
-MAP_LAYOUT = {
-    # Schematic, not to scale. Rows 0-1 sit north of the Han River, rows 2-5 south (MAP_RIVER_ROW).
-    # Columns follow rough real west-to-east order (district-office longitude); a district's mean
-    # pin x is what tests rank. Only districts that currently have venues get a slot; add a slot
-    # here when a venue opens in a new district (tests know all 25 districts' side and longitude).
-    "seoul": [[("Mapo", "Mapo", 2), ("Yongsan", "Yongsan", 1), ("Jung-gu", "Jung-gu", 1), ("Gangbuk", "Gangbuk", 1), ("Nowon", "Nowon", 1)],
-              [(None, "", 1), ("Yongsan", "", 1), ("Jung-gu", "", 3), ("Gwangjin", "Gwangjin", 2)],
-              [("Gangseo", "Gangseo", 1), ("Dongjak", "Dongjak", 1), (None, "", 1), ("Seocho", "Seocho", 3), ("Gangdong", "Gangdong", 1)],
-              [("Yeongdeungpo", "Yeongdeungpo", 2), ("Gangnam", "", 1), (None, "", 1), ("Seocho", "", 2), ("Gangdong", "", 1)],
-              [(None, "", 1), ("Gwanak", "Gwanak", 1), (None, "", 1), ("Gangnam", "Gangnam / Sinsa", 3), ("Gangdong", "", 1)],
-              [(None, "", 1), ("Gwanak", "", 1), ("Gangnam", "", 4), ("Songpa", "Songpa", 1)]],
-    "busan": [[("Dongnae", "Dongnae", 1), ("Haeundae", "Haeundae", 3), ("Nam-gu", "Nam-gu", 1), ("Jung-gu", "Jung-gu", 1), ("Seo-gu", "Seo-gu", 1)],
-              [(None, "", 3), ("", "District not confirmed · off-map", 1)]],
-    "jeju": [[("Jeju-si", "Jeju-si", 2), (None, "", 2), ("Seogwipo", "Seogwipo / Jungmun", 3)]],
-    "gyeonggi": [[("Goyang", "Goyang / Samsong", 3), (None, "", 1), ("Icheon", "Icheon", 2)]],
-    "all": [[("seoul", "Seoul", 7)], [("seoul", "", 7)], [("seoul", "", 7)], [("seoul", "", 7)], [("seoul", "", 7)],
-            [("gyeonggi", "Gyeonggi", 2), ("busan", "Busan", 5)],
-            [("jeju", "Jeju", 4), ("busan", "", 3)]],
-}
-
-
-def map_lattice(city):
-    """Return (labels, slots per key, unknown-box cells, viewBox height)."""
-    labels, slots, unknown = [], {}, []
-    rows = MAP_LAYOUT[city]
-    for r, row in enumerate(rows):
-        y, col = MAP_TOP + r * MAP_PITCH_Y, 0
-        for key, label, cols in row:
-            xs = [MAP_LEFT + (col + i) * MAP_PITCH_X for i in range(cols)]
-            col += cols
-            if key is None:
-                continue
-            slots.setdefault(key, []).extend((x, y) for x in xs)
-            if label:
-                # Seoul row just south of the river: drop labels 7 units so the river line clears them.
-                drop = 7 if city == "seoul" and r == MAP_RIVER_ROW else 0
-                labels.append((label, (xs[0] + xs[-1]) / 2, y - 23 + drop, key))
-            if key == "":
-                unknown.append((xs[0], y))
-        if col > 7:
-            raise ValueError(f'{city} map row {r} has {col} columns; max 7')
-    return labels, slots, unknown, MAP_TOP + (len(rows) - 1) * MAP_PITCH_Y + 34
-
-
-MAP_DISTRICTS = {city: [key for row in rows for key, label, _ in row if key is not None and (label or key == "")]
-                 for city, rows in MAP_LAYOUT.items() if city != "all"}
-def map_zones(city):
-    """All Korea view: outline each region's pin block so the grid reads as regions, not one icon wall."""
-    if city != "all":
-        return ""
-    blocks = []  # [key, x0, x1, y0, y1]; same-key same-span segments in consecutive rows merge
-    for r, row in enumerate(MAP_LAYOUT[city]):
-        y, col = MAP_TOP + r * MAP_PITCH_Y, 0
-        for key, _, cols in row:
-            x0, x1 = MAP_LEFT + col * MAP_PITCH_X, MAP_LEFT + (col + cols - 1) * MAP_PITCH_X
-            col += cols
-            if key is None:
-                continue
-            prev = next((b for b in blocks if b[0] == key and b[1] == x0 and b[2] == x1 and b[4] == y - MAP_PITCH_Y), None)
-            if prev:
-                prev[4] = y
-            else:
-                blocks.append([key, x0, x1, y, y])
-    return "".join(f'<rect class="map-zone map-zone-{k}" x="{x0-25}" y="{y0-38}" width="{x1-x0+50}" height="{y1-y0+64}" rx="14"/>'
-                   for k, x0, x1, y0, y1 in blocks)
-
-
-def map_drawing(city, h):
-    land = f'<rect class="map-land" x="8" y="8" width="384" height="{h-16}" rx="28"/>' + map_zones(city)
-    if city == "seoul":
-        y = MAP_RIVER_Y  # between the north and south rows
-        land += f'<path class="map-river" d="M8 {y}C80 {y-10} 140 {y+10} 200 {y}S320 {y-10} 392 {y}"/><text class="river-label" x="56" y="{y-9}" text-anchor="middle">Han River</text>'
-    return land
-
-
-def city_tabs(map_header=False):
-    items = [("", "All Korea" if map_header else "All"), ("seoul", "Seoul"), ("busan", "Busan"), ("jeju", "Jeju"), ("gyeonggi", "Gyeonggi")]
-    return '<div class="seg map-tabs" data-seg="city" role="group" aria-label="Map city">' + "".join(
-        f'<button type="button" data-v="{key}" aria-pressed="{str(not key).lower()}">{label}</button>' for key, label in items) + '</div>'
-
-
-def pin_glyph(kind):
-    if kind == "box":
-        return '<rect class="pin-shape" x="-11" y="-11" width="22" height="22" rx="2"/><path class="pin-glyph" d="M-7 0H7M-7-4V4M-4-6V6M7-4V4M4-6V6"/>'
-    return '<circle class="pin-shape" r="11"/><path class="pin-glyph" d="M-7 6a7 7 0 0 1 14 0M-4-6q-2 2 0 4M1-7q-2 2 0 4M6-6q-2 2 0 4"/>'
-
-
-def map_pin(v, x, y, label):
-    return (f'<g class="map-pin map-pin-{v["kind_key"]}" role="button" tabindex="0" '
-            f'aria-label="{E(v["title"])} · {E(label)} · {E(v["kind"])}" aria-pressed="false" aria-controls="map-preview" '
-            f'data-pin="{v["slug"]}" transform="translate({x} {y})"><title>{E(v["title"])}</title>'
-            f'<rect class="pin-target" x="-26" y="-26" width="52" height="52"/>{pin_glyph(v["kind_key"])}</g>')
-
-
-def venue_map(venues):
-    panels = []
-    city_venues = {city: sorted((v for v in venues if v["city_key"] == city), key=lambda v: v["order"]) for city in MAP_DISTRICTS}
-    for city in ("all", *MAP_DISTRICTS):
-        labels, slots, unknown, h = map_lattice(city)
-        drawing = map_drawing(city, h)
-        for x, y in unknown:
-            drawing += f'<rect class="map-unknown" x="{x-27}" y="{y-40}" width="54" height="68" rx="8"/>'
-        if city == "all":
-            groups = city_venues
-        else:
-            groups = {key: [] for key in MAP_DISTRICTS[city]}
-            for v in city_venues[city]:
-                location = (v["location"] + " " + v["area"]).lower()
-                key = next((key for key in groups if key and key.lower() in location), "")
-                if key not in groups:
-                    raise ValueError(f'Unknown region for {v["slug"]}; add an off-map area')
-                groups[key].append(v)
-        for label, x, y, key in labels:
-            if city == "all" or key == "" or groups.get(key):  # only districts with venues are drawn
-                drawing += f'<text class="map-label" x="{x:g}" y="{y}">{E(label)}</text>'
-        for key, items in groups.items():
-            if len(items) > len(slots.get(key, [])):
-                raise ValueError(f'Expand schematic slots for {city}/{key}; never overlap pins')
-            place = (key.title() + " · schematic region only") if city == "all" else next(l for l, *_ in labels if l.split(" /")[0].startswith(key or "District")) if key else "District not confirmed · off-map"
-            for v, (x, y) in zip(items, slots[key]):
-                drawing += map_pin(v, x, y, place)
-        label = "All Korea" if city == "all" else city.title()
-        panels.append(f'<svg class="district-map" data-map-city="{city}" viewBox="0 0 400 {h}" role="group" '
-                      f'aria-label="{label} schematic venue map"' + (' hidden="hidden"' if city != "all" else '') + f'>{drawing}</svg>')
-    boxes = sum(v["kind_key"] == "box" for v in venues)
-    legend = "".join(f'<span><svg viewBox="-20 -20 40 40" class="legend-pin map-pin-{kind}" aria-hidden="true">{pin_glyph(kind)}</svg>{label} ({count})</span>' for kind, label, count in (("box", "Box", boxes), ("sauna", "Sauna", len(venues)-boxes)))
-    templates = "".join(f'<template id="preview-{v["slug"]}"><article class="selected-venue">{venue_contents(v, preview=True)}</article></template>' for v in venues)
-    return (f'<section class="venue-map" aria-labelledby="map-heading"><div class="map-header"><h2 id="map-heading">Explore the map <span id="map-view">All Korea</span></h2>'
-            f'{city_tabs(True)}<div class="map-legend" aria-label="Map legend">{legend}</div></div>'
-            f'<div class="map-regions">{"".join(panels)}</div>'
-            '<p class="map-disclaimer">Schematic map · not exact locations</p></section>'
-            '<div id="map-selection" class="map-selection"><div id="map-preview" aria-live="polite" aria-atomic="true"><p>Select a pin to preview.</p></div></div>' + templates)
-
 
 def mini_card(v):
     price = (f'{E(v["price_label"])} {E(v["price"])}' if v["price"] else "Price pending")
@@ -715,7 +569,6 @@ def build(site, venues, events, today, vevents=(), creators=()):
     cnt_box = sum(v["kind_key"] == "box" for v in venues); cnt_sauna = len(venues) - cnt_box
     seg = lambda g, items: '<div class="seg" data-seg="%s" role="group" aria-label="%s">' % (g, g.title()) + "".join(f'<button type="button" data-v="{k}" aria-pressed="false">{E(t)}</button>' for k, t in items) + "</div>"
     explorer = f'''
-{venue_map(ordered)}
 <form class="filters" aria-label="Filters">
  <div class="fgroup"><span>City</span>{seg("city", [("", "All"), ("seoul", "Seoul"), ("busan", "Busan"), ("jeju", "Jeju"), ("gyeonggi", "Gyeonggi")])}</div>
  <div class="fgroup"><span>Type</span>{seg("type", [("", "All"), ("box", "CrossFit · HYROX boxes"), ("sauna", "Saunas")])}</div>
