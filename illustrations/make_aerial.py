@@ -146,7 +146,6 @@ def orakai():
     b += zone(60, 500, 280, 230, C["wet"], "Wet sauna", steam=True)
     b += zone(400, 260, 330, 260, C["pool"], "Pool", tc="#fff", r=30)
     b += circ(560, 640, 100, C["jac"], "Pool")
-    b += zone(760, 520, 260, 220, C["scrub"], "Body scrub", "walk-in · closed Mon", 30)
     for r in range(2): b += shower_row(790, 250 + r*120, 6, 40)
     b += T(890, 470, "showers", 28, color=C["dark"])
     b += notes(400, 230, ["several pools (official)"], 24, color=C["dark"])
@@ -231,7 +230,7 @@ SCENES = {
  "aerial-termeden": (termeden, "Termeden, bird's-eye", "Hand-drawn bird's-eye plan of Termeden in Icheon: outdoor infinity pool, forest bath, mountain pool and terme tubs; indoor pool and spa, hot-spring bathhouse with cold bath and saunas, and the jjimjil spa; day pass ₩49,000 (adult, November)."),
  "aerial-spa-haesurang": (haesurang, "Spa Haesurang, bird's-eye", "Hand-drawn bird's-eye plan of Spa Haesurang's sauna floor in Busan: dry and wet saunas, warm, hot and cold pools, event bath, rows of showers (about 80) and powder room; sauna ₩15,000 on weekdays."),
  "aerial-heosimcheong": (heosimcheong, "Hurshimchung, bird's-eye", "Hand-drawn bird's-eye plan of the 5th-floor hot-spring baths at Hurshimchung, Busan: longevity, event, celadon, cave, cold, half-body, salt and open-air baths, mini pool, steam and dry saunas, showers and scrub corner; ₩15,000 on weekdays."),
- "aerial-orakai-cheonggyesan": (orakai, "Orakai Cheonggyesan, bird's-eye", "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools, showers and a walk-in body scrub; adult ₩24,000."),
+ "aerial-orakai-cheonggyesan": (orakai, "Orakai Cheonggyesan, bird's-eye", "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools, showers; adult ₩24,000."),
  "aerial-sisu-house": (sisu, "Sisu House, bird's-eye", "Hand-drawn bird's-eye plan of Sisu House in Seoul: a one-person private room with Finnish sauna, warm bath, 14°C cold shower, ice fountain and changing room, plus the touch-care room and check-in; from ₩79,000."),
  "aerial-crossfit-super-sapiens": (supersapiens, "CrossFit Super Sapiens, bird's-eye", "Hand-drawn bird's-eye plan of CrossFit Super Sapiens in Seoul: 1st-floor training floor with rig and barbells, 2nd-floor accessory area, showers and lockers, 3rd-floor tanning and staff room; drop-in ₩30,000."),
 }
