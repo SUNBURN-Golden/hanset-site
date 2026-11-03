@@ -230,7 +230,7 @@ def sisu():
 def orakai():
     b = head("오라카이 청계산 사우나", "서울 서초 · 호텔 지하 1층 사우나 안내를 손그림으로")
     rows = [
-        dict(tag="B1", title="사우나 (공식: 지하 1층)", items=["건식 사우나 · 습식 사우나", "다양한 탕", "세신은 현장 접수만 가능(매주 월요일 휴무)", "같은 층에 'LEVEL B1' 레스토랑이 있어요"], deco=lambda x, y, w, hh: steam(x + w - 110, y + 14, 3), minh=250),
+        dict(tag="B1", title="사우나 (공식: 지하 1층)", items=["건식 사우나 · 습식 사우나", "다양한 탕", "같은 층에 'LEVEL B1' 레스토랑이 있어요"], deco=lambda x, y, w, hh: steam(x + w - 110, y + 14, 3), minh=250),
         dict(tag="B2", title="주차 · 전기차 충전소", items=["전기차 충전소는 지하 2층(공식 이용안내)", "사우나 이용 시 주차 3시간 무료(공식 이용안내)"], minh=170),
     ]
     sv, yend, bx = floors(rows, 60, 250, 640, gap=26, tagw=116, size=30, lh=1.26, fill_to=900)
