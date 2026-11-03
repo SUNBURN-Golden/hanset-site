@@ -8,7 +8,6 @@ import shutil
 import subprocess
 import sys
 import unittest
-import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'site'))
 import build_site as B
@@ -38,16 +37,13 @@ class Explorer(unittest.TestCase):
     def test_shared_explorer_dom_order_and_home_illustrations_last(self):
         home, finder = (self.site.pages[p] for p in ('/', '/finder/'))
         def explorer(page):
-            return page[page.index('<section class="venue-map"'):page.index('</noscript>')]
+            return page[page.index('<form class="filters"'):page.index('</noscript>')]
         self.assertEqual(explorer(home), explorer(finder))
         for page in (home, finder):
             positions = [page.index(token) for token in (
-                '<section class="venue-map"', 'id="map-selection"', '<form class="filters"',
+                '<form class="filters"',
                 'id="f-count"', 'id="finder-list"')]
             self.assertEqual(positions, sorted(positions))
-            selection = page[page.index('id="map-selection"'):page.index('<template')]
-            self.assertIn('Select a pin to preview.', selection)
-            self.assertNotIn('selected-venue', selection)
             self.assertIn('/assets/js/finder.js?v=', page)
         self.assertIn(f'Explore {len(self.venues)} boxes &amp; saunas', home)
         self.assertNotIn('<section', home[home.index('See every drawing ›</a></p></section>') + len('See every drawing ›</a></p></section>'):home.index('</main>')])
@@ -66,90 +62,43 @@ class Explorer(unittest.TestCase):
         for token in ('data-seg="city"', 'data-seg="type"', 'id="f-q"'):
             self.assertIn(token, basic)
 
-    def test_only_one_initial_canvas_and_complete_regional_views(self):
-        markup = B.venue_map(self.venues)
-        maps = [ET.fromstring(m) for m in re.findall(r'<svg class="district-map".*?</svg>', markup)]
-        self.assertEqual({m.attrib['data-map-city'] for m in maps}, {'all', 'seoul', 'busan', 'jeju', 'gyeonggi'})
-        self.assertEqual([m.attrib['data-map-city'] for m in maps if 'hidden' not in m.attrib], ['all'])
-        for canvas in maps:
-            vb = [int(n) for n in canvas.attrib['viewBox'].split()]
-            self.assertEqual(vb[:3], [0, 0, 400])
-            height = vb[3]
-            city = canvas.attrib['data-map-city']
-            pins = [n for n in canvas.iter('g') if 'data-pin' in n.attrib]
-            expected = {v['slug'] for v in self.venues if city == 'all' or v['city_key'] == city}
-            self.assertEqual({p.attrib['data-pin'] for p in pins}, expected)
-            self.assertEqual(len(pins), len(expected))
-            points = []
-            for pin in pins:
-                slug = pin.attrib['data-pin']
-                self.assertEqual(pin.attrib['role'], 'button')
-                self.assertEqual(pin.attrib['tabindex'], '0')
-                self.assertEqual(pin.attrib['aria-controls'], 'map-preview')
-                self.assertIn(self.by_slug[slug]['title'], pin.attrib['aria-label'])
-                target = pin.find("rect[@class='pin-target']")
-                hit = int(target.attrib['width'])
-                self.assertEqual(hit, int(target.attrib['height']))
-                # 390px phone: map is ~356px wide for a 400-unit viewBox, so hit >= 44px.
-                self.assertGreaterEqual(hit * 356 / 400, 44)
-                x, y = map(float, re.findall(r'[\d.]+', pin.attrib['transform']))
-                self.assertTrue(hit/2 <= x <= 400-hit/2 and hit/2 <= y <= height-hit/2)
-                for px, py in points:
-                    self.assertGreaterEqual(((x-px)**2 + (y-py)**2)**0.5, 32)
-                    self.assertTrue(abs(x-px) >= hit or abs(y-py) >= hit, f'{city}: hit areas overlap')
-                points.append((x, y))
-            self.assertIn('map-land', ET.tostring(canvas, encoding='unicode'))
-        self.assertIn('Han River', markup)
-        self.assertNotIn('map-district', markup)
-        self.assertIn('District not confirmed · off-map', markup)
-        templates = [a['id'] for tag, a in Elements(markup).elements if tag == 'template']
-        self.assertEqual(set(templates), {'preview-' + s for s in self.by_slug})
+    def test_no_map_markup_or_view_toggle_on_any_page(self):
+        for path, page in self.site.pages.items():
+            with self.subTest(path=path):
+                for token in ('venue-map', 'district-map', 'data-map-city', 'data-pin=',
+                              'map-legend', 'map-selection', 'map-preview', 'map-heading',
+                              'map-view', 'map-tabs', 'map-zone', 'selected-venue',
+                              'Explore the map', 'Select a pin', 'Schematic map',
+                              'Map/List', 'data-view=', 'view-toggle', '<template id="preview-'):
+                    self.assertNotIn(token, page)
 
-    def test_seoul_districts_sit_on_their_side_of_the_han_river(self):
-        north = {'Jongno', 'Jung-gu', 'Yongsan', 'Mapo', 'Seodaemun', 'Eunpyeong', 'Seongdong', 'Gwangjin', 'Dongdaemun',
-                 'Jungnang', 'Seongbuk', 'Gangbuk', 'Dobong', 'Nowon'}
-        south = {'Gangseo', 'Yangcheon', 'Guro', 'Geumcheon', 'Yeongdeungpo', 'Dongjak', 'Gwanak', 'Seocho', 'Gangnam',
-                 'Songpa', 'Gangdong'}
-        _, slots, _, _ = B.map_lattice('seoul')
-        for key, points in slots.items():
-            self.assertIn(key, north | south)
-            for _, y in points:
-                # pin visual radius 11 must stay clear of the river line
-                self.assertTrue(y + 11 < B.MAP_RIVER_Y if key in north else y - 11 > B.MAP_RIVER_Y, key)
+    def test_all_regional_venues_remain_in_the_list_once(self):
+        for path in ('/', '/finder/'):
+            elements = Elements(self.site.pages[path]).elements
+            cards = [a for tag, a in elements if tag == 'article' and 'data-slug' in a]
+            self.assertEqual(len(cards), len(self.venues))
+            self.assertEqual({a['data-slug'] for a in cards}, set(self.by_slug))
+            self.assertTrue(all('hidden' not in a for a in cards))
+            for city in ('seoul', 'busan', 'jeju', 'gyeonggi'):
+                self.assertEqual({a['data-slug'] for a in cards if a['data-city'] == city},
+                                 {v['slug'] for v in self.venues if v['city_key'] == city})
 
-    # Approximate district-office longitudes for all 25 Seoul districts.
-    SEOUL_LON = {'Gangseo': 126.850, 'Yangcheon': 126.866, 'Guro': 126.888, 'Geumcheon': 126.896, 'Yeongdeungpo': 126.896,
-                 'Dongjak': 126.940, 'Gwanak': 126.952, 'Seocho': 127.033, 'Gangnam': 127.047, 'Songpa': 127.106,
-                 'Gangdong': 127.124, 'Eunpyeong': 126.929, 'Mapo': 126.902, 'Seodaemun': 126.937, 'Jongno': 126.979,
-                 'Jung-gu': 126.998, 'Yongsan': 126.990, 'Seongbuk': 127.017, 'Gangbuk': 127.026, 'Seongdong': 127.037,
-                 'Dongdaemun': 127.040, 'Dobong': 127.047, 'Nowon': 127.057, 'Jungnang': 127.093, 'Gwangjin': 127.082}
+    def test_city_filter_is_single_control_without_map_tabs(self):
+        for path in ('/', '/finder/'):
+            page = self.site.pages[path]
+            self.assertEqual(page.count('data-seg="city"'), 1)
+            group = re.search(r'<div class="seg" data-seg="city".*?</div>', page)[0]
+            self.assertEqual([a['data-v'] for tag, a in Elements(group).elements if tag == 'button'],
+                             ['', 'seoul', 'busan', 'jeju', 'gyeonggi'])
 
-    def test_seoul_pins_follow_real_west_to_east_order(self):
-        self.assertEqual(len(self.SEOUL_LON), 25)
-        _, slots, _, _ = B.map_lattice('seoul')
-        self.assertLessEqual(set(slots), set(self.SEOUL_LON))
-        canvas = re.search(r'<svg class="district-map" data-map-city="seoul".*?</svg>', B.venue_map(self.venues))[0]
-        xs = {}
-        for slug, tx in re.findall(r'data-pin="([^"]+)" transform="translate\(([\d.]+) ', canvas):
-            v = self.by_slug[slug]
-            loc = (v['location'] + ' ' + v['area']).lower()
-            key = next(k for k in slots if k.lower() in loc)
-            xs.setdefault(key, []).append(float(tx))
-        mean = {k: sum(v) / len(v) for k, v in xs.items()}
-        for a in mean:
-            for b in mean:
-                if self.SEOUL_LON[b] - self.SEOUL_LON[a] > 0.03:
-                    self.assertLess(mean[a], mean[b], f'{a} should be west of {b}')
-
-    def test_css_bounds_canvas_and_compacts_mobile_hero(self):
+    def test_css_removes_map_styles_and_compacts_mobile_hero(self):
         css = (ROOT / 'site/static/css/site.css').read_text()
-        canvas = re.search(r'\.district-map\{([^}]+)', css)[1]
-        self.assertIn('height:auto', canvas)
-        self.assertIn('max-width:460px', canvas)
+        for token in ('.map-', '#map-', '.venue-map', '.district-map', '.legend-pin',
+                      '.pin-', '.river-label', '.selected-venue'):
+            self.assertNotIn(token, css)
         self.assertIn('[hidden]{display:none!important}', css)
         mobile = css[css.rindex('@media(max-width:719px)'):]
         self.assertIn('.home-hero{padding:14px 16px;margin:10px 0 8px}', mobile)
-        self.assertNotIn('.map-regions{grid-template-columns:', css)
 
     def test_default_order_prioritizes_price_then_verification(self):
         elements = Elements(self.site.pages['/finder/']).elements
@@ -172,8 +121,8 @@ class Explorer(unittest.TestCase):
         self.assertIn(B.E(terms), page)
         self.assertIn('60 min from ₩45,000', page)
         self.assertIn('Family room, 2 people', page)
-        # List cards and map previews are headline-only (PR #62): full terms live on the venue page.
-        for output in (B.venue_card(repo), B.venue_contents(repo, preview=True)):
+        # List cards are headline-only (PR #62): full terms live on the venue page.
+        for output in (B.venue_card(repo), B.venue_contents(repo)):
             self.assertIn(B.price_short(repo), output)
             self.assertNotIn(B.E(terms), output)
 
@@ -285,16 +234,16 @@ class Explorer(unittest.TestCase):
             if key in ('Who can use', 'Non-guests'):
                 self.assertIn((key, value), rows)
                 self.assertIn(B.E(value), B.venue_facts(v))
-        self.assertNotIn('No. Hotel guests only.', B.venue_contents(v, preview=True))
+        self.assertNotIn('No. Hotel guests only.', B.venue_contents(v))
 
-    def test_sauna_package_fields_reach_cards_previews_and_glance(self):
+    def test_sauna_package_fields_reach_glance(self):
         packages = [v for v in self.venues if v['kind_key'] == 'sauna' and 'public_access' in B.FOREIGNER.get(v['slug'], {})]
         self.assertEqual(len(packages), 10)
         self.assertEqual(len(B.SAUNA_PKG_KEYS), 11)
         for v in packages:
             groups = dict(B.fact_groups(v))
             glance = self.site.pages[f'/finder/{v["slug"]}/'].split('id="glance-heading"', 1)[1].split('</section>', 1)[0]
-            outputs = (glance,)  # cards/previews are headline-only since PR #62
+            outputs = (glance,)  # list cards are headline-only since PR #62
             for key, label in B.SAUNA_PKG_KEYS:
                 with self.subTest(venue=v['slug'], key=key):
                     value = B.FOREIGNER[v['slug']][key]
@@ -365,12 +314,11 @@ class Explorer(unittest.TestCase):
             self.assertEqual(card.count('<dt>'), 0)  # headline-only list cards (PR #62)
             self.assertIn(B.price_short(v), card)
             self.assertNotIn('<table', card)
-            preview = B.venue_contents(v, preview=True)
-            self.assertIn(f'href="/finder/{v["slug"]}/"', preview)
-            self.assertIn(B.E(B.map_url(v)), preview)
-            self.assertIn(B.E(v['source']), preview)
-            self.assertIn(B.dot(v['last_verified']), preview)
+            self.assertIn(f'href="/finder/{v["slug"]}/"', card)
+            self.assertIn(B.E(v['source']), card)
+            self.assertIn(B.dot(v['last_verified']), card)
             page = self.site.pages[f'/finder/{v["slug"]}/']
+            self.assertIn(B.E(B.map_url(v)), page)
             self.assertLess(page.index('detail-actions'), page.index('detail-glance'))
             self.assertLess(page.index('detail-glance'), page.index('<table class="facts">'))
             if v['kind_key'] == 'sauna':
@@ -379,16 +327,12 @@ class Explorer(unittest.TestCase):
         self.assertIn('오래됨', B.v_badges(v))
 
     @unittest.skipUnless(shutil.which('node'), 'Node is needed for browser-free interaction checks')
-    def test_url_filters_canvas_sync_keyboard_selection_and_empty_results(self):
+    def test_url_filters_list_sorting_reset_and_empty_results_without_map(self):
         # Build the double from the real generated attributes so JS/data drift fails.
         page = self.site.pages['/finder/']
         elements = Elements(page).elements
         payload = {'script': (ROOT / 'site/static/js/finder.js').read_text(),
-                   'cards': [a for tag, a in elements if 'data-slug' in a],
-                   'maps': []}
-        for markup in re.findall(r'<svg class="district-map".*?</svg>', page):
-            attrs = Elements(markup).elements
-            payload['maps'].append({'attrs': attrs[0][1], 'pins': [a for _, a in attrs if 'data-pin' in a]})
+                   'elements': elements}
         run = subprocess.run(['node', '-e', JS_CHECKS], input=json.dumps(payload), text=True, capture_output=True, timeout=20)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn('interaction checks OK', run.stdout)
@@ -399,110 +343,113 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
 class Element {
-  constructor(attrs = {}, svg = false) {
-    this.attrs = {...attrs}; this.dataset = {}; this.children = []; this.events = {}; this.svg = svg;
-    this.textContent = ''; this.type = ''; this.value = ''; this.checked = false;
+  constructor(attrs = {}) {
+    this.attrs = {...attrs}; this.dataset = {}; this.children = []; this.events = {};
+    this.textContent = ''; this.type = attrs.type || ''; this.value = ''; this.checked = false;
     Object.entries(attrs).forEach(([key, val]) => { if (key.startsWith('data-')) this.dataset[key.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = val; });
-    this.classList = {toggle: (name, on) => { this[name] = on; }};
   }
-  get hidden() { return this.svg ? undefined : this.hasAttribute('hidden'); }
-  set hidden(value) { if (!this.svg) this.toggleAttribute('hidden', value); }
+  get hidden() { return this.hasAttribute('hidden'); }
+  set hidden(value) { if (value) this.attrs.hidden = ''; else delete this.attrs.hidden; }
   hasAttribute(key) { return key in this.attrs; }
   setAttribute(key, val) { this.attrs[key] = val; }
-  toggleAttribute(key, on) { if (on) this.attrs[key] = ''; else delete this.attrs[key]; }
   addEventListener(name, fn) { (this.events[name] ||= []).push(fn); }
   fire(name, props = {}) { (this.events[name] || []).forEach(fn => fn({preventDefault() {}, ...props})); }
-  replaceChildren() { this.children = []; }
   appendChild(node) { this.children = this.children.filter(n => n !== node); this.children.push(node); }
-  closest(selector) { return selector === '[data-map-city]' ? this.region : this.group; }
-  querySelectorAll(selector) { return this.children; }
-  focus() { focused = this; }
+  closest() { return this.group; }
+  querySelectorAll() { return this.children; }
   scrollIntoView() { throw new Error('Explorer must never force scrolling'); }
 }
-let focused;
-function boot(search = '') {
-  const ids = {};
-  ['finder-list','map-preview','map-selection','map-view','f-count','f-empty','f-more-count',
-   'f-sub','f-sort','f-q','f-sunday','f-price','f-hyrox','f-cf'].forEach(id => ids[id] = new Element());
-  ['price','hyrox','cf'].forEach(key => ids['f-' + key].type = 'checkbox');
-  const cards = input.cards.map(attrs => new Element(attrs));
-  cards.forEach(c => { ids['preview-' + c.dataset.slug] = {content: {cloneNode: () => ({slug: c.dataset.slug})}}; });
-  ids['finder-list'].children = cards.slice();
-  const regions = input.maps.map(m => { const region = new Element(m.attrs, true); region.children = m.pins.map(attrs => { const pin = new Element(attrs, true); pin.region = region; return pin; }); return region; });
-  const pins = regions.flatMap(r => r.children);
-  const buttons = [];
-  const addButtons = (groupName, values) => {
-    const group = new Element({'data-seg': groupName});
-    values.forEach(value => { const button = new Element({'data-v': value}); button.group = group; buttons.push(button); });
-  };
-  addButtons('city', ['', 'seoul', 'busan', 'jeju', 'gyeonggi']);
-  addButtons('city', ['', 'seoul', 'busan', 'jeju', 'gyeonggi']);
-  addButtons('type', ['', 'box', 'sauna']);
-  const form = new Element(), reset = new Element(); const window = new Element();
+function boot(search = '', missing = []) {
+  const ids = {}, cards = [], buttons = [], resets = [];
+  let form, group;
+  input.elements.forEach(([tag, attrs]) => {
+    if (missing.includes(attrs.id) || missing.includes(attrs.class)) return;
+    const el = new Element(attrs);
+    if (attrs.id) ids[attrs.id] = el;
+    if ('data-slug' in attrs) cards.push(el);
+    if ('data-reset' in attrs) resets.push(el);
+    if ('data-seg' in attrs) group = el;
+    if (tag === 'button' && 'data-v' in attrs) { el.group = group; buttons.push(el); }
+    if (attrs.class === 'filters') form = el;
+  });
+  if (ids['finder-list']) ids['finder-list'].children = cards.slice();
+  const window = new Element();
   const location = {pathname: '/finder/', search, hash: '#main'};
-  const history = {replaceState(a, b, url) { const parsed = new URL(url, 'https://example.invalid'); location.search = parsed.search; }};
-  const document = {getElementById: id => ids[id], createElement: () => new Element(),
+  const history = {replaceState(a, b, url) { const parsed = new URL(url, 'https://example.invalid'); location.search = parsed.search; location.hash = parsed.hash; }};
+  const document = {getElementById: id => ids[id] || null,
     querySelector: selector => selector === '.filters' ? form : null,
     querySelectorAll: selector => {
-      if (selector === '[data-pin]') return pins;
-      if (selector === '[data-map-city]') return regions;
-      if (selector === '[data-reset]') return [reset];
+      if (selector === '[data-reset]') return resets;
       if (selector === '[data-seg] button') return buttons;
-      const group = selector.match(/data-seg="(city|type)"/);
-      if (group) return buttons.filter(b => b.group.dataset.seg === group[1]);
+      const match = selector.match(/data-seg="(city|type)"/);
+      if (match) return buttons.filter(b => b.group.dataset.seg === match[1]);
       throw new Error('Unhandled selector: ' + selector);
     }};
   vm.runInNewContext(input.script, {document, window, location, history, URLSearchParams});
-  const active = () => regions.filter(r => !r.hasAttribute('hidden'));
   const visible = () => cards.filter(c => !c.hidden);
-  const clickCity = (city, index = 0) => buttons.filter(b => b.group.dataset.seg === 'city' && b.dataset.v === city)[index].fire('click');
+  const click = (name, value) => buttons.find(b => b.group.dataset.seg === name && b.dataset.v === value).fire('click');
   const change = (key, value) => { const field = ids['f-' + key]; if (field.type === 'checkbox') field.checked = value; else field.value = value; field.fire(key === 'q' ? 'input' : 'change'); };
-  return {ids, cards, pins, buttons, regions, active, visible, clickCity, change, reset, location, window};
+  const reset = () => resets[0].fire('click');
+  return {ids, cards, buttons, visible, click, change, reset, location, window, form};
 }
 const s = boot();
-assert.equal(s.active().length, 1); assert.equal(s.active()[0].dataset.mapCity, 'all');
-assert.equal(s.ids['map-selection']['has-selection'], false);
-assert.equal(s.ids['map-preview'].children.length, 0);
-assert.equal(s.visible().length, input.cards.length);
+assert.ok(s.cards.length > 0);
+assert.equal(s.visible().length, s.cards.length);
+assert.equal(s.ids['finder-list'].hidden, false);
+assert.equal(s.ids['f-empty'].hidden, true);
 for (const city of ['seoul','busan','jeju','gyeonggi','']) {
-  s.clickCity(city, 1); // basic filter -> map
-  assert.equal(s.active().length, 1); assert.equal(s.active()[0].dataset.mapCity, city || 'all');
-  assert.equal(s.visible().length, input.cards.filter(c => !city || c['data-city'] === city).length);
+  s.click('city', city);
+  assert.equal(s.visible().length, s.cards.filter(c => !city || c.dataset.city === city).length);
   s.buttons.filter(b => b.group.dataset.seg === 'city').forEach(b => assert.equal(b.attrs['aria-pressed'], String(b.dataset.v === city)));
-  const livePins = s.pins.filter(p => p.attrs.tabindex === '0');
-  assert.equal(livePins.length, s.visible().length);
-  assert.ok(livePins.every(p => !p.region.hasAttribute('hidden')));
 }
-s.clickCity('busan'); // map -> basic filter
-let pin = s.active()[0].children[0]; pin.fire('keydown', {key: 'Enter'});
-assert.equal(s.ids['map-selection']['has-selection'], true);
-assert.equal(s.ids['map-preview'].children[0].slug, pin.dataset.pin);
-pin.fire('keydown', {key: 'ArrowRight'}); assert.equal(focused, s.active()[0].children[1]);
-pin.fire('keydown', {key: 'End'}); assert.equal(focused, s.active()[0].children.at(-1));
-pin.fire('keydown', {key: 'Home'}); assert.equal(focused, pin);
+s.click('type', 'sauna');
+assert.equal(s.visible().length, s.cards.filter(c => c.dataset.type === 'sauna').length);
+s.change('sunday', 'yes');
+assert.equal(s.visible().length, s.cards.filter(c => c.dataset.type === 'sauna' && c.dataset.sunday === 'yes').length);
+s.reset();
+for (const key of ['cf', 'hyrox', 'price']) {
+  s.change(key, true);
+  assert.equal(s.visible().length, s.cards.filter(c => c.dataset[key] === '1').length);
+  s.reset();
+}
+s.change('q', '  BUSAN  ');
+assert.equal(s.visible().length, s.cards.filter(c => c.dataset.name.includes('busan')).length);
 s.change('q', 'no matching venue fixture');
 assert.equal(s.visible().length, 0); assert.equal(s.ids['f-empty'].hidden, false);
-assert.equal(s.ids['map-selection']['has-selection'], false);
 assert.equal(s.ids['f-count'].textContent, '0 places');
-s.reset.fire('click');
-assert.equal(s.visible().length, input.cards.length); assert.equal(s.active()[0].dataset.mapCity, 'all');
-assert.equal(s.ids['map-selection']['has-selection'], false);
+assert.equal(s.ids['finder-list'].hidden, false);
+s.reset();
+assert.equal(s.visible().length, s.cards.length);
+assert.equal(s.location.search, ''); assert.equal(s.location.hash, '#main');
 s.change('sub', 'hotel'); s.change('price', true); s.change('sort', 'name');
 assert.equal(s.ids['f-more-count'].textContent, '(3 applied)');
-assert.ok(s.visible().every(c => c.dataset.sub === 'hotel' && c.dataset.price === '1'));
+assert.equal(s.visible().length, s.cards.filter(c => c.dataset.sub === 'hotel' && c.dataset.price === '1').length);
 assert.ok(s.location.search.includes('sub=hotel'));
 const titles = s.ids['finder-list'].children.map(c => c.dataset.title);
 assert.deepEqual(titles, titles.slice().sort((a,b) => a.localeCompare(b, 'en')));
+s.reset();
+assert.deepEqual(s.ids['finder-list'].children, s.cards);
 const restored = boot('?city=seoul&type=sauna&price=1&sort=date');
-assert.equal(restored.active()[0].dataset.mapCity, 'seoul');
-assert.ok(restored.visible().every(c => c.dataset.city === 'seoul' && c.dataset.type === 'sauna' && c.dataset.price === '1'));
+assert.equal(restored.visible().length, restored.cards.filter(c => c.dataset.city === 'seoul' && c.dataset.type === 'sauna' && c.dataset.price === '1').length);
 assert.equal(restored.ids['f-more-count'].textContent, '(2 applied)');
-assert.equal(restored.ids['map-selection']['has-selection'], false);
+assert.equal(restored.ids['f-price'].checked, true);
+const dates = restored.ids['finder-list'].children.map(c => c.dataset.date);
+assert.deepEqual(dates, dates.slice().sort((a,b) => b.localeCompare(a)));
 restored.location.search = '?city=jeju'; restored.window.fire('popstate');
-assert.equal(restored.active()[0].dataset.mapCity, 'jeju');
+assert.equal(restored.visible().length, restored.cards.filter(c => c.dataset.city === 'jeju').length);
 assert.equal(restored.ids['f-more-count'].textContent, '');
 const invalid = boot('?city=invalid&sort=invalid&price=yes');
-assert.equal(invalid.active()[0].dataset.mapCity, 'all'); assert.equal(invalid.visible().length, input.cards.length);
+assert.equal(invalid.visible().length, invalid.cards.length);
+assert.equal(invalid.ids['f-sort'].value, '');
+let prevented = false;
+s.form.fire('submit', {preventDefault() { prevented = true; }});
+assert.equal(prevented, true);
+// The script must also tolerate absent containers and optional controls.
+boot('', ['finder-list']);
+const minimal = boot('?city=busan', ['filters', 'f-count', 'f-empty', 'f-more-count',
+  'f-sub', 'f-sort', 'f-q', 'f-sunday', 'f-price', 'f-hyrox', 'f-cf']);
+assert.equal(minimal.visible().length, minimal.cards.filter(c => c.dataset.city === 'busan').length);
+minimal.reset(); assert.equal(minimal.visible().length, minimal.cards.length);
 console.log('interaction checks OK');
 '''
 
@@ -510,18 +457,9 @@ if __name__ == '__main__':
     unittest.main()
 
 
-class AllKoreaZones(unittest.TestCase):
-    def test_all_korea_view_outlines_each_region_without_overlap(self):
-        zones = re.findall(r'<rect class="map-zone map-zone-(\w+)" x="(-?\d+)" y="(-?\d+)" width="(\d+)" height="(\d+)"', B.map_zones('all'))
-        self.assertEqual({z[0] for z in zones}, {'seoul', 'busan', 'jeju', 'gyeonggi'})
-        self.assertEqual(B.map_zones('seoul'), '')
-        boxes = [(k, int(x), int(y), int(x) + int(w), int(y) + int(h)) for k, x, y, w, h in zones]
-        for i, a in enumerate(boxes):
-            self.assertTrue(8 <= a[1] and a[3] <= 392, a)
-            for b in boxes[i + 1:]:
-                if a[0] != b[0]:
-                    self.assertFalse(a[1] < b[3] and b[1] < a[3] and a[2] < b[4] and b[2] < a[4], (a, b))
-        _, slots, _, _ = B.map_lattice('all')
-        for k, pts in slots.items():  # every pin sits inside one of its region's zones
-            for x, y in pts:
-                self.assertTrue(any(z[0] == k and z[1] < x < z[3] and z[2] < y < z[4] for z in boxes), (k, x, y))
+class NoMapHelpers(unittest.TestCase):
+    def test_schematic_helpers_and_data_are_removed(self):
+        for name in ('venue_map', 'map_zones', 'map_lattice', 'map_drawing', 'map_pin',
+                     'pin_glyph', 'city_tabs'):
+            self.assertFalse(hasattr(B, name), name)
+        self.assertFalse(any(name.startswith('MAP_') for name in vars(B)))
