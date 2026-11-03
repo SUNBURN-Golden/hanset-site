@@ -467,12 +467,22 @@ def venue_facts(v):
     return '<dl class="card-facts">' + "".join(groups) + '</dl>'
 
 
+SKETCH_DIR = ROOT / "static/venue-sketch"
+
+def venue_sketch(v, cls="venue-sketch", lazy=True):
+    """Hand-drawn venue illustration at static/venue-sketch/<venue_id>.(webp|svg|png); '' if none."""
+    for ext in ("webp", "svg", "png"):
+        if (SKETCH_DIR / f'{v["slug"]}.{ext}').exists():
+            return (f'<img class="{cls}" src="/assets/venue-sketch/{v["slug"]}.{ext}" width="1200" height="900"'
+                    f'{" loading=\"lazy\"" if lazy else ""} decoding="async" alt="Hand-drawn illustration of {E(v["title"])}">')
+    return ""
+
 def venue_contents(v):
     title = f'<a href="/finder/{v["slug"]}/">{E(v["title"])}</a>'
     footer = (f'<div class="meta">Checked {dot(v["last_verified"])} · Official reference '
               f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></div>')
     actions = f'<a class="card-details" href="/finder/{v["slug"]}/">Details &amp; facts →</a>'
-    return (f'{v_badges(v)}<h3>{title}</h3><div class="loc">{E(v["location"])}</div>{price_short(v)}'
+    return (f'{venue_sketch(v)}{v_badges(v)}<h3>{title}</h3><div class="loc">{E(v["location"])}</div>{price_short(v)}'
             + f'{footer}{actions}')
 
 def venue_card(v):
@@ -681,7 +691,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
         next_label = f'Next in this city: {E(nxt["title"])} ›' if same_city else f'Next: {E(nxt["title"])} ›'
         next_html = f'<p class="next-venue"><a href="/finder/{nxt["slug"]}/">{next_label}</a></p>'
         body = f'''<div class="detail"><p class="crumb"><a href="/finder/">{FINDER_LABEL}</a> › {E(v["city_ko"])}</p>
-{v_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{adnote}{stale}
+{venue_sketch(v, "venue-sketch venue-sketch-hero", lazy=False)}{v_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{adnote}{stale}
 <div class="btnrow detail-actions">{"".join(links)}</div>
 <section class="detail-glance" aria-labelledby="glance-heading"><h2 id="glance-heading">At a glance</h2>
 <div class="glance-grid"><div><h3>Price</h3>{price_html(v)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v)}</div>' for label, values in fact_groups(v))}</div>
@@ -959,6 +969,7 @@ def main():
         p = dist / path.lstrip("/") if path.endswith(".html") else dist / path.lstrip("/") / "index.html"
         p.parent.mkdir(parents=True, exist_ok=True); p.write_text(h, encoding="utf-8")
     (dist / "assets").mkdir(); shutil.copytree(ROOT / "static/css", dist / "assets/css"); shutil.copytree(ROOT / "static/js", dist / "assets/js"); shutil.copytree(ROOT / "static/img", dist / "assets/img")
+    if SKETCH_DIR.exists(): shutil.copytree(SKETCH_DIR, dist / "assets/venue-sketch")
     shutil.copy(ROOT / "static/favicon.svg", dist / "favicon.svg")
     for _f in (ROOT / "static/root").glob("*"):  # 루트 정적 파일(구글 서치콘솔 소유확인 등; 지우지 말 것)
         if _f.is_file(): shutil.copy(_f, dist / _f.name)
