@@ -90,6 +90,12 @@ explicit enablement, the KST hour 13, and a configured session-state path.
 Even an open gate makes no network or browser call. Never add session material
 to the checkout or logs.
 
+The optional [Tavily known-venue search add-on](IG_DAEMON.md) is ready for a
+future IG daemon search step. It loads credentials privately at runtime and
+enforces a separate persistent 30-request KST daily cap under `HANSET_IG_DIR`.
+It returns unverified leads only; the current broad discovery providers and
+paused Instagram connector are unchanged.
+
 ## Offline validation
 
 ```sh
