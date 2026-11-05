@@ -30,7 +30,7 @@ def test_robots_disallowed(bot,server,venue):
     assert [r['path'] for r in server.log]==['/robots.txt']
     assert bot.db.execute('SELECT state FROM sources').fetchone()[0]=='inaccessible'
 
-@pytest.mark.parametrize('status',[401,403,500,302])
+@pytest.mark.parametrize('status',[401,403,429,302])
 def test_robots_fail_closed(bot,server,status):
     server.add('/robots.txt','',status=status)
     assert bot.fetch(server.base+'/venue').outcome=='robots_disallowed'
@@ -168,7 +168,7 @@ def test_unreachable_robots_fails_closed(bot,server,monkeypatch):
     monkeypatch.setattr(bot.session,'get',unavailable)
     assert bot.fetch(server.base+'/venue').outcome=='robots_disallowed'
     assert len(server.log)==0
-    assert bot.db.execute('SELECT count(*) FROM request_log').fetchone()[0]==1
+    assert bot.db.execute('SELECT count(*) FROM request_log').fetchone()[0]==2
 
 def test_multi_page_fixture(bot,server):
     from hanset_active.extract.html import extract
@@ -186,10 +186,88 @@ def fake_http(bot,monkeypatch):
     routes={}; calls=[]
     def get(url,**kwargs):
         calls.append((url,kwargs))
-        status,headers,body=routes[url]
+        route=routes[url]
+        if isinstance(route,Exception):
+            raise route
+        status,headers,body=route
         return SimpleNamespace(status_code=status,headers=headers,iter_content=lambda _:iter([body]),close=lambda:None)
     monkeypatch.setattr(bot.session,'get',get)
     return routes,calls
+
+@pytest.mark.parametrize('http_status',[None,500,503])
+@pytest.mark.parametrize('https_status',[200,404])
+def test_http_robots_unavailable_upgrades_to_https(bot,fake_http,venue,http_status,https_status):
+    import requests
+    routes,calls=fake_http
+    origin='http://www.example-sauna.test'
+    secure='https://www.example-sauna.test'
+    path='/visit?day=sunday'
+    routes[origin+'/robots.txt']=(http_status,{},b'') if http_status else requests.ConnectionError('offline fixture failure')
+    routes[secure+'/robots.txt']=(https_status,{'Content-Type':'text/plain'},b'User-agent: *\nAllow: /' if https_status==200 else b'')
+    routes[secure+path]=(200,{'Content-Type':'text/html'},venue)
+    bot.settings.min_interval=5
+    result=bot.fetch(origin+path)
+    assert result.ok and result.url==secure+path
+    assert [c[0] for c in calls]==list(routes)
+    assert bot.clock.elapsed==10
+    assert not bot._stopped
+    assert not bot.db.execute("SELECT 1 FROM sources WHERE state='inaccessible'").fetchone()
+    assert not bot.db.execute('SELECT 1 FROM failures').fetchone()
+    # Both in-memory and persisted robots results retain the upgrade decision.
+    assert bot.fetch(origin+path).ok
+    bot._robots.clear()
+    assert bot.fetch(origin+path).ok
+    assert [c[0] for c in calls]==list(routes)+[secure+path]*2
+    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='aux'").fetchone()[0]==2
+    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0]==3
+    assert bot.session.headers['User-Agent']==USER_AGENT
+
+@pytest.mark.parametrize('status,body',[(401,b''),(403,b''),(429,b''),(500,b''),
+    (200,b'User-agent: *\nDisallow: /'),(200,b'<h1>Captcha</h1>'),(404,b'<h1>Verify you are human</h1>')])
+def test_https_upgrade_robots_still_fail_closed(bot,fake_http,status,body):
+    routes,calls=fake_http
+    routes['http://example-sauna.test/robots.txt']=(500,{},b'')
+    routes['https://example-sauna.test/robots.txt']=(status,{'Content-Type':'text/plain'},body)
+    result=bot.fetch('http://example-sauna.test/visit')
+    assert result.outcome==result.reason=='robots_disallowed'
+    assert [c[0] for c in calls]==list(routes)
+    assert bot.db.execute('SELECT state,reason FROM sources').fetchone()[:]==('inaccessible','robots_disallowed')
+    assert bot.fetch('http://example-sauna.test/other').outcome=='blocked'
+    assert len(calls)==2
+
+@pytest.mark.parametrize('status,body',[(401,b''),(403,b''),(429,b''),
+    (200,b'User-agent: *\nDisallow: /'),(200,b'<h1>Captcha</h1>')])
+def test_http_robots_disallow_never_probes_https(bot,fake_http,status,body):
+    routes,calls=fake_http
+    routes['http://example-sauna.test/robots.txt']=(status,{'Content-Type':'text/plain'},body)
+    assert bot.fetch('http://example-sauna.test/visit').outcome=='robots_disallowed'
+    assert [c[0] for c in calls]==list(routes)
+
+def test_https_upgrade_respects_request_caps(bot,fake_http):
+    routes,calls=fake_http
+    bot.settings.aux_cap=1
+    routes['http://example-sauna.test/robots.txt']=(500,{},b'')
+    assert bot.fetch('http://example-sauna.test/visit').outcome=='cap_reached'
+    assert [c[0] for c in calls]==list(routes)
+    assert not bot._stopped
+    assert not bot.db.execute('SELECT 1 FROM sources').fetchone()
+
+def test_https_upgrade_respects_denylist(bot,fake_http,monkeypatch):
+    routes,calls=fake_http
+    routes['http://example-sauna.test/robots.txt']=(500,{},b'')
+    original=bot._reason_denied
+    monkeypatch.setattr(bot,'_reason_denied',lambda url:'denied host' if url.startswith('https:') else original(url))
+    assert bot.fetch('http://example-sauna.test/visit').outcome=='denied'
+    assert [c[0] for c in calls]==list(routes)
+
+def test_https_upgrade_only_probes_once_after_redirect(bot,fake_http):
+    routes,calls=fake_http
+    routes['http://example-sauna.test/robots.txt']=(500,{},b'')
+    routes['https://example-sauna.test/robots.txt']=(200,{},b'User-agent: *\nAllow: /')
+    routes['https://example-sauna.test/visit']=(302,{'Location':'http://other-sauna.test/visit'},b'')
+    routes['http://other-sauna.test/robots.txt']=(500,{},b'')
+    assert bot.fetch('http://example-sauna.test/visit').outcome=='robots_disallowed'
+    assert [c[0] for c in calls]==list(routes)
 
 def test_robots_same_site_redirect_budget_spacing(bot,fake_http,venue):
     routes,calls=fake_http

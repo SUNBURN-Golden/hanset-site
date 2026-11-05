@@ -2,6 +2,7 @@ from datetime import timedelta
 import json
 import pytest
 from hanset_active.cli import main
+from hanset_active.db import deterministic_id
 from hanset_active.maintenance import prune_offsite_followups, requeue_robots_trials
 from hanset_active.runner import run, fail_task
 from hanset_active.executor import TaskFailure
@@ -53,13 +54,13 @@ def test_prune_cli(bot,capsys):
     assert main(args+['prune-followups','--apply'])==0
     assert json.loads(capsys.readouterr().out)['total']==0
 
-def dead_trial(bot,status=None, *, expired=True,attempts=1,domain='example.com'):
+def dead_trial(bot,status=None, *, expired=True,attempts=1,domain='example.com',scheme='https'):
     now=kst_now(bot.clock)
     with bot.db:
         bot.db.execute('INSERT INTO seed_domains VALUES (?,?,?,?)',(domain,'fixture',domain,now.isoformat()))
-        bot.db.execute("INSERT INTO sources(source_id,domain,state,reason) VALUES (?,?,'inaccessible','robots_disallowed')",(domain,domain))
-        bot.db.execute('INSERT INTO robots_cache VALUES (?,?,?,?,?,?,?)',('https://'+domain,'User-agent: *\nDisallow: /',status,(now-timedelta(days=2)).isoformat(),(now+timedelta(days=-1 if expired else 1)).isoformat(),int(status==200),'robots unavailable'))
-    tid=enqueue(bot.db,kind='trial',url='https://'+domain,clock=bot.clock)
+        bot.db.execute("INSERT INTO sources(source_id,domain,state,reason) VALUES (?,?,'inaccessible','robots_disallowed')",(deterministic_id(domain),domain))
+        bot.db.execute('INSERT INTO robots_cache VALUES (?,?,?,?,?,?,?)',(scheme+'://'+domain,'User-agent: *\nDisallow: /',status,(now-timedelta(days=2)).isoformat(),(now+timedelta(days=-1 if expired else 1)).isoformat(),int(status==200),'robots unavailable'))
+    tid=enqueue(bot.db,kind='trial',url=scheme+'://'+domain,clock=bot.clock)
     task=dict(bot.db.execute('SELECT * FROM tasks WHERE task_id=?',(tid,)).fetchone())
     task['attempts']=attempts-1
     fail_task(bot.db,task,TaskFailure('robots_disallowed',terminal=True),clock=bot.clock)
@@ -96,6 +97,77 @@ def test_requeue_three_retry_domain_limit(bot):
         bot.db.execute("UPDATE sources SET state='inaccessible',reason='robots_disallowed'"); bot.db.commit()
     assert requeue_robots_trials(bot.db,clock=bot.clock)==[]
     assert bot.db.execute("SELECT attempts FROM failures WHERE reason='robots_unavailable_retry'").fetchone()[0]==3
+
+@pytest.mark.parametrize('status',[None,500,503])
+@pytest.mark.parametrize('expired',[False,True])
+def test_requeue_https_upgrade_once_after_retry_cap(bot,status,expired):
+    domain='example-sauna.test'
+    tid=dead_trial(bot,status,expired=expired,attempts=4,domain=domain,scheme='http')
+    now=kst_now(bot.clock).isoformat()
+    with bot.db:
+        bot.db.execute("INSERT INTO failures(failure_id,task_id,url,domain,reason,state,attempts,created_at) VALUES (?,?,?,?,'robots_unavailable_retry','resolved',3,?)",
+            ('retry-audit',tid,'http://'+domain,domain,now))
+    # Multiple dead trial URLs must share one upgrade allowance.
+    other=enqueue(bot.db,kind='trial',url='http://'+domain+'/other',clock=bot.clock)
+    fail_task(bot.db,dict(bot.db.execute('SELECT * FROM tasks WHERE task_id=?',(other,)).fetchone()),TaskFailure('robots_disallowed',terminal=True),clock=bot.clock)
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[domain]
+    pending=bot.db.execute("SELECT * FROM tasks WHERE state='pending'").fetchall()
+    assert len(pending)==1 and pending[0]['next_at']==now
+    assert bot.db.execute('SELECT state,reason FROM sources').fetchone()[:]==('candidate','https_upgrade_retry')
+    audit=bot.db.execute("SELECT * FROM failures WHERE reason='https_upgrade_retry'").fetchone()
+    assert audit['domain']==domain and audit['attempts']==1
+    assert bot.db.execute("SELECT attempts FROM failures WHERE reason='robots_unavailable_retry'").fetchone()[0]==3
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[]
+    fail_task(bot.db,dict(pending[0]),TaskFailure('robots_disallowed',terminal=True),clock=bot.clock)
+    with bot.db:
+        bot.db.execute("UPDATE sources SET state='inaccessible',reason='robots_disallowed'")
+        # Resolution and robots expiry must not reset the domain-wide marker.
+        bot.db.execute("UPDATE failures SET state='resolved' WHERE reason='https_upgrade_retry'")
+    bot.clock.sleep(3*86400)
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[]
+    assert bot.db.execute("SELECT count(*) FROM failures WHERE reason='https_upgrade_retry'").fetchone()[0]==1
+
+@pytest.mark.parametrize('status',[200,401,403,429,301])
+def test_https_upgrade_requeue_only_for_unavailable_http(bot,status):
+    tid=dead_trial(bot,status,attempts=4,domain='example-sauna.test',scheme='http')
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[]
+    assert bot.db.execute('SELECT state FROM tasks WHERE task_id=?',(tid,)).fetchone()[0]=='dead'
+    assert not bot.db.execute("SELECT 1 FROM failures WHERE reason='https_upgrade_retry'").fetchone()
+
+def test_run_reopens_http_trial_and_fetches_https(bot,monkeypatch):
+    from types import SimpleNamespace
+    domain='example-sauna.test'
+    tid=dead_trial(bot,500,expired=False,attempts=4,domain=domain,scheme='http')
+    bot._stopped[domain]='robots_disallowed'
+    routes={
+        'https://'+domain+'/robots.txt':b'User-agent: *\nAllow: /',
+        'https://'+domain:('<title>Example Sauna</title><main>'+('Sauna spa venue open daily in Seoul. '*8)+'</main>').encode(),
+    }
+    calls=[]
+    def get(url,**kwargs):
+        calls.append(url)
+        body=routes[url]
+        return SimpleNamespace(status_code=200,headers={'Content-Type':'text/plain' if url.endswith('robots.txt') else 'text/html'},
+            iter_content=lambda _:iter([body]),close=lambda:None)
+    monkeypatch.setattr(bot.session,'get',get)
+    assert run(bot,max_requests=2,initialize=False,providers=[])['requests']==2
+    assert calls==list(routes)
+    assert bot.db.execute('SELECT state FROM tasks WHERE task_id=?',(tid,)).fetchone()[0]=='done'
+    assert bot.db.execute('SELECT state FROM sources').fetchone()[0]!='inaccessible'
+    assert domain not in bot._stopped
+    assert bot.db.execute("SELECT state FROM failures WHERE reason='https_upgrade_retry'").fetchone()[0]=='resolved'
+
+@pytest.mark.parametrize('seed',[False,True])
+def test_https_upgrade_requeue_requires_seed_and_latest_http(bot,seed):
+    domain='example-sauna.test'
+    dead_trial(bot,500,attempts=4,domain=domain,scheme='http')
+    now=kst_now(bot.clock)
+    with bot.db:
+        if not seed:
+            bot.db.execute('DELETE FROM seed_domains')
+        else:
+            bot.db.execute('INSERT INTO robots_cache VALUES (?,?,?,?,?,?,?)',('https://'+domain,'',403,now.isoformat(),(now-timedelta(seconds=1)).isoformat(),0,'robots unavailable'))
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[]
 
 def test_run_maintains_queue_before_requests(bot):
     tid=dead_trial(bot,301)

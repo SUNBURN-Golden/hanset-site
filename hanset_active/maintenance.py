@@ -1,6 +1,7 @@
 """Conservative, auditable queue repair without requests or row deletion."""
 from collections import Counter
 from datetime import datetime
+from urllib.parse import urlsplit
 from .db import deterministic_id
 from .util.followups import allows_followup, portal_domains, FOCUSED_STRATEGIES
 from .util.timeutil import kst_now
@@ -22,7 +23,7 @@ def prune_offsite_followups(db, clock=None, apply=False):
         'by_discovered_via':dict(Counter(r['discovered_via'] for r in rows))}
 
 def requeue_robots_trials(db, clock=None):
-    """Reopen one seed trial after transient robots expiry, at most three times."""
+    """Reopen expired transient failures, plus one HTTP-to-HTTPS upgrade trial."""
     now=kst_now(clock); latest={}; reopened=[]
     seeds={r[0] for r in db.execute('SELECT DISTINCT domain FROM seed_domains')}
     for row in db.execute('SELECT * FROM robots_cache'):
@@ -32,7 +33,11 @@ def requeue_robots_trials(db, clock=None):
     with db:
         for domain,row in latest.items():
             status=row['status']
-            if datetime.fromisoformat(row['expires_at'])>=now or not (status is None or status==429 or 500<=status<600 or status in (301,302,303,307,308)): continue
+            # Cached HTTP unavailability can be reused by the HTTPS fallback;
+            # this one-time migration need not wait for expiry or retry budget.
+            upgrade_retry=(urlsplit(row['origin']).scheme=='http' and (status is None or 500<=status<600)
+                and not db.execute("SELECT 1 FROM failures WHERE domain=? AND reason='https_upgrade_retry'",(domain,)).fetchone())
+            if not upgrade_retry and (datetime.fromisoformat(row['expires_at'])>=now or not (status is None or status==429 or 500<=status<600 or status in (301,302,303,307,308))): continue
             source=db.execute("SELECT * FROM sources WHERE domain=? AND state='inaccessible' AND reason='robots_disallowed'",(domain,)).fetchone()
             if not source: continue
             if db.execute("SELECT 1 FROM tasks WHERE domain=? AND kind='trial' AND state IN ('pending','running')",(domain,)).fetchone(): continue
@@ -41,15 +46,16 @@ def requeue_robots_trials(db, clock=None):
             attempts=db.execute("SELECT max(max(attempts,repeat_failures)) FROM tasks WHERE domain=? AND kind='trial'",(domain,)).fetchone()[0] or 0
             retries=db.execute("SELECT coalesce(max(attempts),0) FROM failures WHERE domain=? AND reason='robots_unavailable_retry'",(domain,)).fetchone()[0]
             retries=max(retries,attempts-1)
-            if retries>=3: continue
+            if retries>=3 and not upgrade_retry: continue
+            reason='https_upgrade_retry' if upgrade_retry else 'robots_unavailable_retry'
             stamp=now.isoformat()
             # Preserve the initial failure plus this retry even if the run
             # stops before execution. Audit counts also cover other trial URLs.
             db.execute("UPDATE tasks SET state='pending',next_at=?,lease_until=NULL,updated_at=?,repeat_failures=? WHERE task_id=?",(stamp,stamp,retries+2,task['task_id']))
             # Candidate state forces a fresh relevance trial after robots succeeds.
-            db.execute("UPDATE sources SET state='candidate',reason='robots_unavailable_retry',next_at=? WHERE domain=?",(stamp,domain))
-            db.execute("INSERT INTO failures(failure_id,task_id,url,domain,reason,state,attempts,next_at,created_at) VALUES (?,?,?,?,'robots_unavailable_retry','pending',?,?,?) ON CONFLICT(task_id,url,reason) DO UPDATE SET attempts=excluded.attempts,state='pending',next_at=excluded.next_at",
-                (deterministic_id(task['task_id'],'robots_unavailable_retry'),task['task_id'],task['url'],domain,retries+1,stamp,stamp))
+            db.execute("UPDATE sources SET state='candidate',reason=?,next_at=? WHERE domain=?",(reason,stamp,domain))
+            db.execute("INSERT INTO failures(failure_id,task_id,url,domain,reason,state,attempts,next_at,created_at) VALUES (?,?,?,?,?,'pending',?,?,?) ON CONFLICT(task_id,url,reason) DO UPDATE SET attempts=excluded.attempts,state='pending',next_at=excluded.next_at",
+                (deterministic_id(task['task_id'],reason),task['task_id'],task['url'],domain,reason,1 if upgrade_retry else retries+1,stamp,stamp))
             reopened.append(domain)
     return reopened
 

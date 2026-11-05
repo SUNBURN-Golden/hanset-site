@@ -168,7 +168,8 @@ class Fetcher:
                     self.db.execute('INSERT INTO request_log(url,domain,ts,status,kind,bytes) VALUES (?,?,?,?,?,?)',args)
                     self.db.execute('INSERT INTO fetch_log(url,domain,ts,status,kind,bytes) VALUES (?,?,?,?,?,?)',args)
             return response,body,reason
-    def _robots_allowed(self,url):
+    def _robots_allowed(self,url, *, mark_inaccessible=True):
+        # fetch() defers the domain stop while considering one HTTPS origin.
         p=urlsplit(url)
         origin=p.scheme+'://'+p.netloc
         domain=registrable_domain(url)
@@ -176,7 +177,7 @@ class Fetcher:
         with self._lock(domain):
             cached=self._robots.get(origin)
             if cached and cached[0]>now:
-                parser,allowed=cached[1:]
+                parser,allowed,status=cached[1:]
             else:
                 with self._guard:
                     row=self.db.execute('SELECT * FROM robots_cache WHERE origin=?',(origin,)).fetchone()
@@ -200,8 +201,9 @@ class Fetcher:
                     if error=='cap_reached':
                         return False,'cap_reached'
                     allowed=not error and (status==200 or (status is not None and 400<=status<500 and status not in (401,403,429)))
-                    body=strip_pii(raw.decode('utf-8',errors='replace')) if status==200 else ''
-                    if status==200 and re.search('just a moment|captcha|verify you are human',body,re.I):
+                    decoded=strip_pii(raw.decode('utf-8',errors='replace'))
+                    body=decoded if status==200 else ''
+                    if re.search('just a moment|captcha|verify you are human',decoded,re.I):
                         allowed=False
                     now=self.clock.now(); expires=now+timedelta(hours=24)
                     with self._guard,self.db:
@@ -210,9 +212,12 @@ class Fetcher:
                 parser.parse(body.splitlines() if allowed else ['User-agent: *','Disallow: /'])
                 delay=parser.crawl_delay(USER_AGENT) or parser.crawl_delay('*') or 0
                 self._delay[domain]=max(self._delay.get(domain,0),delay)
-                self._robots[origin]=(expires,parser,allowed)
+                self._robots[origin]=(expires,parser,allowed,status)
             if not allowed or not parser.can_fetch(USER_AGENT,url):
-                self._inaccessible(domain,'robots_disallowed')
+                if mark_inaccessible:
+                    self._inaccessible(domain,'robots_disallowed')
+                elif status is None or 500<=status<600:
+                    return False,'robots_unavailable'
                 return False,'robots_disallowed'
             return True,''
     def fetch(self,url: str, *, kind: str = 'body', parent_url: str | None = None, task_id: str | None = None, discovered_via: str | None = None, _browser_shell: bool = False, api_headers: dict | None = None) -> FetchResult:
@@ -234,6 +239,7 @@ class Fetcher:
         auth_origin=(urlsplit(url).scheme,urlsplit(url).netloc)
         if api_headers and (kind!='api' or set(api_headers)!={'X-Subscription-Token'}):
             raise ValueError('Only scoped search API authentication is supported')
+        https_probed=False
         for hop in range(6):
             reason=self._reason_denied(url)
             if reason:
@@ -242,9 +248,21 @@ class Fetcher:
             with self._lock(domain):
                 if domain in self._stopped:
                     return result('blocked',self._stopped[domain])
-                allowed,reason=self._robots_allowed(url)
+                allowed,reason=self._robots_allowed(url,mark_inaccessible=False)
+                if not allowed and reason=='robots_unavailable' and urlsplit(url).scheme=='http' and not https_probed:
+                    https_probed=True
+                    upgraded=canonicalize(urlsplit(url)._replace(scheme='https').geturl())
+                    denied=self._reason_denied(upgraded)
+                    if denied:
+                        return result('denied',denied)
+                    allowed,reason=self._robots_allowed(upgraded,mark_inaccessible=False)
+                    if allowed:
+                        url=upgraded
                 if not allowed:
-                    return result('cap_reached' if reason=='cap_reached' else 'robots_disallowed',reason)
+                    if reason=='cap_reached':
+                        return result('cap_reached',reason)
+                    self._inaccessible(domain,'robots_disallowed')
+                    return result('robots_disallowed','robots_disallowed')
                 response,body,error=self._request(url,kind,headers=api_headers if (urlsplit(url).scheme,urlsplit(url).netloc)==auth_origin else None)
                 if error:
                     return result('cap_reached' if error=='cap_reached' else 'error',error)
