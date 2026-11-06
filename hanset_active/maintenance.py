@@ -22,14 +22,28 @@ def prune_offsite_followups(db, clock=None, apply=False):
     return {'total':len(rows),'by_domain':dict(Counter(r['domain'] for r in rows)),
         'by_discovered_via':dict(Counter(r['discovered_via'] for r in rows))}
 
-def requeue_robots_trials(db, clock=None):
-    """Reopen expired transient failures, plus one HTTP-to-HTTPS upgrade trial."""
-    now=kst_now(clock); latest={}; reopened=[]
+def _latest_seed_robots(db):
+    latest={}
     seeds={r[0] for r in db.execute('SELECT DISTINCT domain FROM seed_domains')}
     for row in db.execute('SELECT * FROM robots_cache'):
         domain=registrable_domain(row['origin'])
         if domain in seeds and (domain not in latest or datetime.fromisoformat(row['fetched_at'])>datetime.fromisoformat(latest[domain]['fetched_at'])):
             latest[domain]=row
+    return latest
+
+def _robots_permits(row, url):
+    """Cached origin was fetchable and its robots.txt allows this URL."""
+    if not row['allowed']: return False
+    from urllib.robotparser import RobotFileParser
+    from .fetcher import USER_AGENT
+    parser=RobotFileParser()
+    parser.parse((row['body'] or '').splitlines())
+    return bool(parser.can_fetch(USER_AGENT, url))
+
+def requeue_robots_trials(db, clock=None):
+    """Reopen expired transient failures, plus one HTTP-to-HTTPS upgrade trial."""
+    now=kst_now(clock); reopened=[]
+    latest=_latest_seed_robots(db)
     with db:
         for domain,row in latest.items():
             status=row['status']
@@ -56,6 +70,40 @@ def requeue_robots_trials(db, clock=None):
             db.execute("UPDATE sources SET state='candidate',reason=?,next_at=? WHERE domain=?",(reason,stamp,domain))
             db.execute("INSERT INTO failures(failure_id,task_id,url,domain,reason,state,attempts,next_at,created_at) VALUES (?,?,?,?,?,'pending',?,?,?) ON CONFLICT(task_id,url,reason) DO UPDATE SET attempts=excluded.attempts,state='pending',next_at=excluded.next_at",
                 (deterministic_id(task['task_id'],reason),task['task_id'],task['url'],domain,reason,1 if upgrade_retry else retries+1,stamp,stamp))
+            reopened.append(domain)
+    return reopened
+
+# One domain-level reopen. The task then uses the normal non-terminal attempt cap.
+SPA_SHELL_RETRY_LIMIT=1
+
+def requeue_spa_shell_trials(db, clock=None):
+    """Reopen one dead empty_body seed trial when the latest robots cache allows it.
+
+    Recorded as spa_shell_retry and not repeated for that domain. Attempts reset
+    so the reopen gets the normal retry cap. Inaccessible sources and disallowed
+    robots are left alone.
+    """
+    now=kst_now(clock); reopened=[]
+    latest=_latest_seed_robots(db)
+    with db:
+        for domain,row in latest.items():
+            if db.execute("SELECT 1 FROM tasks WHERE domain=? AND kind='trial' AND state IN ('pending','running')",(domain,)).fetchone(): continue
+            task=db.execute("SELECT * FROM tasks WHERE domain=? AND kind='trial' ORDER BY updated_at DESC,created_at DESC,task_id LIMIT 1",(domain,)).fetchone()
+            if not task or task['state']!='dead' or not _robots_permits(row, task['url']): continue
+            death=db.execute("SELECT reason FROM failures WHERE task_id=? AND state='dead' ORDER BY created_at DESC,failure_id DESC LIMIT 1",(task['task_id'],)).fetchone()
+            if not death or death['reason']!='empty_body': continue
+            retries=db.execute("SELECT coalesce(max(attempts),0) FROM failures WHERE domain=? AND reason='spa_shell_retry'",(domain,)).fetchone()[0]
+            if retries>=SPA_SHELL_RETRY_LIMIT: continue
+            source=db.execute('SELECT state FROM sources WHERE domain=?',(domain,)).fetchone()
+            if source and source['state']=='inaccessible': continue
+            reason='spa_shell_retry'
+            stamp=now.isoformat()
+            # Previous attempts never rendered. Start one normal retry cycle.
+            db.execute("UPDATE tasks SET state='pending',attempts=0,repeat_failures=0,next_at=?,lease_until=NULL,updated_at=? WHERE task_id=?",(stamp,stamp,task['task_id']))
+            if source and source['state']=='candidate':
+                db.execute("UPDATE sources SET reason=?,next_at=? WHERE domain=?",(reason,stamp,domain))
+            db.execute("INSERT INTO failures(failure_id,task_id,url,domain,reason,state,attempts,next_at,created_at) VALUES (?,?,?,?,?,'pending',?,?,?) ON CONFLICT(task_id,url,reason) DO UPDATE SET attempts=excluded.attempts,state='pending',next_at=excluded.next_at",
+                (deterministic_id(task['task_id'],reason),task['task_id'],task['url'],domain,reason,1,stamp,stamp))
             reopened.append(domain)
     return reopened
 

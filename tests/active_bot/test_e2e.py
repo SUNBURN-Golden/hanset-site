@@ -149,6 +149,51 @@ def test_browser_fallback_and_terminal(bot,server,monkeypatch):
     assert bot.db.execute("SELECT state FROM tasks WHERE url LIKE '%/blocked'").fetchone()[0]=='dead'
 
 
+def test_trial_spa_shell_uses_browser_and_text_trial_does_not(bot,server,monkeypatch):
+    from hanset_active.extract import browser
+    from hanset_active.extract.html import extract
+    from hanset_active.fetcher import FetchResult, detect_outcome
+    shell='<div id="app"></div><script src="x"></script>'
+    thin='<div id="app"><main>'+('Sauna spa hotel day pass information for guests. '*2)+'</main></div><script src="x"></script>'
+    blank='<main></main>'
+    plain=page()
+    # 80–199 chars of main text is outcome ok but still an app shell. Trials
+    # must not pay for that render; only an empty_body shell does.
+    assert detect_outcome(shell.encode(),'text/html',200)=='empty_body' and browser.needs_browser(shell)
+    assert detect_outcome(thin.encode(),'text/html',200)=='ok' and browser.needs_browser(thin) and 80<=len(extract(thin)['text'])<200
+    assert detect_outcome(blank.encode(),'text/html',200)=='empty_body' and not browser.needs_browser(blank)
+    assert detect_outcome(plain.encode(),'text/html',200)=='ok' and not browser.needs_browser(plain)
+    seen=[]
+    def render(fetcher,url):
+        seen.append(url)
+        return FetchResult(url,'ok',status=200,content=plain.encode(),content_type='text/html',fetch_method='browser')
+    monkeypatch.setattr(browser,'fetch',render)
+    server.add('/app',shell)
+    server.add('/thin',thin)
+    server.add('/thin-fetch',thin)
+    server.add('/blank',blank)
+    server.add('/venue',plain)
+    enqueue(bot.db,kind='trial',url=server.base+'/app')
+    enqueue(bot.db,kind='trial',url=server.base+'/thin')
+    enqueue(bot.db,kind='fetch',url=server.base+'/thin-fetch')
+    enqueue(bot.db,kind='trial',url=server.base+'/blank')
+    enqueue(bot.db,kind='trial',url=server.base+'/venue')
+    run(bot,max_requests=20,max_minutes=1,providers=[],initialize=False)
+    assert set(seen)=={server.base+'/app',server.base+'/thin-fetch'}
+    methods={r['url']:r['fetch_method'] for r in bot.db.execute('SELECT url,fetch_method FROM raw_documents')}
+    assert methods[server.base+'/app']=='browser'
+    assert methods[server.base+'/thin-fetch']=='browser'
+    assert methods[server.base+'/thin']=='http'
+    assert methods[server.base+'/venue']=='http'
+    assert server.base+'/blank' not in methods
+    states={r['url']:r['state'] for r in bot.db.execute('SELECT url,state FROM tasks')}
+    assert states[server.base+'/app']=='done'
+    assert states[server.base+'/thin']=='done'
+    assert states[server.base+'/thin-fetch']=='done'
+    assert states[server.base+'/venue']=='done'
+    assert states[server.base+'/blank']=='failed'
+
+
 def test_kill_resume(bot,server,tmp_path):
     server.add('/venue',page())
     tid=enqueue(bot.db,kind='fetch',url=server.base+'/venue')
