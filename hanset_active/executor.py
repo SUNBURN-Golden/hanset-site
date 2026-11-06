@@ -94,9 +94,13 @@ class Executor:
         result = self._original_fetch(url, kind=kind, _browser_shell=True,
             parent_url=task.get('parent_url'), task_id=task.get('task_id'),
             discovered_via=task.get('discovered_via'), **kwargs)
-        if task.get('kind')!='trial' and result.outcome in ('ok', 'empty_body') and 'html' in result.content_type and browser.needs_browser(result.content):  # browser subrequests are budgeted: not for cheap trials
-            # A blocked/login response never reaches this branch. Only one
-            # rendered attempt is allowed, with every subrequest budgeted.
+        # Browser subrequests are budgeted. A blocked or login response never
+        # reaches this branch. Cheap trials skip the renderer when the HTML
+        # already has text; an empty SPA shell still gets one render.
+        trial = task.get('kind') == 'trial'
+        if (result.outcome in ('ok', 'empty_body') and 'html' in result.content_type
+                and (not trial or result.outcome == 'empty_body')
+                and browser.needs_browser(result.content)):
             result = browser.fetch(self.fetcher, result.url)
         if result.ok:
             raw_id = self.process(result)
