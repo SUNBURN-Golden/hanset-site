@@ -3,7 +3,7 @@ import json
 import pytest
 from hanset_active.cli import main
 from hanset_active.db import deterministic_id
-from hanset_active.maintenance import prune_offsite_followups, requeue_robots_trials, requeue_spa_shell_trials
+from hanset_active.maintenance import prune_offsite_followups, requeue_browser_aux_softfail_trials, requeue_robots_trials, requeue_spa_shell_trials
 from hanset_active.runner import run, fail_task
 from hanset_active.executor import TaskFailure
 from hanset_active.scheduler import enqueue
@@ -113,9 +113,12 @@ def test_requeue_https_upgrade_once_after_retry_cap(bot,status,expired):
     assert requeue_robots_trials(bot.db,clock=bot.clock)==[domain]
     pending=bot.db.execute("SELECT * FROM tasks WHERE state='pending'").fetchall()
     assert len(pending)==1 and pending[0]['next_at']==now
+    assert pending[0]['url'] in ('https://'+domain,'https://'+domain+'/other')
+    dead=bot.db.execute("SELECT task_id,url FROM tasks WHERE state='dead'").fetchone()
+    assert {pending[0]['task_id'],dead['task_id']}=={tid,other} and dead['url'].startswith('http://'+domain)
     assert bot.db.execute('SELECT state,reason FROM sources').fetchone()[:]==('candidate','https_upgrade_retry')
     audit=bot.db.execute("SELECT * FROM failures WHERE reason='https_upgrade_retry'").fetchone()
-    assert audit['domain']==domain and audit['attempts']==1
+    assert audit['domain']==domain and audit['attempts']==1 and audit['url']==pending[0]['url']
     assert bot.db.execute("SELECT attempts FROM failures WHERE reason='robots_unavailable_retry'").fetchone()[0]==3
     assert requeue_robots_trials(bot.db,clock=bot.clock)==[]
     fail_task(bot.db,dict(pending[0]),TaskFailure('robots_disallowed',terminal=True),clock=bot.clock)
@@ -152,7 +155,7 @@ def test_run_reopens_http_trial_and_fetches_https(bot,monkeypatch):
     monkeypatch.setattr(bot.session,'get',get)
     assert run(bot,max_requests=2,initialize=False,providers=[])['requests']==2
     assert calls==list(routes)
-    assert bot.db.execute('SELECT state FROM tasks WHERE task_id=?',(tid,)).fetchone()[0]=='done'
+    assert bot.db.execute('SELECT url,state FROM tasks WHERE task_id=?',(tid,)).fetchone()[:]==('https://'+domain,'done')
     assert bot.db.execute('SELECT state FROM sources').fetchone()[0]!='inaccessible'
     assert domain not in bot._stopped
     assert bot.db.execute("SELECT state FROM failures WHERE reason='https_upgrade_retry'").fetchone()[0]=='resolved'
@@ -347,3 +350,161 @@ def test_run_renders_reopened_spa_trial(bot,monkeypatch):
     assert bot.db.execute('SELECT state FROM tasks WHERE task_id=?',(tid,)).fetchone()[0]=='done'
     assert bot.db.execute('SELECT fetch_method FROM raw_documents WHERE url=?',('https://'+domain,)).fetchone()[0]=='browser'
     assert bot.db.execute("SELECT state FROM failures WHERE reason='spa_shell_retry'").fetchone()[0]=='resolved'
+
+def raw_dead_http(bot, domain, *, status=None, path=''):
+    """Dead http robots trial inserted directly, including hosts enqueue would refuse."""
+    now=kst_now(bot.clock)
+    url='http://'+domain+path
+    tid=deterministic_id('raw-trial',domain)
+    with bot.db:
+        bot.db.execute("INSERT INTO sources(source_id,domain,state,reason) VALUES (?,?,'inaccessible','robots_disallowed')",(deterministic_id(domain),domain))
+        bot.db.execute('INSERT INTO robots_cache VALUES (?,?,?,?,?,?,?)',('http://'+domain,'',status,(now-timedelta(days=2)).isoformat(),(now-timedelta(days=1)).isoformat(),0,'robots unavailable'))
+        bot.db.execute("INSERT INTO tasks(task_id,dedupe_key,url,domain,kind,task_class,state,attempts,created_at,updated_at) VALUES (?,?,?,?,'trial','discover','dead',4,?,?)",(tid,tid,url,domain,now.isoformat(),now.isoformat()))
+        bot.db.execute("INSERT INTO failures(failure_id,task_id,url,domain,reason,state,attempts,created_at) VALUES (?,?,?,?,'robots_disallowed','dead',1,?)",(deterministic_id(tid,'robots'),tid,url,domain,now.isoformat()))
+    return tid
+
+def test_transient_robots_retry_keeps_http_url(bot):
+    domain='example-sauna.test'
+    tid=dead_trial(bot,301,domain=domain,scheme='http')
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[domain]
+    assert bot.db.execute('SELECT url FROM tasks WHERE task_id=?',(tid,)).fetchone()[0]=='http://'+domain
+    assert bot.db.execute('SELECT reason FROM sources').fetchone()[0]=='robots_unavailable_retry'
+
+def test_https_upgrade_reopens_venue_domain_not_portals_or_sources(bot):
+    from hanset_active.util.followups import portal_domains
+    wanted='spa-venue.co.kr'
+    portals=portal_domains()
+    assert {'visitseoul.net','openstreetmap.org','tistory.com'} <= portals
+    assert 'wikipedia.org' not in portals and 'accuweather.com' not in portals
+    blocked={
+        'visitseoul.net':'https://korean.visitseoul.net/spa',
+        'tistory.com':'https://venue.tistory.com/1',
+        'openstreetmap.org':'https://nominatim.openstreetmap.org/search',
+        'instagram.com':'https://instagram.com/venue',
+        'runport.example':'https://runport.example',
+    }
+    loose=('wikipedia.org','accuweather.com')
+    ids={domain:raw_dead_http(bot,domain) for domain in (wanted,*blocked,*loose)}
+    with bot.db:
+        bot.db.execute('UPDATE tasks SET url=? WHERE task_id=?',('http://'+wanted+'/visit',ids[wanted]))
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[]
+    vid=upsert_venue(bot.db,'Example Spa',website='https://placeholder.example')
+    listed=[wanted,'www.'+wanted,*blocked.values()]
+    with bot.db:
+        bot.db.execute('UPDATE venues SET website=?,domains=? WHERE venue_id=?',('',json.dumps(listed),vid))
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[wanted]
+    pending=bot.db.execute('SELECT url,state FROM tasks WHERE task_id=?',(ids[wanted],)).fetchone()
+    assert pending['state']=='pending' and pending['url']=='https://'+wanted+'/visit'
+    audit=bot.db.execute("SELECT url,attempts,state FROM failures WHERE reason='https_upgrade_retry'").fetchone()
+    assert audit['url']=='https://'+wanted+'/visit' and audit['attempts']==1 and audit['state']=='pending'
+    for domain in (*blocked,*loose):
+        assert bot.db.execute('SELECT state FROM tasks WHERE task_id=?',(ids[domain],)).fetchone()[0]=='dead'
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[]
+
+def test_https_upgrade_uses_venue_website_when_domains_empty(bot):
+    domain='ispaland.test'
+    tid=raw_dead_http(bot,domain)
+    vid=upsert_venue(bot.db,'Example Spa',website='http://'+domain)
+    with bot.db:
+        bot.db.execute("UPDATE venues SET domains='[]' WHERE venue_id=?",(vid,))
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[domain]
+    assert bot.db.execute('SELECT url FROM tasks WHERE task_id=?',(tid,)).fetchone()[0]=='https://'+domain
+
+def test_https_upgrade_keeps_website_when_domains_json_is_invalid(bot):
+    domain='bongil.test'
+    tid=raw_dead_http(bot,domain)
+    vid=upsert_venue(bot.db,'Example Spa',website='http://'+domain)
+    with bot.db:
+        bot.db.execute('UPDATE venues SET domains=? WHERE venue_id=?',('{',vid))
+    assert requeue_robots_trials(bot.db,clock=bot.clock)==[domain]
+    assert bot.db.execute('SELECT url FROM tasks WHERE task_id=?',(tid,)).fetchone()[0]=='https://'+domain
+
+def test_requeue_spa_shell_includes_unseeded_venue(bot):
+    tid=stuck_shell(bot,seed=False)
+    assert requeue_spa_shell_trials(bot.db,clock=bot.clock)==[]
+    upsert_venue(bot.db,'Example Sauna',website='http://example-sauna.test')
+    assert requeue_spa_shell_trials(bot.db,clock=bot.clock)==['example-sauna.test']
+    assert bot.db.execute('SELECT state,attempts FROM tasks WHERE task_id=?',(tid,)).fetchone()[:]==('pending',0)
+
+@pytest.mark.parametrize('expired',[False,True])
+@pytest.mark.parametrize('reason',['error','render failed'])
+def test_requeue_browser_aux_softfail_once(bot,expired,reason):
+    domain='example-sauna.test'
+    tid=stuck_shell(bot,domain=domain,death=reason,spent=True,expired=expired)
+    assert bot.db.execute('SELECT attempts,state FROM tasks WHERE task_id=?',(tid,)).fetchone()[:]==(3,'dead')
+    assert requeue_browser_aux_softfail_trials(bot.db,clock=bot.clock)==[domain]
+    opened=bot.db.execute('SELECT * FROM tasks WHERE task_id=?',(tid,)).fetchone()
+    assert opened['state']=='pending' and opened['attempts']==0 and opened['repeat_failures']==0
+    assert opened['next_at']==kst_now(bot.clock).isoformat()
+    assert bot.db.execute('SELECT state,reason FROM sources').fetchone()[:]==('candidate','browser_aux_softfail_retry')
+    audit=bot.db.execute("SELECT * FROM failures WHERE reason='browser_aux_softfail_retry'").fetchone()
+    assert audit['attempts']==1 and audit['state']=='pending' and audit['domain']==domain and audit['task_id']==tid
+    assert requeue_browser_aux_softfail_trials(bot.db,clock=bot.clock)==[]
+    dead=fail_times(bot,tid,reason,3)
+    assert dead['state']=='dead' and dead['attempts']==3
+    with bot.db:
+        bot.db.execute("UPDATE failures SET state='resolved' WHERE reason='browser_aux_softfail_retry'")
+        bot.db.execute("UPDATE sources SET state='candidate',reason='spa_shell_retry'")
+    assert requeue_browser_aux_softfail_trials(bot.db,clock=bot.clock)==[]
+    assert bot.db.execute("SELECT count(*),max(attempts) FROM failures WHERE reason='browser_aux_softfail_retry'").fetchone()[:]==(1,1)
+
+def test_requeue_browser_aux_reopens_latest_trial_only(bot):
+    domain='example-sauna.test'
+    home=stuck_shell(bot,domain=domain,death='error',spent=True)
+    bot.clock.sleep(1)
+    latest=enqueue(bot.db,kind='trial',url='http://'+domain+'/visit',clock=bot.clock)
+    assert fail_times(bot,latest,'error',3)['state']=='dead'
+    assert requeue_browser_aux_softfail_trials(bot.db,clock=bot.clock)==[domain]
+    assert bot.db.execute('SELECT state,attempts,url FROM tasks WHERE task_id=?',(latest,)).fetchone()[:]==('pending',0,'http://'+domain+'/visit')
+    assert bot.db.execute('SELECT state FROM tasks WHERE task_id=?',(home,)).fetchone()[0]=='dead'
+    assert bot.db.execute("SELECT task_id FROM failures WHERE reason='browser_aux_softfail_retry'").fetchone()[0]==latest
+
+def test_requeue_browser_aux_without_source_row(bot):
+    tid=stuck_shell(bot,source_state=None,death='error',spent=True)
+    assert requeue_browser_aux_softfail_trials(bot.db,clock=bot.clock)==['example-sauna.test']
+    assert bot.db.execute('SELECT count(*) FROM sources').fetchone()[0]==0
+    assert bot.db.execute('SELECT state,attempts FROM tasks WHERE task_id=?',(tid,)).fetchone()[:]==('pending',0)
+
+def test_requeue_browser_aux_venue_without_seed(bot):
+    tid=stuck_shell(bot,seed=False,death='error',spent=True)
+    assert requeue_browser_aux_softfail_trials(bot.db,clock=bot.clock)==[]
+    upsert_venue(bot.db,'Example Sauna',website='http://example-sauna.test')
+    assert requeue_browser_aux_softfail_trials(bot.db,clock=bot.clock)==['example-sauna.test']
+    assert bot.db.execute('SELECT state,attempts FROM tasks WHERE task_id=?',(tid,)).fetchone()[:]==('pending',0)
+
+@pytest.mark.parametrize('kwargs',[
+    pytest.param(dict(spent=False),id='no-prior-spa-retry'),
+    pytest.param(dict(death='empty_body',spent=True),id='latest-death-still-empty'),
+    pytest.param(dict(death='blocked',source_state='inaccessible',source_reason='blocked',spent=True),id='blocked'),
+    pytest.param(dict(https_allowed=0,https_status=403,https_body='User-agent: *\nDisallow: /\n',spent=True),id='robots-disallow'),
+    pytest.param(dict(seed=False,spent=True),id='not-seed-or-venue'),
+    pytest.param(dict(source_state='inaccessible',source_reason='robots_disallowed',spent=True),id='inaccessible'),
+    pytest.param(dict(death='robots_disallowed',source_state='inaccessible',source_reason='robots_disallowed',spent=True),id='died-robots'),
+])
+def test_requeue_browser_aux_skips_ineligible(bot,kwargs):
+    kwargs.setdefault('death','error')
+    tid=stuck_shell(bot,**kwargs)
+    before=bot.db.execute("SELECT count(*) FROM failures WHERE reason='browser_aux_softfail_retry'").fetchone()[0]
+    assert requeue_browser_aux_softfail_trials(bot.db,clock=bot.clock)==[]
+    assert bot.db.execute('SELECT state FROM tasks WHERE task_id=?',(tid,)).fetchone()[0]=='dead'
+    assert bot.db.execute("SELECT count(*) FROM failures WHERE reason='browser_aux_softfail_retry'").fetchone()[0]==before
+
+def test_requeue_browser_aux_leaves_pending_trial(bot):
+    home=stuck_shell(bot,death='error',spent=True)
+    other=enqueue(bot.db,kind='trial',url='https://example-sauna.test/other',clock=bot.clock)
+    assert requeue_browser_aux_softfail_trials(bot.db,clock=bot.clock)==[]
+    assert bot.db.execute('SELECT state FROM tasks WHERE task_id=?',(home,)).fetchone()[0]=='dead'
+    assert bot.db.execute('SELECT state FROM tasks WHERE task_id=?',(other,)).fetchone()[0]=='pending'
+    assert not bot.db.execute("SELECT 1 FROM failures WHERE reason='browser_aux_softfail_retry'").fetchone()
+
+def test_run_reopens_browser_aux_before_requests(bot):
+    tid=stuck_shell(bot,death='error',spent=True)
+    assert run(bot,max_requests=0,initialize=False)['requests']==0
+    assert bot.db.execute('SELECT state,attempts FROM tasks WHERE task_id=?',(tid,)).fetchone()[:]==('pending',0)
+    assert bot.db.execute("SELECT reason,attempts FROM failures WHERE reason='browser_aux_softfail_retry'").fetchone()[:]==('browser_aux_softfail_retry',1)
+
+def test_dry_run_does_not_reopen_browser_aux(bot):
+    tid=stuck_shell(bot,death='error',spent=True)
+    assert run(bot,max_requests=0,initialize=False,dry_run=True)['state']=='dry_run'
+    assert bot.db.execute('SELECT state FROM tasks WHERE task_id=?',(tid,)).fetchone()[0]=='dead'
+    assert not bot.db.execute("SELECT 1 FROM failures WHERE reason='browser_aux_softfail_retry'").fetchone()

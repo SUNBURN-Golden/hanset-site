@@ -9,6 +9,24 @@ from ..util.urls import canonicalize, registrable_domain, is_excluded
 from ..util.timeutil import kst_now
 NAME='browser'
 VERSION='1.0.0'
+# Outcomes that must still discard the render. Transport failures of a
+# stylesheet, script, font, image, or other subresource are not in this set.
+_POLICY_OUTCOMES=frozenset({'denied','robots_disallowed','blocked','login_wall','cap_reached'})
+
+def _document_request(request):
+    return bool(request.is_navigation_request() or getattr(request,'resource_type','')=='document')
+
+def _drop_request(route):
+    """Abort one subrequest, or fulfill it empty when abort is unavailable."""
+    try:
+        route.abort()
+        return
+    except Exception:
+        pass
+    try:
+        route.fulfill(status=200,body=b'',headers={'Content-Type':'text/plain'})
+    except Exception:
+        pass
 
 def needs_browser(html: str | bytes) -> bool:
     if detect_outcome(html.encode() if isinstance(html,str) else html,'text/html',200) in ('blocked','login_wall'):
@@ -20,9 +38,12 @@ def needs_browser(html: str | bytes) -> bool:
 def fetch(fetcher, url: str) -> FetchResult:
     """Render a permitted app shell; subrequests use guarded HTTP, no socket bypass.
 
-    Playwright is optional. Redirects, assets and scripts are fetched through the
-    same limiter; blocked resources abort the render. WebSocket connections are
-    disabled. This intentionally favors safety over rendering every application.
+    Playwright is optional. Redirects, documents, and subresources go through the
+    same limiter, robots check, and budget. A failed stylesheet, script, font,
+    image, or other aux response is dropped for that request only. Navigation and
+    document failures still abort the render, as do policy denials (a non-GET
+    document, denylist, robots, block, login, or a budget cap). WebSocket
+    connections are disabled. There is no socket bypass.
     """
     url=canonicalize(url)
     if fetcher._reason_denied(url):
@@ -44,20 +65,28 @@ def fetch(fetcher, url: str) -> FetchResult:
             context=browser.new_context(user_agent=USER_AGENT,service_workers='block')
             def route_request(route):
                 request=route.request
+                document=_document_request(request)
                 if request.method!='GET':
-                    failure.append('denied'); route.abort(); return
-                document_body=request.is_navigation_request() or getattr(request,'resource_type','') in ('document','image')
+                    # A non-GET navigation is a policy denial. Aux beacons are
+                    # refused too, but only the document request fails the render.
+                    if document: failure.append('denied')
+                    _drop_request(route); return
+                # Images stay on the body budget. Other subresources stay aux.
+                kind_body=document or getattr(request,'resource_type','')=='image'
                 try:
-                    r=fetcher.fetch(request.url,kind='body' if document_body else 'browser_aux',_browser_shell=request.is_navigation_request())
+                    r=fetcher.fetch(request.url,kind='body' if kind_body else 'browser_aux',_browser_shell=request.is_navigation_request())
                 except Exception:
-                    failure.append('denied'); route.abort(); return
-                shell=r.outcome=='empty_body' and r.content and needs_browser(r.content)
+                    if document: failure.append('denied')
+                    _drop_request(route); return
+                shell=document and r.outcome=='empty_body' and r.content and needs_browser(r.content)
                 if not r.ok and not shell:
-                    failure.append(r.outcome); route.abort(); return
+                    if document or r.outcome in _POLICY_OUTCOMES: failure.append(r.outcome or 'error')
+                    _drop_request(route); return
                 try:
                     route.fulfill(status=r.status or 200,body=r.content,headers={'Content-Type':r.content_type})
                 except Exception:
-                    failure.append('error')
+                    if document: failure.append('error')
+                    else: _drop_request(route)
             context.route('**/*',route_request)
             # Newer Playwright supports explicit WebSocket routing; older versions
             # cannot provide the required network guarantee and are not used.
