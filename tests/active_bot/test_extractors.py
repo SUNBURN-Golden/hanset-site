@@ -124,3 +124,196 @@ def test_browser_guarded_render(bot,server,monkeypatch):
     assert result.ok and result.fetch_method=='browser' and result.content_hash
     assert [r['path'] for r in server.log]==['/robots.txt','/app']
     assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0]==1
+
+def browser_request(url, *, method='GET', navigation=False, resource_type='document', abort_error=False):
+    from types import SimpleNamespace
+    return SimpleNamespace(method=method,url=url,resource_type=resource_type,abort_error=abort_error,is_navigation_request=lambda: navigation)
+
+def install_fake_browser(monkeypatch, requests, rendered):
+    from types import SimpleNamespace
+    events=[]
+    state={}
+    class Route:
+        def __init__(self, request):
+            self.request=request
+        def abort(self):
+            events.append(('abort',self.request.url))
+            if self.request.abort_error: raise RuntimeError('abort failed')
+        def fulfill(self,**kwargs):
+            events.append(('fulfill',self.request.url,kwargs.get('status'),kwargs.get('body')))
+    class Page:
+        def goto(self,*args,**kwargs):
+            for request in requests: state['handler'](Route(request))
+        def content(self):
+            return rendered
+    class Context:
+        def route(self,pattern,handler):
+            state['handler']=handler
+        def route_web_socket(self,*args):
+            events.append(('websocket',args[0] if args else ''))
+        def new_page(self):
+            return Page()
+    class Browser:
+        def new_context(self,**kwargs):
+            events.append(('context',kwargs.get('service_workers')))
+            return Context()
+        def close(self):
+            events.append(('close',))
+    class Playwright:
+        chromium=SimpleNamespace(launch=lambda **kwargs:Browser())
+        def __enter__(self):
+            return self
+        def __exit__(self,*args):
+            pass
+    monkeypatch.setitem(sys.modules,'playwright.sync_api',SimpleNamespace(sync_playwright=Playwright))
+    return events
+
+SHELL='<div id="app"></div><script src="/app.js"></script>'
+
+def test_browser_aux_failures_do_not_poison_document(bot,server,monkeypatch):
+    from urllib.parse import urlsplit
+    rendered=(FIXTURES/'venue_en.html').read_text()
+    server.add('/app',SHELL)
+    server.add('/style.css','nope',status=500,headers={'Content-Type':'text/css'})
+    server.add('/empty.css','',status=200,headers={'Content-Type':'text/css'})
+    server.add('/app.js','',status=404,headers={'Content-Type':'text/javascript'})
+    server.add('/font.woff','',status=500,headers={'Content-Type':'font/woff'})
+    server.add('/hero.png','',status=404,headers={'Content-Type':'image/png'})
+    server.add('/pixel','',status=500,headers={'Content-Type':'application/octet-stream'})
+    base=server.base
+    requests=[
+        browser_request(base+'/style.css',resource_type='stylesheet'),
+        browser_request(base+'/empty.css',resource_type='stylesheet'),
+        browser_request(base+'/app',navigation=True,resource_type='document'),
+        browser_request(base+'/app.js',resource_type='script'),
+        browser_request(base+'/font.woff',resource_type='font'),
+        browser_request(base+'/hero.png',resource_type='image'),
+        browser_request(base+'/pixel',resource_type='other'),
+        browser_request(base+'/beacon',method='POST',resource_type='xhr'),
+    ]
+    events=install_fake_browser(monkeypatch,requests,rendered)
+    result=browser.fetch(bot,base+'/app')
+    assert result.ok and result.fetch_method=='browser' and b'Day pass' in result.content and b'25000' in result.content
+    fulfilled=[event for event in events if event[0]=='fulfill']
+    assert [event[1] for event in fulfilled]==[base+'/app']
+    assert b'id="app"' in fulfilled[0][3]
+    aborted={event[1] for event in events if event[0]=='abort'}
+    assert {base+'/style.css',base+'/empty.css',base+'/app.js',base+'/font.woff',base+'/hero.png',base+'/pixel',base+'/beacon'}<=aborted
+    assert ('websocket','**/*') in events and ('context','block') in events
+    paths=[row['path'] for row in server.log]
+    assert '/beacon' not in paths and {'/robots.txt','/style.css','/empty.css','/app','/app.js','/font.woff','/hero.png','/pixel'}<=set(paths)
+    kinds={urlsplit(row['url']).path:row['kind'] for row in bot.db.execute('SELECT kind,url FROM request_log')}
+    assert kinds['/app']=='body' and kinds['/hero.png']=='body'
+    assert kinds['/style.css']==kinds['/empty.css']==kinds['/app.js']==kinds['/font.woff']==kinds['/pixel']=='browser_aux'
+    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0]==2
+    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='aux'").fetchone()[0]==6
+
+def test_browser_aux_abort_falls_back_to_empty_body(bot,server,monkeypatch):
+    rendered=(FIXTURES/'venue_en.html').read_text()
+    server.add('/app',SHELL)
+    server.add('/style.css','',status=500,headers={'Content-Type':'text/css'})
+    base=server.base
+    requests=[
+        browser_request(base+'/style.css',resource_type='stylesheet',abort_error=True),
+        browser_request(base+'/app',navigation=True,resource_type='document'),
+    ]
+    events=install_fake_browser(monkeypatch,requests,rendered)
+    result=browser.fetch(bot,base+'/app')
+    assert result.ok and b'Day pass' in result.content
+    empty=[event for event in events if event[0]=='fulfill' and event[1]==base+'/style.css']
+    assert empty and empty[0][2]==200 and empty[0][3]==b''
+
+def test_browser_document_error_discards_rendered_text(bot,server,monkeypatch):
+    server.add('/app','<div id="app"></div>',status=500)
+    events=install_fake_browser(monkeypatch,[browser_request(server.base+'/app',navigation=True)],(FIXTURES/'venue_en.html').read_text())
+    result=browser.fetch(bot,server.base+'/app')
+    assert result.outcome=='error' and result.content==b'' and result.fetch_method=='browser'
+    assert any(event[0]=='abort' and event[1]==server.base+'/app' for event in events)
+    assert '/app' in [row['path'] for row in server.log]
+
+def test_browser_aux_error_does_not_hide_document_failure(bot,server,monkeypatch):
+    server.add('/style.css','',status=500,headers={'Content-Type':'text/css'})
+    server.add('/app','<input type="password"><p>sign in</p>')
+    base=server.base
+    requests=[
+        browser_request(base+'/style.css',resource_type='stylesheet'),
+        browser_request(base+'/app',navigation=True,resource_type='document'),
+    ]
+    install_fake_browser(monkeypatch,requests,(FIXTURES/'venue_en.html').read_text())
+    result=browser.fetch(bot,base+'/app')
+    assert result.outcome=='login_wall' and result.content==b''
+    assert b'Day pass' not in result.content
+
+def test_browser_blocked_aux_still_fails_render(bot,server,monkeypatch):
+    server.add('/app',SHELL)
+    server.add('/style.css','',status=403,headers={'Content-Type':'text/css'})
+    base=server.base
+    requests=[
+        browser_request(base+'/app',navigation=True,resource_type='document'),
+        browser_request(base+'/style.css',resource_type='stylesheet'),
+    ]
+    install_fake_browser(monkeypatch,requests,(FIXTURES/'venue_en.html').read_text())
+    result=browser.fetch(bot,base+'/app')
+    assert result.outcome=='blocked' and result.content==b''
+
+def test_browser_nongget_document_is_denied(bot,server,monkeypatch):
+    server.add('/app',SHELL)
+    events=install_fake_browser(monkeypatch,[browser_request(server.base+'/app',method='POST',navigation=True)],(FIXTURES/'venue_en.html').read_text())
+    result=browser.fetch(bot,server.base+'/app')
+    assert result.outcome=='denied' and result.content==b''
+    assert not any(event[0]=='fulfill' for event in events)
+    assert '/app' not in [row['path'] for row in server.log]
+
+def test_browser_denied_aux_still_fails_render(bot,server,monkeypatch):
+    server.add('/app',SHELL)
+    base=server.base
+    requests=[
+        browser_request(base+'/app',navigation=True,resource_type='document'),
+        browser_request('https://instagram.com/widget.js',resource_type='script'),
+    ]
+    install_fake_browser(monkeypatch,requests,(FIXTURES/'venue_en.html').read_text())
+    result=browser.fetch(bot,base+'/app')
+    assert result.outcome=='denied' and result.content==b''
+    assert all('instagram' not in row['path'] for row in server.log)
+
+def test_browser_aux_cap_fails_render(bot,server,monkeypatch):
+    from datetime import timedelta
+    from hanset_active.util.timeutil import kst_now
+    server.add('/app',SHELL)
+    server.add('/style.css','',status=200,headers={'Content-Type':'text/css'})
+    now=kst_now(bot.clock)
+    with bot.db:
+        bot.db.execute('INSERT INTO robots_cache VALUES (?,?,?,?,?,?,?)',(server.base,'User-agent: *\nAllow: /\n',200,now.isoformat(),(now+timedelta(days=1)).isoformat(),1,''))
+    bot.settings.aux_cap=0
+    requests=[
+        browser_request(server.base+'/app',navigation=True,resource_type='document'),
+        browser_request(server.base+'/style.css',resource_type='stylesheet'),
+    ]
+    install_fake_browser(monkeypatch,requests,(FIXTURES/'venue_en.html').read_text())
+    result=browser.fetch(bot,server.base+'/app')
+    assert result.outcome=='cap_reached' and result.content==b''
+    assert '/style.css' not in [row['path'] for row in server.log]
+    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0]==1
+
+def test_browser_requires_socket_guard(bot,server,monkeypatch):
+    from types import SimpleNamespace
+    server.add('/app',SHELL)
+    class Context:
+        def route(self,pattern,handler):
+            pass
+        def new_page(self):
+            pytest.fail('socket guard must run before a page opens')
+    class Browser:
+        def new_context(self,**kwargs):
+            return Context()
+        def close(self):
+            pass
+    class Playwright:
+        chromium=SimpleNamespace(launch=lambda **kwargs:Browser())
+        def __enter__(self):
+            return self
+        def __exit__(self,*args):
+            pass
+    monkeypatch.setitem(sys.modules,'playwright.sync_api',SimpleNamespace(sync_playwright=Playwright))
+    result=browser.fetch(bot,server.base+'/app')
+    assert result.outcome=='error' and result.reason=='browser lacks socket guard'
