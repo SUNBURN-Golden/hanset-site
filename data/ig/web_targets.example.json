@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "targets": [
+    {
+      "enabled": false,
+      "venue_id": "example-venue",
+      "venue_key": "example-venue-seoul",
+      "name": "Example Hotel Sauna",
+      "official_urls": ["https://example.invalid/hours"],
+      "official_domains": ["example.invalid"]
+    }
+  ]
+}

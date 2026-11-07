@@ -1,10 +1,14 @@
-# Optional Tavily search hook for the IG daemon
+# Optional Tavily search hook
 
-This checkout has a paused Instagram connector, not a DeepSeek daemon. The
-`hanset_active.search.discover_known_venue` add-on is ready for that daemon's
-search/discovery step; installing its actual hook remains pending. It is not
-registered in the existing broad web-search provider list. No cron, browser,
-Instagram fetching, model calls, or publication is added.
+This file is not a browser daemon. Session-file Playwright collection is not
+supported. Web collection and the desktop Instagram handoff are in
+[COLLECTOR.md](COLLECTOR.md).
+
+This checkout has a paused Instagram connector, not a DeepSeek browser. The
+`hanset_active.search.discover_known_venue` add-on is the optional Tavily hook.
+[COLLECTOR.md](COLLECTOR.md) may call it when a web target asks, and otherwise
+leaves it unregistered in the broad web-search provider list. The hook itself
+does not fetch Instagram, start a browser, or publish.
 
 ## Callable contract
 
