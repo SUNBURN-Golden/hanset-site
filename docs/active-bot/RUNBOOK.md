@@ -88,13 +88,19 @@ caps. AI cost is always zero; requests per fact is also reported.
 The Instagram connector is a stub: disabled by default, with a gate requiring
 explicit enablement, the KST hour 13, and a configured session-state path.
 Even an open gate makes no network or browser call. Never add session material
-to the checkout or logs.
+to the checkout or logs. Session-file Playwright collection is not supported.
 
-The optional [Tavily known-venue search add-on](IG_DAEMON.md) is ready for a
-future IG daemon search step. It loads credentials privately at runtime and
-enforces a separate persistent 30-request KST daily cap under `HANSET_IG_DIR`.
-It returns unverified leads only; the current broad discovery providers and
-paused Instagram connector are unchanged.
+The separate [DeepSeek web collector](COLLECTOR.md) fetches approved official
+URLs through this bot's existing fetcher and can ingest a desktop Instagram
+text batch. It does not browse, follow, or post. Its cron wrapper is
+`scripts/run_collect_cron.sh`; that line is not installed from the repository.
+
+The optional [Tavily known-venue search add-on](IG_DAEMON.md) keeps its own
+30-request KST daily cap under `HANSET_IG_DIR`. The web collector calls it
+only when a target has no URL, names a venue and field, and lists approved
+official domains. It returns unverified leads only. The broad discovery
+providers and the paused Instagram connector are unchanged. The active-bot
+report above still shows AI cost zero; DeepSeek spend is not written there.
 
 ## Offline validation
 

@@ -1,0 +1,110 @@
+"""External paths, hard budgets, and official-source identity checks."""
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from hanset_active.config import REPO_ROOT
+from hanset_active.util.urls import is_denied, is_excluded, registrable_domain
+
+from . import CollectError
+
+ALLOWED_MODELS = frozenset({'deepseek-flash', 'deepseek-v4-pro'})
+DEFAULT_MODEL = 'deepseek-flash'
+PAGE_RUN_CAP = 10
+PAGE_DAY_CAP = 20
+IG_READ_MAX = 20
+IG_READ_TARGET = 10
+MODEL_CALL_CAP = 36
+MODEL_INPUT_CAP = 180_000
+MODEL_OUTPUT_CAP = 32_000
+MAX_TEXT = 4_000
+MAX_TARGETS = 100
+HANDLE_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9._]{0,29}')
+RESERVED_HANDLES = frozenset({
+    'p', 'reel', 'reels', 'accounts', 'explore', 'direct', 'stories',
+    'challenge', 'checkpoint', 'about', 'login',
+})
+
+
+def outside(path):
+    resolved = Path(path).resolve()
+    if resolved == REPO_ROOT or REPO_ROOT in resolved.parents:
+        raise CollectError('runtime_inside_checkout')
+    return resolved
+
+
+def configured_model(value=None):
+    model = value if value is not None else os.environ.get('HANSET_DEEPSEEK_MODEL', DEFAULT_MODEL)
+    if model not in ALLOWED_MODELS:
+        raise CollectError('model_config_invalid')
+    return model
+
+
+@dataclass
+class CollectSettings:
+    data_dir: Path | None = None
+    active_dir: Path | None = None
+    twin_dir: Path | None = None
+    model: str | None = None
+
+    def __post_init__(self):
+        self.data_dir = outside(self.data_dir or os.environ.get('HANSET_IG_DIR', '/workspace/hanset-data/ig'))
+        self.active_dir = outside(self.active_dir or os.environ.get('HANSET_ACTIVE_DIR', '/workspace/hanset-data/active'))
+        self.twin_dir = outside(self.twin_dir or os.environ.get('HANSET_TWIN_DIR', '/workspace/hanset-data/twin'))
+        self.model = configured_model(self.model)
+
+    @property
+    def inbox(self):
+        return self.data_dir / 'inbox'
+
+
+def handle_valid(value):
+    return isinstance(value, str) and bool(HANDLE_RE.fullmatch(value)) and value.lower() not in RESERVED_HANDLES
+
+
+def canonical_instagram(value, *, handle=None):
+    """Official post, reel, or profile URL. No query, fragment, or login route."""
+    try:
+        parsed = urlsplit(value)
+        if parsed.scheme != 'https' or parsed.netloc not in ('instagram.com', 'www.instagram.com'):
+            raise ValueError
+        if parsed.query or parsed.fragment or parsed.username or parsed.password:
+            raise ValueError
+        parts = [part for part in parsed.path.split('/') if part]
+        if len(parts) == 1 and handle_valid(parts[0]):
+            if handle and parts[0].lower() != handle.lower():
+                raise ValueError
+            kind = 'profile'
+        elif len(parts) == 2 and parts[0] in ('p', 'reel') and re.fullmatch(r'[A-Za-z0-9_-]{1,80}', parts[1]):
+            kind = parts[0]
+        else:
+            raise ValueError
+        url = 'https://www.instagram.com/' + '/'.join(parts) + '/'
+        return url, kind
+    except (TypeError, ValueError):
+        raise CollectError('invalid_source_url') from None
+
+
+def official_domains(entry):
+    domains = set()
+    for raw in entry.get('official_domains') or []:
+        if not isinstance(raw, str) or not raw or len(raw) > 253:
+            raise CollectError('targets_invalid')
+        host = raw.lower().rstrip('.')
+        if is_denied('https://' + host) or is_excluded(host):
+            raise CollectError('targets_invalid')
+        domains.add(host)
+    return domains
+
+
+def domain_allowed(url, domains):
+    try:
+        if urlsplit(url).scheme != 'https' and urlsplit(url).scheme != 'http':
+            return False
+        if is_denied(url) or is_excluded(url):
+            return False
+        return registrable_domain(url) in domains
+    except (TypeError, ValueError):
+        return False

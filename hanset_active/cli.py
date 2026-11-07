@@ -36,11 +36,20 @@ def parser():
     commands.add_parser('prune-followups').add_argument('--apply',action='store_true')
     commands.add_parser('export-service-data').add_argument('--out',type=Path,required=True)
     commands.add_parser('ig-stub-check')
+    collect = commands.add_parser('collect')
+    modes = collect.add_subparsers(dest='collect_command', required=True)
+    web = modes.add_parser('web')
+    web.add_argument('--targets', type=Path)
+    ingest = modes.add_parser('ingest')
+    ingest.add_argument('--inbox', type=Path)
+    modes.add_parser('status')
     return p
 
 
 def main(argv=None):
     args = parser().parse_args(argv)
+    if args.command == 'collect':
+        return _collect_main(args)
     options = {k:v for k,v in {'data_dir':args.data_dir,'profile_path':args.profile}.items() if v is not None}
     try:
         settings = Settings(**options)
@@ -72,3 +81,23 @@ def main(argv=None):
         print(json.dumps({'error':strip_pii(str(error))}))
         return 2
     return 0
+
+
+def _collect_main(args):
+    """Dispatch before the active collector opens its store for unrelated commands."""
+    from .collect import CollectError
+    from .collect.service import load_settings, public_result, run_ingest, run_status, run_web
+    try:
+        settings = load_settings(**({'active_dir': args.data_dir} if args.data_dir else {}))
+        if args.collect_command == 'web':
+            result = run_web(settings, targets_path=args.targets)
+        elif args.collect_command == 'ingest':
+            result = run_ingest(settings, inbox_file=args.inbox)
+        else:
+            result = run_status(settings)
+    except CollectError as error:
+        result = public_result({'state': 'error', 'reason': error.reason, 'success': False, 'collected': False, 'mode': 'web'})
+    except Exception:
+        result = public_result({'state': 'error', 'reason': 'runtime_error', 'success': False, 'collected': False, 'mode': 'web'})
+    print(json.dumps(result, ensure_ascii=False))
+    return 0 if result.get('state') in {'done', 'already_complete', 'already_running', 'idle'} else 2

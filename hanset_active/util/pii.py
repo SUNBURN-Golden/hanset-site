@@ -4,7 +4,8 @@ from urllib.parse import unquote
 
 _EMAIL = re.compile(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}')
 _SECRET = re.compile(r'(?i)(\b(?:api[_-]?key|token|secret|session|sid|auth)[\"\']?\s*[=:]\s*[\"\']?)([^\s&<>"\']+)')
-_PHONE = re.compile(r'(?<!\w)(?:\+\d{1,3}[ .-]?)?(?:\(?0\d{1,2}\)?[ .-]?\d{3,4}[ .-]?\d{4}|1\d{3}[ .-]\d{4}|\+\d[\d .()-]{7,}\d)(?!\w)')
+# Do not start a match on the minute digits of a time such as 22:00.
+_PHONE = re.compile(r'(?<!\w)(?<!\d:)(?:\+\d{1,3}[ .-]?)?(?:\(?0\d{1,2}\)?[ .-]?\d{3,4}[ .-]?\d{4}|1\d{3}[ .-]\d{4}|\+\d[\d .()-]{7,}\d)(?!\w)')
 
 def strip_pii(value: str | bytes) -> str | bytes:
     if value is None: return ''

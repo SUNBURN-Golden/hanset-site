@@ -1,4 +1,9 @@
-"""Permission gate only. This module performs no I/O or browser operations."""
+"""Permission gate only. This module performs no I/O or browser operations.
+
+Returning None means the gate is open and collection is still unimplemented.
+A session path does not authorize shell automation, cookies, or Playwright.
+Signed-in Instagram reads belong to the desktop handoff in docs/active-bot/COLLECTOR.md.
+"""
 import os
 from ..util.timeutil import kst_now
 
