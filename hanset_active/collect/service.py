@@ -15,7 +15,7 @@ from hanset_twin.daemon import ProcessLock
 from . import CollectError
 from .config import IG_READ_MAX, PAGE_DAY_CAP, PAGE_RUN_CAP, CollectSettings
 from .deepseek import OUTPUT_TOKENS, DeepSeek, credentials_present
-from .ground import parse_items, payload_items
+from .ground import INSTRUCTION, SUMMARY_INSTRUCTION, parse_items, payload_items, summary_items
 from .ingest import load_watchlist, parse_batch, security_flag, within_window
 from .state import State
 from .store import connect as claim_connect
@@ -89,11 +89,12 @@ def _prepare_dir(path):
     path.chmod(0o700)
 
 
-def _chunks(rows):
+def _chunks(rows, *, kind):
+    encode = summary_items if kind == 'instagram' else payload_items
     batches, current = [], []
     for row in rows:
         trial = current + [row]
-        encoded = payload_items([{'text': item['text']} for item in trial])
+        encoded = encode([{'text': item['text']} for item in trial])
         if current and len(json.dumps(encoded, ensure_ascii=False)) > 20_000:
             batches.append(current)
             current = [row]
@@ -136,7 +137,7 @@ def _extract(rows, *, kind, settings, state, session, clock):
     pages, claims = [], 0
     brain = DeepSeek(state, model=settings.model, session=session)
     try:
-        for batch in _chunks(rows):
+        for batch in _chunks(rows, kind=kind):
             fresh = []
             for row in batch:
                 text_hash = digest(row['text'])
@@ -153,8 +154,12 @@ def _extract(rows, *, kind, settings, state, session, clock):
                 continue
             if not state.can_model(1, OUTPUT_TOKENS):
                 raise CollectError('model_budget_exhausted')
-            answer = brain.ask(payload_items([{'text': row['text']} for row in fresh]))
-            parsed = parse_items(answer, [{'text': row['text']} for row in fresh])
+            documents = [{'text': row['text']} for row in fresh]
+            if kind == 'instagram':
+                answer = brain.ask(summary_items(documents), instruction=SUMMARY_INSTRUCTION)
+            else:
+                answer = brain.ask(payload_items(documents), instruction=INSTRUCTION)
+            parsed = parse_items(answer, documents)
             stored, added = _store_batch(db, fresh, parsed, kind=kind, clock=clock, state=state)
             pages.extend(stored)
             claims += added
@@ -354,7 +359,29 @@ def _run_ingest(settings, *, inbox_file, clock, session):
     path.unlink()
     short = max(0, 10 - state.data['counts']['ig_reads'])
     reason = 'ok' if not short else 'below_target'
-    return _finish(state, _base('done', reason, success=True, collected=claims > 0, mode='instagram', pages=pages), clock)
+    return _finish(state, _base('done', reason, success=True, collected=claims > 0, mode='instagram', pages=pages, rejections=rejected), clock)
+
+
+def run_report(settings, *, clock=None):
+    """Read claim provenance. This does not ingest, fetch, or call the model."""
+    from .ground import secrets
+    from .store import evidence_report
+    clock = clock or Clock()
+    try:
+        _prepare_dir(settings.data_dir)
+        db = claim_connect(settings.data_dir)
+        try:
+            report = evidence_report(db)
+        finally:
+            db.close()
+    except CollectError as error:
+        return {'state': 'error', 'reason': error.reason, 'claims': [], 'conflicts': []}
+    report['state'] = 'ok'
+    report['at'] = kst_now(clock).isoformat()
+    blob = json.dumps(report, ensure_ascii=False)
+    for secret in secrets():
+        blob = blob.replace(secret, '[redacted]')
+    return json.loads(blob)
 
 
 def run_status(settings, *, clock=None):

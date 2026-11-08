@@ -7,7 +7,7 @@ gaps, or write the twin. No site output change means no deploy.
 The retired session-file Playwright daemon is not implemented. Do not add a
 browser profile, cookies, CDP, proxy, or login-challenge bypass. Signed-in
 Instagram use stays on the approved desktop. This repository only ingests the
-desktop's bounded text batch.
+desktop's operator-summary batch.
 
 `hanset_active.connectors.instagram.InstagramConnector` stays a gate that
 performs no network or browser work. HTTP collection still refuses Instagram
@@ -22,8 +22,13 @@ that starts, locks, and exits is not by itself a collection. `no_targets`,
 
 Claims are `status=source_claim` and `rights=internal_review_only`. Web claims
 use `source_type=own_site`. Instagram claims use `source_type=sns`. Neither is
-a verified fact. Quotes are at most 240 characters. Raw page text, captions,
-and photos are not stored. Model reasoning text is discarded.
+a verified fact and neither is published. Quotes are at most 240 characters.
+Raw page text, captions, and photos are not stored. Model reasoning text is
+discarded. A new web quote is a page span (`web_verbatim`). A new Instagram
+quote is a span of the operator's paraphrase (`operator_summary`), not the
+post's original caption. Grounding that span checks the paraphrase only. It
+does not verify the post. Rows stored before provenance columns existed keep
+NULL origin and are unrecorded, not relabeled.
 
 DeepSeek is the existing account identified by `DEEPSEEK_API_KEY`. This
 change adds no new paid vendor. Tavily, when a target asks for it, remains
@@ -163,11 +168,15 @@ operator does all signed-in Instagram work:
    The collector latches that KST day and deletes the flag. The next day is
    eligible again. There is no account rotation or session repair.
 5. Otherwise write one batch, `/workspace/hanset-data/ig/inbox/batch.jsonl`,
-   mode `0600`. No photos, screenshots, or media fields. One JSON object per
-   line, at most 20 lines:
+   mode `0600`. No photos, screenshots, captions, or media fields. One JSON
+   object per line, at most 20 lines. `operator_summary` is the operator's
+   own short paraphrase of what they saw, at most 480 characters. It is not
+   the caption and it must not be copied from the post. `provenance` must be
+   the exact string `operator_summary`. A `text` field is rejected so a
+   caption cannot be stored as a quote:
 
 ```json
-{"venue_id":"existing-venue-id","venue_key":"existing-venue-key","account_handle":"example.venue","post_url":"https://www.instagram.com/p/ExamplePost/","text":"운영시간 06:00-22:00","seen_at":"2026-11-07T13:10:00+09:00"}
+{"venue_id":"example-venue","venue_key":"example-venue","account_handle":"example.venue","post_url":"https://www.instagram.com/p/ExamplePost/","operator_summary":"SAMPLE operator summary, not an original caption. Weekday 09:00-18:00.","provenance":"operator_summary","seen_at":"2026-11-08T13:10:00+09:00"}
 ```
 
 `seen_at` must be the same KST date, during hour 13, and not more than five
@@ -177,7 +186,9 @@ be that watchlist handle. A post or reel URL does not contain the handle, so
 the collector cannot prove the post belongs to the account: the desktop
 operator must, and the batch's `account_handle` must still match the
 watchlist. The watchlist entry must match `venue_id`, `venue_key`, and
-`handle`. There is no `follow_allowed` switch.
+`handle`. One enabled handle cannot be attached to two venues. There is no
+`follow_allowed` switch. Missing or any other `provenance` value stores
+nothing and does not call the model.
 
 Then, still inside the hour, with the key loaded the same way as web:
 
@@ -189,19 +200,47 @@ bash /workspace/hanset-site/scripts/run_collect_cron.sh ingest
 phrase in the batch halts the day, deletes the batch, and stores no claim.
 A batch that is processed, including one that stores no claim, is deleted.
 Model failure keeps the batch so the operator can retry inside the same
-window. A lock conflict does not read or delete it. Either way the text stays
-only in the inbox, not in the claim database. A batch whose line count exceeds
-the remaining daily read budget (20 lines, counting lines already stored) is
-`ig_quota`: the file is left for the operator and its text is not copied into
-status, checkpoint, or claims. `ig_reads` below 10 is `below_target` and is
-still success when the batch itself was processed. The desktop, not this
-program, is responsible for stopping at 20 reads and for not following or
-posting.
+window. A lock conflict does not read or delete it. Either way the summary
+stays only in the inbox. The database keeps a grounded span of that summary,
+not the rest of the line. A batch whose line count exceeds the remaining
+daily read budget (20 lines, counting lines already stored) is `ig_quota`:
+the file is left for the operator and its summary is not copied into status,
+checkpoint, or claims. `ig_reads` below 10 is `below_target` and is still
+success when the batch itself was processed. The desktop, not this program,
+is responsible for stopping at 20 reads and for not following or posting.
 
 Instagram claims remain source claims attached to the post URL. They are not
-verified facts and are not published.
+verified facts and are not published. Two weekday observations that name
+different hours are both kept. The report lists that conflict and does not
+choose a current value or delete either row. The same summary for the same
+URL is a duplicate and does not change the stored provenance.
 
-## Checks before activation
+## Provenance migration
+
+The next open of `collector.sqlite3` adds nullable columns `evidence_origin`,
+`evidence_role`, and `verbatim_source`. The migration does not UPDATE
+existing rows. A row written before this change, including the Ambassador
+hours source claim already stored by the live web run, stays NULL. Read it
+as unrecorded. Do not relabel it with SQL. New web inserts are
+`web_verbatim` / `page_span` / `1`. New Instagram inserts are
+`operator_summary` / `summary_span` / `0`. A new insert without that pair is
+rejected. Databases created after this change also have a table check for the
+same pairs.
+
+This command opens the database, applies that column add, and prints claims
+and conflicts. It does not call DeepSeek, read Instagram, or change the web
+cron. Run it while the 04:15 web job is not in the middle of a write:
+
+```sh
+HANSET_IG_DIR=/workspace/hanset-data/ig python3 -m hanset_active collect report
+```
+
+The operations host already runs web collection daily at 04:15 KST. Do not
+register another cron for this change. Instagram ingest is still only
+`scripts/run_collect_cron.sh ingest` during hour 13, and only after a
+desktop summary batch is written. This repository does not install that line.
+
+## Checks
 
 ```sh
 python3 -m pytest tests/active_bot tests/twin -q
@@ -209,7 +248,10 @@ bash -n scripts/run_collect_cron.sh
 python3 site/build_site.py --release
 ```
 
-Live checks that remain on the operations host, not in this PR: the real
-`DEEPSEEK_API_KEY` and model availability, a real official URL fetch, Tavily
-only if a target asks for it, desktop Instagram during the window, and cron
-registration after review. Do not treat a green test run as a live collection.
+Web collection is already live on the operations host, including the 04:15
+KST cron and a stored Ambassador hours source claim. This change does not
+rerun that path and does not register a cron. Still unverified on the host:
+opening the live database with `collect report` (the Ambassador row should
+stay NULL), a real desktop operator-summary batch during hour 13, and any
+model extraction of that summary. Tests mock DeepSeek. Do not treat a green
+test run as that live ingest. Do not widen the Instagram hour to try it.

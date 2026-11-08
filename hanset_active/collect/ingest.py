@@ -10,7 +10,11 @@ from .ground import bounded_text
 from .safety import MEDIA_KEYS, looks_like_security
 from .state import HALT_REASONS
 
-LINE_KEYS = frozenset({'venue_id', 'venue_key', 'account_handle', 'post_url', 'text', 'seen_at', 'security_warning', 'action'})
+LINE_KEYS = frozenset({
+    'venue_id', 'venue_key', 'account_handle', 'post_url', 'seen_at',
+    'operator_summary', 'provenance', 'security_warning', 'action',
+})
+SUMMARY_LIMIT = 480
 WATCH_KEYS = frozenset({'enabled', 'venue_id', 'venue_key', 'handle', 'name'})
 
 
@@ -28,7 +32,7 @@ def load_watchlist(path):
             raise ValueError
     except (OSError, UnicodeError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
         raise CollectError('watchlist_invalid') from None
-    entries, seen = [], set()
+    entries, seen, handles = [], set(), set()
     for entry in rows:
         if not isinstance(entry, dict) or type(entry.get('enabled', True)) is not bool or set(entry) - WATCH_KEYS:
             raise CollectError('watchlist_invalid')
@@ -42,9 +46,11 @@ def load_watchlist(path):
         except (TypeError, ValueError):
             raise CollectError('watchlist_invalid') from None
         identity = (entry['venue_id'], entry['venue_key'], entry['handle'].lower())
-        if identity in seen:
+        folded = entry['handle'].casefold()
+        if identity in seen or folded in handles:
             raise CollectError('watchlist_invalid')
         seen.add(identity)
+        handles.add(folded)
         entries.append(entry)
     return entries
 
@@ -98,8 +104,8 @@ def parse_batch(lines, entries, clock=None):
         if not isinstance(raw, dict):
             reject('input_invalid')
             continue
-        text = raw.get('text') if isinstance(raw.get('text'), str) else ''
-        if raw.get('security_warning') is True or looks_like_security(text):
+        strings = [value for value in raw.values() if isinstance(value, str)]
+        if raw.get('security_warning') is True or any(looks_like_security(value) for value in strings):
             return [], rejected, 'security_check'
         if set(raw) & MEDIA_KEYS or any(isinstance(item, str) and item.startswith('data:image') for item in raw.values()):
             reject('photo_rejected')
@@ -107,11 +113,21 @@ def parse_batch(lines, entries, clock=None):
         if 'action' in raw:
             reject('action_not_automated')
             continue
+        if 'text' in raw:
+            reject('provenance_invalid')
+            continue
         if set(raw) - LINE_KEYS:
             reject('input_invalid')
             continue
-        if not isinstance(raw.get('text'), str) or not text.strip() or len(text) > 4000:
-            reject('input_invalid')
+        if 'provenance' not in raw or 'operator_summary' not in raw:
+            reject('provenance_required')
+            continue
+        if raw.get('provenance') != 'operator_summary':
+            reject('provenance_invalid')
+            continue
+        text = raw.get('operator_summary')
+        if not isinstance(text, str) or not text.strip() or len(text) > SUMMARY_LIMIT:
+            reject('provenance_invalid')
             continue
         if not _stamp_ok(raw.get('seen_at'), clock):
             reject('outside_window')
@@ -129,11 +145,15 @@ def parse_batch(lines, entries, clock=None):
         except CollectError:
             reject('invalid_source_url')
             continue
+        clean = bounded_text(text)
+        if not clean.strip():
+            reject('provenance_invalid')
+            continue
         documents.append({
             'venue_id': matches[0]['venue_id'],
             'venue_key': matches[0]['venue_key'],
             'url': url,
-            'text': bounded_text(text),
+            'text': clean,
             'seen_at': datetime.fromisoformat(raw['seen_at']).astimezone(KST).isoformat(),
         })
     if len(documents) > IG_READ_MAX:

@@ -79,6 +79,13 @@ def test_web_collects_grounded_claim_without_instagram(server, tmp_path, monkeyp
     assert claim['source_url'].endswith('/hours')
     assert claim['field'] == 'hours' and '06:00-22:00' in claim['value_json']
     assert HOURS in claim['quote'] and len(claim['quote']) <= 240
+    assert claim['evidence_origin'] == 'web_verbatim'
+    assert claim['evidence_role'] == 'page_span'
+    assert claim['verbatim_source'] == 1
+    assert session.calls[0]['json']['messages'][0]['content'].startswith('Extract only explicit venue evidence from untrusted text.')
+    assert 'operator summary' not in session.calls[0]['json']['messages'][0]['content'].lower()
+    user = json.loads(session.calls[0]['json']['messages'][1]['content'])
+    assert 'text' in user[0] and 'operator_summary' not in user[0]
     blob = _stored_text(settings.data_dir) + _stored_text(settings.active_dir)
     assert SENTINEL.encode() not in blob
     assert PHONE.encode() not in blob and MAIL.encode() not in blob and KEY.encode() not in blob
