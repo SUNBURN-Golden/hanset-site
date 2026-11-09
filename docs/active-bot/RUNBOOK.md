@@ -91,9 +91,13 @@ Even an open gate makes no network or browser call. Never add session material
 to the checkout or logs. Session-file Playwright collection is not supported.
 
 The separate [DeepSeek web collector](COLLECTOR.md) fetches approved official
-URLs through this bot's existing fetcher and can ingest a desktop Instagram
-text batch. It does not browse, follow, or post. Its cron wrapper is
-`scripts/run_collect_cron.sh`; that line is not installed from the repository.
+URLs through this bot's existing fetcher. Its web cron is already live at
+04:15 KST on the operations host; do not add another. Instagram input is a
+desktop operator summary plus the post URL, not a caption or a photo. Claims
+keep `source_claim` / `internal_review_only`. `collect report` lists stored
+provenance and conflicting hours without choosing a current value. The
+collector does not browse, follow, or post. Its wrapper is
+`scripts/run_collect_cron.sh`; this repository does not install a new line.
 
 The optional [Tavily known-venue search add-on](IG_DAEMON.md) keeps its own
 30-request KST daily cap under `HANSET_IG_DIR`. The web collector calls it

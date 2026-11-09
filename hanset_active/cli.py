@@ -43,6 +43,7 @@ def parser():
     ingest = modes.add_parser('ingest')
     ingest.add_argument('--inbox', type=Path)
     modes.add_parser('status')
+    modes.add_parser('report')
     return p
 
 
@@ -86,13 +87,17 @@ def main(argv=None):
 def _collect_main(args):
     """Dispatch before the active collector opens its store for unrelated commands."""
     from .collect import CollectError
-    from .collect.service import load_settings, public_result, run_ingest, run_status, run_web
+    from .collect.service import load_settings, public_result, run_ingest, run_report, run_status, run_web
     try:
         settings = load_settings(**({'active_dir': args.data_dir} if args.data_dir else {}))
         if args.collect_command == 'web':
             result = run_web(settings, targets_path=args.targets)
         elif args.collect_command == 'ingest':
             result = run_ingest(settings, inbox_file=args.inbox)
+        elif args.collect_command == 'report':
+            result = run_report(settings)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0 if result.get('state') == 'ok' else 2
         else:
             result = run_status(settings)
     except CollectError as error:

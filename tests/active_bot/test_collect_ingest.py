@@ -46,7 +46,8 @@ def _line(text=None, **extra):
     body = {
         'venue_id': 'venue-1', 'venue_key': 'silver-seoul', 'account_handle': 'silver.sauna',
         'post_url': 'https://www.instagram.com/p/Abcd1234/',
-        'text': text if text is not None else HOURS + '\n' + SENTINEL,
+        'operator_summary': text if text is not None else HOURS + '\n' + SENTINEL,
+        'provenance': 'operator_summary',
         'seen_at': '2026-11-07T13:10:00+09:00',
     }
     body.update(extra)
@@ -119,7 +120,13 @@ def test_ingest_stores_source_claim_and_deletes_batch(tmp_path, monkeypatch):
     assert claim['source_kind'] == 'instagram' and claim['source_type'] == 'sns'
     assert claim['status'] == 'source_claim' and claim['rights'] == 'internal_review_only'
     assert claim['source_url'] == 'https://www.instagram.com/p/Abcd1234/'
-    assert HOURS in claim['quote']
+    assert claim['quote'] == HOURS
+    assert claim['evidence_origin'] == 'operator_summary'
+    assert claim['evidence_role'] == 'summary_span'
+    assert claim['verbatim_source'] == 0
+    user = json.loads(session.calls[0]['json']['messages'][1]['content'])
+    assert list(user[0]) == ['index', 'operator_summary']
+    assert session.calls[0]['json']['messages'][0]['content'].startswith('The input is a minimal operator summary')
     blob = _blob(settings.data_dir)
     assert SENTINEL.encode() not in blob and KEY.encode() not in blob
     assert b'playwright' not in blob
