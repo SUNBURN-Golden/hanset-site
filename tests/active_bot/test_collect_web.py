@@ -222,3 +222,89 @@ def test_missing_credentials_does_not_fetch(server, tmp_path):
     assert result['reason'] == 'missing_credentials' and result['success'] is False and result['collected'] is False
     assert session.calls == []
     assert not any(item['path'] == '/hours' for item in server.log)
+
+
+def test_daily_duplicate_receipts_produce_distinct_transitions(server, tmp_path, monkeypatch):
+    from hanset_active.collect.store import connect_readonly
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    _targets(settings.data_dir/'web_targets.json', server.base+'/hours')
+    clock, session = FakeClock(), _session()
+    for changed in (False, True, False, True):
+        hour = '07:00-22:00' if changed else '06:00-22:00'
+        server.add('/hours', _page().replace('06:00-22:00', hour))
+        # Construct a response matching this day's grounded page.
+        session = Session(_envelope({'items':[{'index':0,'claims':[{
+            'field':'hours','value':{**_hours_value(),'hours':hour},'quote':HOURS.replace('06:00-22:00',hour)}]}]}))
+        result = run_web(settings, clock=clock, session=session, testing=True)
+        assert result['success']
+        assert result['changes']['reason'] == 'ok'
+        clock.sleep(86400)
+    db = connect_readonly(settings.data_dir)
+    assert db.execute('SELECT count(*) FROM web_change_events').fetchone()[0] == 3
+    assert db.execute('SELECT count(*) FROM web_change_observations').fetchone()[0] == 4
+    assert db.execute('SELECT count(*) FROM receipts').fetchone()[0] == 2
+    db.close()
+
+
+@pytest.mark.parametrize('kind', ['robots', 'blocked', 'empty', 'login'])
+def test_unusable_pages_cannot_change_stored_baseline(server, tmp_path, monkeypatch, kind):
+    from hanset_active.collect.store import connect_readonly
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    _targets(settings.data_dir/'web_targets.json', server.base+'/hours')
+    server.add('/hours', _page())
+    clock = FakeClock()
+    assert run_web(settings, clock=clock, session=_session(), testing=True)['collected']
+    clock.sleep(86400)
+    if kind == 'robots':
+        _targets(settings.data_dir/'web_targets.json', server.base+'/private')
+        server.add('/private', _page())
+    elif kind == 'blocked':
+        server.add('/hours', '<main>verify you are human ' + 'challenge ' * 20 + '</main>')
+    elif kind == 'empty':
+        server.add('/hours', '<main></main>')
+    else:
+        server.add('/hours', '<main>Login</main>', status=401)
+    run_web(settings, clock=clock, session=_session(), testing=True)
+    db = connect_readonly(settings.data_dir)
+    assert db.execute('SELECT count(*) FROM web_change_events').fetchone()[0] == 0
+    assert db.execute('SELECT count(*) FROM web_change_observations').fetchone()[0] == 1
+    assert db.execute('SELECT count(*) FROM web_change_baselines').fetchone()[0] == 1
+    db.close()
+
+
+def test_detector_failure_is_side_diagnostic_and_recovers_before_completed_return(server, tmp_path, monkeypatch):
+    from hanset_active.collect import changes
+    from hanset_active.collect.service import run_report
+    from hanset_active.collect.store import connect_readonly
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    _targets(settings.data_dir/'web_targets.json', server.base+'/hours')
+    clock = FakeClock()
+    server.add('/hours', _page())
+    assert run_web(settings, clock=clock, session=_session(), testing=True)['collected']
+    clock.sleep(86400)
+    server.add('/hours', _page().replace('06:00-22:00', '07:00-22:00'))
+    session = Session(_envelope({'items':[{'index':0,'claims':[{
+        'field':'hours','value':{**_hours_value(),'hours':'07:00-22:00'},
+        'quote':HOURS.replace('06:00-22:00','07:00-22:00')}]}]}))
+    def fail(*args):
+        raise RuntimeError('injected')
+    with monkeypatch.context() as patch:
+        patch.setattr(changes, '_derive', fail)
+        result = run_web(settings, clock=clock, session=session, testing=True)
+    assert result['success'] and result['collected']
+    assert result['changes']['reason'] == 'detector_error'
+    assert run_report(settings)['changes']['pending_observations'] == 1
+    fetched = len(server.log)
+    result = run_web(settings, clock=clock, session=session, testing=True)
+    assert result['state'] == 'already_complete' and result['changes']['reason'] == 'ok'
+    assert len(server.log) == fetched
+    db = connect_readonly(settings.data_dir)
+    assert db.execute('SELECT count(*) FROM claims').fetchone()[0] == 2
+    assert db.execute('SELECT count(*) FROM web_change_events').fetchone()[0] == 1
+    db.close()
