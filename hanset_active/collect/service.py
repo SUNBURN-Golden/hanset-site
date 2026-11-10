@@ -1,6 +1,9 @@
 """Web runs and desktop Instagram ingestion. No browser session is read or launched."""
 import json
+import re
+import sqlite3
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from hanset_active.config import Settings
 from hanset_active.db import connect as active_connect
@@ -383,26 +386,99 @@ def _run_ingest(settings, *, inbox_file, clock, session):
     return _finish(state, _base('done', reason, success=True, collected=claims > 0, mode='instagram', pages=pages, rejections=rejected), clock)
 
 
-def run_report(settings, *, clock=None):
-    """Read claim provenance. This does not ingest, fetch, or call the model."""
+def _review_result(report):
+    """Keep deterministic IDs usable while redacting external evidence strings."""
     from .ground import secrets
-    from .store import evidence_report
-    clock = clock or Clock()
-    try:
-        _prepare_dir(settings.data_dir)
-        db = claim_connect(settings.data_dir)
-        try:
-            report = evidence_report(db)
-        finally:
-            db.close()
-    except CollectError as error:
-        return {'state': 'error', 'reason': error.reason, 'claims': [], 'conflicts': []}
-    report['state'] = 'ok'
-    report['at'] = kst_now(clock).isoformat()
-    blob = json.dumps(report, ensure_ascii=False)
+
+    identifier_keys = {'claim_id', 'claim_ids', 'newest_claim_ids', 'supporting_claim_ids',
+                       'eligible_supporting_claim_ids', 'candidate_id', 'conflict_id',
+                       'policy_fingerprint', 'assessment_fingerprint', 'assessment_digest', 'content_hash'}
+
+    def clean(value, key=None):
+        if isinstance(value, str):
+            if value.startswith(('https://', 'http://')):
+                try:
+                    parsed = urlsplit(value)
+                    if parsed.username or parsed.password:
+                        return '[redacted_url]'
+                except ValueError:
+                    return '[redacted_url]'
+            return value if key in identifier_keys and re.fullmatch(r'[0-9a-f]{64}', value) else strip_pii(value)
+        if isinstance(value, list):
+            return [clean(item, key) for item in value]
+        if isinstance(value, dict):
+            return {name: clean(item, name) for name, item in value.items()}
+        return value
+
+    blob = json.dumps(clean(report), ensure_ascii=False)
     for secret in secrets():
         blob = blob.replace(secret, '[redacted]')
     return json.loads(blob)
+
+
+def _review_error(reason):
+    return {'state': 'error', 'reason': reason, 'claims': [], 'conflicts': [],
+            'fact_candidates': [], 'rights': 'internal_review_only', 'auto_publish_to_site': False}
+
+
+def _assess_review(db, policy, clock):
+    from .promotion import assess
+    from .store import read_claims, stored_candidates
+    return assess(read_claims(db), stored_candidates(db), policy, now=kst_now(clock))
+
+
+def run_report(settings, *, policy_path=None, clock=None):
+    """Read-only, including missing databases and pre-provenance schemas."""
+    from .promotion_policy import load_policy
+    from .store import connect_readonly
+    clock = clock or Clock()
+    try:
+        policy = load_policy(policy_path, today=kst_now(clock).date())
+        db = connect_readonly(settings.data_dir)
+        try:
+            if db:
+                db.execute('BEGIN')
+            report = _assess_review(db, policy, clock)
+        finally:
+            if db:
+                db.close()
+        return _review_result({**report, 'state': 'ok', 'at': kst_now(clock).isoformat()})
+    except CollectError as error:
+        return _review_error(error.reason)
+    except (OSError, sqlite3.Error, ValueError, TypeError, KeyError):
+        return _review_error('state_corrupt')
+
+
+def run_promote(settings, *, policy_path, dry_run=False, clock=None):
+    """Explicit local review gate. Never touches active/twin state or sources."""
+    from .promotion_policy import load_policy
+    from .store import persist_candidates
+    clock = clock or Clock()
+    if dry_run:
+        return {**run_report(settings, policy_path=policy_path, clock=clock), 'dry_run': True}
+    try:
+        policy = load_policy(policy_path, today=kst_now(clock).date())
+        _prepare_dir(settings.data_dir)
+        with ProcessLock(settings.data_dir / 'daemon.lock'):
+            db = claim_connect(settings.data_dir)
+            try:
+                db.execute('BEGIN IMMEDIATE')
+                report = _assess_review(db, policy, clock)
+                changed = persist_candidates(db, report['fact_candidates'], at=kst_now(clock).isoformat())
+                db.commit()
+            except Exception:
+                db.rollback()
+                raise
+            finally:
+                db.close()
+        return _review_result({**report, 'state': 'ok', 'dry_run': False,
+                               'changed_candidates': changed, 'at': kst_now(clock).isoformat()})
+    except CollectorBusy:
+        return _review_error('already_running')
+    except CollectError as error:
+        return _review_error(error.reason)
+    except (OSError, sqlite3.Error, ValueError, TypeError, KeyError):
+        return _review_error('state_corrupt')
 
 
 def run_status(settings, *, clock=None):

@@ -217,7 +217,7 @@ URL is a duplicate and does not change the stored provenance.
 
 ## Provenance migration
 
-The next open of `collector.sqlite3` adds nullable columns `evidence_origin`,
+The next writable open of `collector.sqlite3` adds nullable columns `evidence_origin`,
 `evidence_role`, and `verbatim_source`. The migration does not UPDATE
 existing rows. A row written before this change, including the Ambassador
 hours source claim already stored by the live web run, stays NULL. Read it
@@ -227,13 +227,20 @@ as unrecorded. Do not relabel it with SQL. New web inserts are
 rejected. Databases created after this change also have a table check for the
 same pairs.
 
-This command opens the database, applies that column add, and prints claims
-and conflicts. It does not call DeepSeek, read Instagram, or change the web
-cron. Run it while the 04:15 web job is not in the middle of a write:
+This command opens the database read-only and prints claims and conflicts.
+It adapts to schemas without provenance columns without applying migrations.
+It does not call DeepSeek, read Instagram, or change the web cron:
 
 ```sh
 HANSET_IG_DIR=/workspace/hanset-data/ig python3 -m hanset_active collect report
 ```
+
+The explicit `collect promote --policy /outside-checkout/policy.json` review
+gate can create internal fact candidates from independent official agreement.
+`--dry-run` is read-only; `collect report --policy ...` reassesses without
+persisting. Both retain conflicts and never publish. See
+[SOURCE_CLAIM_PROMOTION.md](SOURCE_CLAIM_PROMOTION.md) for source approvals,
+normalization, candidate migration, evidence holds and observation-date markers.
 
 The operations host already runs web collection daily at 04:15 KST. Do not
 register another cron for this change. Instagram ingest is still only

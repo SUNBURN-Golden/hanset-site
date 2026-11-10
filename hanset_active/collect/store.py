@@ -47,6 +47,31 @@ CREATE TABLE IF NOT EXISTS claims (
     )
 );
 '''
+CANDIDATE_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS fact_candidates (
+    candidate_id TEXT PRIMARY KEY,
+    venue_id TEXT NOT NULL,
+    venue_key TEXT NOT NULL,
+    field TEXT NOT NULL,
+    qualifiers_json TEXT NOT NULL,
+    normalized_value_json TEXT NOT NULL,
+    normalizer_version TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status = 'fact_candidate'),
+    rights TEXT NOT NULL CHECK (rights = 'internal_review_only'),
+    review_state TEXT NOT NULL CHECK (review_state IN
+        ('awaiting_review', 'needs_confirmation', 'evidence_hold')),
+    assessment_digest TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    changed_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS fact_candidate_claims (
+    candidate_id TEXT NOT NULL REFERENCES fact_candidates(candidate_id),
+    claim_id TEXT NOT NULL REFERENCES claims(claim_id),
+    PRIMARY KEY (candidate_id, claim_id)
+);
+CREATE INDEX IF NOT EXISTS fact_candidates_review ON fact_candidates(review_state);
+CREATE INDEX IF NOT EXISTS fact_candidate_claims_claim ON fact_candidate_claims(claim_id);
+'''
 _PROVENANCE = {
     'web': ('web_verbatim', 'page_span', 1),
     'instagram': ('operator_summary', 'summary_span', 0),
@@ -66,6 +91,7 @@ def connect(directory):
     db.execute('PRAGMA foreign_keys=ON')
     db.executescript(SCHEMA)
     _migrate(db)
+    db.executescript(CANDIDATE_SCHEMA)
     os.chmod(path, 0o600)
     return db
 
@@ -151,22 +177,16 @@ def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key
         raise
 
 
-def _scope_of(value):
-    if isinstance(value, dict):
-        scope = value.get('scope')
-        return scope if isinstance(scope, str) and scope else 'unspecified'
-    return 'unspecified'
-
-
-def evidence_report(db):
-    """Read stored claims. NULL provenance is left unrecorded. No value is chosen as current."""
-    rows = db.execute(
-        '''SELECT claim_id, venue_id, venue_key, field, value_json, quote, source_url,
-                  source_kind, source_type, status, rights, seen_at, evidence_origin,
-                  evidence_role, verbatim_source
-           FROM claims ORDER BY venue_key, field, seen_at, claim_id''').fetchall()
+def read_claims(db):
+    """Read stored claims across schemas without relabeling NULL provenance."""
+    if not db or not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='claims'").fetchone():
+        return []
+    rows = db.execute('SELECT * FROM claims ORDER BY venue_key, field, seen_at, claim_id').fetchall()
     claims = []
     for row in rows:
+        row = dict(row)
+        for name in ('evidence_origin', 'evidence_role', 'verbatim_source'):
+            row.setdefault(name, None)
         verbatim = None if row['verbatim_source'] is None else int(row['verbatim_source'])
         claims.append({
             'claim_id': row['claim_id'],
@@ -181,44 +201,70 @@ def evidence_report(db):
             'status': row['status'],
             'rights': row['rights'],
             'seen_at': row['seen_at'],
+            'content_hash': row['content_hash'],
             'evidence_origin': row['evidence_origin'],
             'evidence_role': row['evidence_role'],
             'verbatim_source': verbatim,
             'original_caption': False,
         })
-    grouped = {}
-    for item in claims:
-        grouped.setdefault((item['venue_key'], item['field']), []).append(item)
-    conflicts = []
-    for (venue_key, field), items in grouped.items():
-        if field == 'hours':
-            by_scope = {}
-            for item in items:
-                by_scope.setdefault(_scope_of(item['value']), []).append(item)
-            conflicting = []
-            scopes = []
-            for scope, scoped in by_scope.items():
-                distinct = {
-                    item['value'].get('hours') if isinstance(item['value'], dict) else json.dumps(item['value'], sort_keys=True)
-                    for item in scoped
-                }
-                if len(distinct) > 1:
-                    scopes.append(scope)
-                    conflicting.extend(scoped)
-            if not conflicting:
-                continue
-            items = conflicting
-            scopes = sorted(scopes)
-        else:
-            distinct = {json.dumps(item['value'], ensure_ascii=False, sort_keys=True) for item in items}
-            if len(distinct) < 2:
-                continue
-            scopes = []
-        conflicts.append({
-            'venue_key': venue_key,
-            'field': field,
-            'scopes': scopes,
-            'claim_ids': [item['claim_id'] for item in items],
-            'values': [item['value'] for item in items],
-        })
-    return {'claims': claims, 'conflicts': conflicts}
+    return claims
+
+
+def evidence_report(db):
+    """Compatible evidence view; no implicit approvals or persistence."""
+    from .promotion import assess
+    return assess(read_claims(db), stored_candidates(db),
+                  {'approvals': [], 'fingerprint': None}, now=kst_now())
+
+
+def connect_readonly(directory):
+    """No mkdir, chmod, WAL initialization or migrations, including old schemas."""
+    directory = outside(directory)
+    path = directory / 'collector.sqlite3'
+    if path.is_symlink():
+        raise CollectError('state_corrupt')
+    if not path.exists():
+        return None
+    db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=30)
+    db.row_factory = sqlite3.Row
+    db.execute('PRAGMA query_only=ON')
+    return db
+
+
+def stored_candidates(db):
+    if not db or not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='fact_candidates'").fetchone():
+        return []
+    out = []
+    for row in db.execute('SELECT * FROM fact_candidates ORDER BY candidate_id'):
+        item = dict(row)
+        item['qualifiers'] = json.loads(item.pop('qualifiers_json'))
+        item['normalized_value'] = json.loads(item.pop('normalized_value_json'))
+        item['supporting_claim_ids'] = [link[0] for link in db.execute(
+            'SELECT claim_id FROM fact_candidate_claims WHERE candidate_id=? ORDER BY claim_id', (item['candidate_id'],))]
+        out.append(item)
+    return out
+
+
+def persist_candidates(db, candidates, *, at):
+    """Caller owns the write transaction and process lock. Links are append only."""
+    from .normalize import stable_json
+    changed = 0
+    for item in candidates:
+        params = (item['candidate_id'], item['venue_id'], item['venue_key'], item['field'],
+                  stable_json(item['qualifiers']), stable_json(item['normalized_value']),
+                  item['normalizer_version'], 'fact_candidate', 'internal_review_only',
+                  item['review_state'], item['assessment_digest'], at, at)
+        result = db.execute('''INSERT INTO fact_candidates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(candidate_id) DO UPDATE SET
+                review_state=excluded.review_state,
+                assessment_digest=excluded.assessment_digest,
+                changed_at=excluded.changed_at
+            WHERE fact_candidates.review_state != excluded.review_state
+               OR fact_candidates.assessment_digest != excluded.assessment_digest''', params)
+        changed += result.rowcount
+        if result.rowcount:
+            item.setdefault('created_at', at)
+            item['changed_at'] = at
+        for claim_id in item['supporting_claim_ids']:
+            db.execute('INSERT OR IGNORE INTO fact_candidate_claims VALUES (?,?)', (item['candidate_id'], claim_id))
+    return changed

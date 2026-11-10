@@ -43,7 +43,11 @@ def parser():
     ingest = modes.add_parser('ingest')
     ingest.add_argument('--inbox', type=Path)
     modes.add_parser('status')
-    modes.add_parser('report')
+    report = modes.add_parser('report')
+    report.add_argument('--policy', type=Path)
+    promote = modes.add_parser('promote')
+    promote.add_argument('--policy', type=Path, required=True)
+    promote.add_argument('--dry-run', action='store_true')
     plan = modes.add_parser('plan-gaps')
     plan.add_argument('--ranking', choices=('model', 'local'), default='model')
     return p
@@ -89,9 +93,15 @@ def main(argv=None):
 def _collect_main(args):
     """Dispatch before the active collector opens its store for unrelated commands."""
     from .collect import CollectError
-    from .collect.service import load_settings, public_result, run_ingest, run_report, run_status, run_web
+    from .collect.service import _review_error, load_settings, public_result, run_ingest, run_promote, run_report, run_status, run_web
+    review_command = args.collect_command in ('report', 'promote')
     try:
-        settings = load_settings(**({'active_dir': args.data_dir} if args.data_dir else {}))
+        options = {'active_dir': args.data_dir} if args.data_dir else {}
+        if review_command:
+            # Offline evidence review does not depend on model configuration.
+            from .collect.config import DEFAULT_MODEL
+            options['model'] = DEFAULT_MODEL
+        settings = load_settings(**options)
         if args.collect_command == 'web':
             result = run_web(settings, targets_path=args.targets)
         elif args.collect_command == 'plan-gaps':
@@ -99,15 +109,20 @@ def _collect_main(args):
             result = run_plan(settings, ranking=args.ranking)
         elif args.collect_command == 'ingest':
             result = run_ingest(settings, inbox_file=args.inbox)
-        elif args.collect_command == 'report':
-            result = run_report(settings)
+        elif args.collect_command in ('report', 'promote'):
+            if args.collect_command == 'promote':
+                result = run_promote(settings, policy_path=args.policy, dry_run=args.dry_run)
+            else:
+                result = run_report(settings, policy_path=args.policy)
             print(json.dumps(result, ensure_ascii=False))
             return 0 if result.get('state') == 'ok' else 2
         else:
             result = run_status(settings)
     except CollectError as error:
-        result = public_result({'state': 'error', 'reason': error.reason, 'success': False, 'collected': False, 'mode': 'web'})
+        result = (_review_error(error.reason) if review_command else
+                  public_result({'state': 'error', 'reason': error.reason, 'success': False, 'collected': False, 'mode': 'web'}))
     except Exception:
-        result = public_result({'state': 'error', 'reason': 'runtime_error', 'success': False, 'collected': False, 'mode': 'web'})
+        result = (_review_error('runtime_error') if review_command else
+                  public_result({'state': 'error', 'reason': 'runtime_error', 'success': False, 'collected': False, 'mode': 'web'}))
     print(json.dumps(result, ensure_ascii=False))
     return 0 if result.get('state') in {'done', 'already_complete', 'already_running', 'idle'} else 2
