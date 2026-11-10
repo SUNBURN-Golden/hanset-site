@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "synthetic_example": true,
+  "proposals": [
+    {
+      "watchlist_entry": {
+        "enabled": false,
+        "venue_id": "example-venue",
+        "venue_key": "example-venue-seoul",
+        "name": "Example Hotel Sauna",
+        "handle": "example.venue"
+      },
+      "evidence": {
+        "official_page_url": "https://venue.example/",
+        "resolved_page_url": "https://venue.example/",
+        "official_domain": "venue.example",
+        "profile_url": "https://www.instagram.com/example.venue/",
+        "observed_at": "2026-11-10T04:15:00+09:00",
+        "status": "needs_review",
+        "reason": "synthetic_example_only"
+      }
+    }
+  ],
+  "auto_publish_to_site": false
+}

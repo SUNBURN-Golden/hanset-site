@@ -20,8 +20,10 @@ from .ingest import load_watchlist, parse_batch, security_flag, within_window
 from .state import State
 from .store import connect as claim_connect
 from .store import digest, record
-from .targets import parse_targets, resolve_jobs
+from .targets import resolve_jobs
 from .web import classify_page
+from .plan import ensure_daily_plan, load_targets, local_target_order, order_targets
+from .watchlist_proposals import inspect_page, write_proposals
 
 RETRYABLE = frozenset({
     'model_timeout', 'model_transport', 'model_rate_limited', 'model_invalid',
@@ -174,31 +176,39 @@ def _default_search():
     return discover_known_venue
 
 
-def run_web(settings, *, targets_path=None, clock=None, session=None, search=None, testing=False):
+def run_web(settings, *, targets_path=None, clock=None, session=None, search=None, testing=False,
+            planner=None, planner_session=None):
     clock = clock or Clock()
     mode = 'web'
     try:
         _prepare_dir(settings.data_dir)
         with ProcessLock(settings.data_dir / 'daemon.lock'):
-            return _run_web(settings, targets_path=targets_path, clock=clock, session=session, search=search, testing=testing)
+            return _run_web(settings, targets_path=targets_path, clock=clock, session=session, search=search,
+                            testing=testing, planner=planner, planner_session=planner_session)
     except CollectorBusy:
         return public_result(_base('already_running', 'already_running', success=False, collected=False, mode=mode))
     except CollectError as error:
         return public_result(_base('error', error.reason, success=False, collected=False, mode=mode))
 
 
-def _run_web(settings, *, targets_path, clock, session, search, testing):
+def _run_web(settings, *, targets_path, clock, session, search, testing, planner=None, planner_session=None):
     state = State(settings.data_dir, clock)
     path = Path(targets_path) if targets_path else settings.data_dir / 'web_targets.json'
     if targets_path:
         from .config import outside
         path = outside(path)
-    if not path.exists():
-        return _finish(state, _base('no_targets', 'no_targets', success=False, collected=False, mode='web'), clock)
-    try:
-        targets = parse_targets(path, testing=testing)
-    except CollectError as error:
-        return _finish(state, _base('error', error.reason, success=False, collected=False, mode='web'), clock)
+    targets, targets_status = load_targets(path, testing=testing)
+    if targets_path:
+        # Ad-hoc input never reads/writes the daily plan or invokes its model.
+        targets = local_target_order(settings, targets, now=kst_now(clock))
+        planning_notes = [{'code': 'adhoc_targets_local_order', 'count': 1}]
+    else:
+        plan = ensure_daily_plan(settings, state, targets, targets_status, clock=clock,
+                                 planner=planner, planner_session=planner_session, testing=testing)
+        targets, planning_notes = order_targets(
+            local_target_order(settings, targets, now=kst_now(clock)), plan)
+    if targets_status == 'invalid':
+        return _finish(state, _base('error', 'targets_invalid', success=False, collected=False, mode='web'), clock)
     if not targets:
         return _finish(state, _base('no_targets', 'no_targets', success=False, collected=False, mode='web'), clock)
     active_settings = Settings(
@@ -218,6 +228,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing):
             clock=clock,
             testing=testing,
         )
+        notes.extend({'url': '', 'disposition': note['code']} for note in planning_notes)
         pending = [job for job in jobs if job['url'] not in state.data['completed']]
         if not pending and jobs:
             return _finish(state, _base('already_complete', 'already_complete', success=True, collected=False, mode='web', pages=notes), clock)
@@ -231,6 +242,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing):
         if not state.can_model(1, OUTPUT_TOKENS):
             return _finish(state, _base('stopped', 'model_budget_exhausted', success=False, collected=False, mode='web', pages=notes), clock)
         ready, pages = [], list(notes)
+        proposal_evidence = []
         stop_reason = None
         try:
             with RunLock(active, active_settings.data_dir, 'collect-web', clock=clock):
@@ -256,11 +268,20 @@ def _run_web(settings, *, targets_path, clock, session, search, testing):
                             state.complete(job['url'], disposition)
                             pages.append({'url': job['url'], 'disposition': disposition})
                             continue
+                        proposal_evidence.extend(inspect_page(
+                            job, fetched, observed_at=kst_now(clock).isoformat(), disposition=disposition))
                         ready.append({**job, 'text': text, 'seen_at': kst_now(clock).isoformat()})
                 finally:
                     fetcher.close()
         except ActiveBusy:
             return _finish(state, _base('deferred', 'active_busy', success=False, collected=False, mode='web', pages=pages), clock)
+        if proposal_evidence:
+            try:
+                write_proposals(settings, proposal_evidence, day=kst_now(clock).date().isoformat())
+            except (CollectError, OSError):
+                # Proposals are a side artifact; never abort extraction of pages
+                # that were already fetched and passed every guard.
+                pages.append({'url': '', 'disposition': 'proposals_invalid'})
         extracted, claims = [], 0
         if ready:
             try:
