@@ -44,6 +44,8 @@ def parser():
     ingest.add_argument('--inbox', type=Path)
     modes.add_parser('status')
     modes.add_parser('report')
+    plan = modes.add_parser('plan-gaps')
+    plan.add_argument('--ranking', choices=('model', 'local'), default='model')
     return p
 
 
@@ -92,6 +94,9 @@ def _collect_main(args):
         settings = load_settings(**({'active_dir': args.data_dir} if args.data_dir else {}))
         if args.collect_command == 'web':
             result = run_web(settings, targets_path=args.targets)
+        elif args.collect_command == 'plan-gaps':
+            from .collect.plan import run_plan
+            result = run_plan(settings, ranking=args.ranking)
         elif args.collect_command == 'ingest':
             result = run_ingest(settings, inbox_file=args.inbox)
         elif args.collect_command == 'report':

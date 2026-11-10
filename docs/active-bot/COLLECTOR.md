@@ -255,3 +255,11 @@ opening the live database with `collect report` (the Ambassador row should
 stay NULL), a real desktop operator-summary batch during hour 13, and any
 model extraction of that summary. Tests mock DeepSeek. Do not treat a green
 test run as that live ingest. Do not widen the Instagram hour to try it.
+
+## Gap-priority plan
+
+The existing 04:15 KST web trigger now prepares a frozen daily gap-priority plan
+and a maximum-20 operator IG read list. No cron changes or Instagram browser
+are added. See [GAP_PRIORITY.md](GAP_PRIORITY.md) for `collect plan-gaps`, scoring,
+read-only evidence rules, replay/fallback behavior and manual watchlist proposal
+application. Planning and proposals never publish or change the live watchlist.
