@@ -1,7 +1,7 @@
 """Approved official URL lists. Search leads are not fetched unless the domain was approved."""
 import json
 import re
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, unquote, parse_qsl
 
 from hanset_active.util.urls import is_denied, is_excluded, literal_private, registrable_domain
 
@@ -9,6 +9,50 @@ from . import CollectError
 from .config import MAX_TARGETS, domain_allowed, official_domains
 
 _TAVILY_REASON = re.compile(r'tavily_[a-z_]{1,40}')
+
+
+def canonical_requested_url(url, *, testing=False):
+    """Reject unsafe identities before canonicalization; never repair redactions."""
+    from .ground import secrets
+    from hanset_active.util.pii import strip_pii
+    from hanset_active.util.urls import canonicalize
+    if not isinstance(url, str) or len(url) > 500:
+        raise ValueError('unsafe_url')
+    decoded = unquote(url)
+    credential_keys = {'password', 'passwd', 'pwd', 'key', 'api_key', 'apikey', 'access_token',
+                       'token', 'auth', 'authorization', 'cookie', 'session', 'sid', 'secret',
+                       'signature', 'sig'}
+    if (not _https_or_test(url, testing=testing) or strip_pii(decoded) != decoded
+            or any(key.casefold() in credential_keys for key, _ in parse_qsl(urlsplit(decoded).query))
+            or re.search(r'\[(?:token|phone|email|redacted[^\]]*)\]', decoded, re.I)
+            or any(secret in decoded for secret in secrets())):
+        raise ValueError('unsafe_url')
+    return canonicalize(url)
+
+
+def target_fingerprint(target):
+    from .normalize import stable_json
+    from .store import digest
+    return digest(stable_json({
+        'venue_id': target['venue_id'], 'venue_key': target['venue_key'],
+        'official_urls': sorted(canonical_requested_url(url, testing=target.get('_testing', False))
+                                for url in target['urls']),
+        'official_domains': sorted(target['domains']),
+    }))
+
+
+def source_authorization(target, requested_url, final_url=None, *, testing=False):
+    """Only an exact enabled official URL, never a domain-only search lead."""
+    try:
+        requested = canonical_requested_url(requested_url, testing=testing)
+        final = canonical_requested_url(final_url or requested_url, testing=testing)
+        urls = {canonical_requested_url(url, testing=testing) for url in target['urls']}
+        if requested not in urls or not domain_allowed(final, target['domains']):
+            return None
+        return {'source_identity': requested, 'requested_url': requested, 'final_url': final,
+                'target_fingerprint': target_fingerprint({**target, '_testing': testing})}
+    except (ValueError, TypeError, KeyError):
+        return None
 
 
 def _https_or_test(url, *, testing):
@@ -54,6 +98,8 @@ def parse_targets(path, *, testing):
                 raise ValueError
             if any(not _https_or_test(url, testing=testing) for url in urls):
                 raise ValueError
+            for url in urls:
+                canonical_requested_url(url, testing=testing)
             domains = official_domains(entry)
             if not domains:
                 domains = {registrable_domain(url) for url in urls}
@@ -121,5 +167,6 @@ def resolve_jobs(targets, *, search, db, clock, testing):
                 'name': target['name'],
                 'url': url,
                 'domains': target['domains'],
+                'source_authorization': source_authorization(target, url, testing=testing),
             })
     return jobs, notes

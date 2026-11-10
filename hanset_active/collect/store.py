@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import sqlite3
+import struct
 
 from hanset_active.db import deterministic_id
 from hanset_active.util.timeutil import kst_now
@@ -77,6 +78,65 @@ _PROVENANCE = {
     'instagram': ('operator_summary', 'summary_span', 0),
 }
 
+# Additive internal review storage; existing claims are never relabeled.
+CHANGE_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS web_change_observations (
+    observation_id TEXT PRIMARY KEY,
+    observed_seq INTEGER NOT NULL UNIQUE,
+    day TEXT NOT NULL,
+    venue_id TEXT NOT NULL, venue_key TEXT NOT NULL,
+    source_identity TEXT NOT NULL, target_fingerprint TEXT NOT NULL,
+    requested_url TEXT NOT NULL, final_url TEXT NOT NULL,
+    content_hash TEXT NOT NULL, observed_at TEXT NOT NULL,
+    values_json TEXT NOT NULL,
+    detector_version TEXT NOT NULL, normalizer_version TEXT NOT NULL,
+    processed INTEGER NOT NULL DEFAULT 0 CHECK (processed IN (0,1,2)),
+    diagnostic TEXT,
+    UNIQUE (day, venue_id, venue_key, source_identity, content_hash, target_fingerprint)
+);
+CREATE TABLE IF NOT EXISTS web_change_baselines (
+    venue_id TEXT NOT NULL, venue_key TEXT NOT NULL,
+    field TEXT NOT NULL, qualifier_key TEXT NOT NULL,
+    source_identity TEXT NOT NULL, target_fingerprint TEXT NOT NULL,
+    value_json TEXT NOT NULL, comparison_key TEXT NOT NULL,
+    value_kind TEXT NOT NULL CHECK (value_kind IN ('observation','bootstrap_claim')),
+    source_observation_id TEXT, source_claim_id TEXT,
+    observed_at TEXT NOT NULL, observed_seq INTEGER NOT NULL,
+    detector_version TEXT NOT NULL, normalizer_version TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('active','needs_rebaseline')),
+    last_event_id TEXT, updated_at TEXT NOT NULL,
+    PRIMARY KEY (venue_id, venue_key, field, qualifier_key, source_identity, target_fingerprint),
+    CHECK ((source_observation_id IS NOT NULL) != (source_claim_id IS NOT NULL))
+);
+CREATE TABLE IF NOT EXISTS web_change_events (
+    change_id TEXT PRIMARY KEY, event_seq INTEGER NOT NULL UNIQUE,
+    event_kind TEXT NOT NULL CHECK (event_kind IN
+      ('hours','price_day_pass','closures','qualifier_added','qualifier_missing','authorization_changed')),
+    venue_id TEXT NOT NULL, venue_key TEXT NOT NULL,
+    field TEXT NOT NULL, qualifier_key TEXT NOT NULL,
+    source_identity TEXT NOT NULL, target_fingerprint TEXT NOT NULL,
+    requested_url TEXT NOT NULL, final_url TEXT NOT NULL,
+    old_value_json TEXT, new_value_json TEXT,
+    old_comparison_key TEXT, new_comparison_key TEXT,
+    old_observation_id TEXT, new_observation_id TEXT,
+    predecessor_observation_id TEXT, predecessor_claim_id TEXT,
+    observed_at TEXT NOT NULL, checked TEXT NOT NULL,
+    detector_version TEXT NOT NULL, normalizer_version TEXT NOT NULL,
+    review_reason TEXT, usable_for_viral INTEGER NOT NULL CHECK (usable_for_viral IN (0,1)),
+    rights TEXT NOT NULL CHECK (rights='internal_review_only'),
+    auto_publish_to_site INTEGER NOT NULL CHECK (auto_publish_to_site=0),
+    created_at TEXT NOT NULL,
+    CHECK (event_kind NOT IN ('hours','price_day_pass','closures') OR
+      ((predecessor_observation_id IS NOT NULL) != (predecessor_claim_id IS NOT NULL)))
+);
+CREATE TRIGGER IF NOT EXISTS web_change_events_immutable_update BEFORE UPDATE ON web_change_events
+BEGIN SELECT RAISE(ABORT, 'immutable_event'); END;
+CREATE TRIGGER IF NOT EXISTS web_change_events_immutable_delete BEFORE DELETE ON web_change_events
+BEGIN SELECT RAISE(ABORT, 'immutable_event'); END;
+CREATE TABLE IF NOT EXISTS web_change_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS web_change_pending ON web_change_observations(processed,observed_seq);
+'''
+
 
 def connect(directory):
     directory = outside(directory)
@@ -92,6 +152,7 @@ def connect(directory):
     db.executescript(SCHEMA)
     _migrate(db)
     db.executescript(CANDIDATE_SCHEMA)
+    db.executescript(CHANGE_SCHEMA)
     os.chmod(path, 0o600)
     return db
 
@@ -218,17 +279,102 @@ def evidence_report(db):
 
 
 def connect_readonly(directory):
-    """No mkdir, chmod, WAL initialization or migrations, including old schemas."""
+    """In-memory committed snapshot; even WAL read marks stay untouched.
+
+    A normal mode=ro SQLite connection may create/update -shm. Reading stable
+    bytes and replaying committed WAL frames avoids that dry-run side effect.
+    See https://sqlite.org/fileformat2.html#walformat (checksums and commits).
+    """
     directory = outside(directory)
     path = directory / 'collector.sqlite3'
     if path.is_symlink():
         raise CollectError('state_corrupt')
     if not path.exists():
         return None
-    db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True, timeout=30)
+    image = _readonly_image(path)
+    db = sqlite3.connect(':memory:')
+    try:
+        db.deserialize(image)
+    except Exception:
+        db.close()
+        raise
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA query_only=ON')
     return db
+
+
+def _readonly_image(path):
+    wal_path = path.with_name(path.name + '-wal')
+    journal_path = path.with_name(path.name + '-journal')
+
+    def read_optional(file):
+        if file.is_symlink():
+            raise CollectError('state_corrupt')
+        try:
+            return file.read_bytes()
+        except FileNotFoundError:
+            return b''
+
+    for _ in range(3):
+        main, wal, journal = path.read_bytes(), read_optional(wal_path), read_optional(journal_path)
+        if (main == path.read_bytes() and wal == read_optional(wal_path)
+                and journal == read_optional(journal_path)):
+            break
+    else:
+        raise CollectError('state_corrupt')
+    # Legacy hot-journal recovery requires a writable operator open, not report.
+    if journal[:8] == bytes.fromhex('d9d505f920a163d7'):
+        raise CollectError('state_corrupt')
+    if len(main) < 100 or main[:16] != b'SQLite format 3\x00':
+        raise CollectError('state_corrupt')
+    page_size = int.from_bytes(main[16:18], 'big')
+    page_size = 65536 if page_size == 1 else page_size
+    if page_size < 512 or page_size > 65536 or page_size & (page_size - 1) or len(main) % page_size:
+        raise CollectError('state_corrupt')
+    image = bytearray(main)
+    if wal:
+        if len(wal) < 32:
+            raise CollectError('state_corrupt')
+        magic, version, wal_size = struct.unpack('>III', wal[:12])
+        if magic not in (0x377f0682, 0x377f0683) or version != 3007000 or wal_size != page_size:
+            raise CollectError('state_corrupt')
+        endian = '<' if magic == 0x377f0682 else '>'
+
+        def checksum(data, state=(0, 0)):
+            a, b = state
+            for x, y in struct.iter_unpack(endian + 'II', data):
+                a = (a + x + b) & 0xffffffff
+                b = (b + y + a) & 0xffffffff
+            return a, b
+
+        state = checksum(wal[:24])
+        if state != struct.unpack('>II', wal[24:32]):
+            raise CollectError('state_corrupt')
+        frames, committed, pages = [], 0, 0
+        for offset in range(32, len(wal) - page_size - 23, page_size + 24):
+            header = wal[offset:offset+24]
+            content = wal[offset+24:offset+24+page_size]
+            page, size = struct.unpack('>II', header[:8])
+            current = checksum(content, checksum(header[:8], state))
+            if header[8:16] != wal[16:24] or current != struct.unpack('>II', header[16:24]):
+                break  # Uncommitted tail or frames from a prior WAL generation.
+            if page == 0:
+                raise CollectError('state_corrupt')
+            state = current
+            frames.append((page, content))
+            if size:
+                committed, pages = len(frames), size
+        if committed:
+            # Bound allocation by actual pages available, including growth frames.
+            if pages > len(main)//page_size + committed:
+                raise CollectError('state_corrupt')
+            image = image[:pages * page_size]
+            image.extend(b'\x00' * (pages * page_size - len(image)))
+            for page, content in frames[:committed]:
+                if page <= pages:
+                    image[(page-1)*page_size:page*page_size] = content
+    image[18:20] = b'\x01\x01'  # Only the in-memory copy uses rollback mode.
+    return bytes(image)
 
 
 def stored_candidates(db):

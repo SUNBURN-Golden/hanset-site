@@ -270,3 +270,12 @@ and a maximum-20 operator IG read list. No cron changes or Instagram browser
 are added. See [GAP_PRIORITY.md](GAP_PRIORITY.md) for `collect plan-gaps`, scoring,
 read-only evidence rules, replay/fallback behavior and manual watchlist proposal
 application. Planning and proposals never publish or change the live watchlist.
+
+## Official web change review feeds
+
+Daily official web observations now feed offline hours/price/closure change
+review. Detection preserves claims and emits proposals, rebuild candidates and
+a VIRAL topic file without publishing or sending. See
+[OFFICIAL_WEB_CHANGES.md](OFFICIAL_WEB_CHANGES.md) for commands, authorization,
+bootstrap/rebaseline, artifact hashes and human review requirements. The
+existing web wrapper and schedule are unchanged.

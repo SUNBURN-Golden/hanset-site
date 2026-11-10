@@ -50,6 +50,11 @@ def parser():
     promote.add_argument('--dry-run', action='store_true')
     plan = modes.add_parser('plan-gaps')
     plan.add_argument('--ranking', choices=('model', 'local'), default='model')
+    detect = modes.add_parser('detect-changes')
+    detect.add_argument('--dry-run', action='store_true')
+    detect.add_argument('--rebaseline', action='store_true')
+    export = modes.add_parser('export-changes')
+    export.add_argument('--as-of')
     return p
 
 
@@ -94,7 +99,7 @@ def _collect_main(args):
     """Dispatch before the active collector opens its store for unrelated commands."""
     from .collect import CollectError
     from .collect.service import _review_error, load_settings, public_result, run_ingest, run_promote, run_report, run_status, run_web
-    review_command = args.collect_command in ('report', 'promote')
+    review_command = args.collect_command in ('report', 'promote', 'detect-changes', 'export-changes')
     try:
         options = {'active_dir': args.data_dir} if args.data_dir else {}
         if review_command:
@@ -109,6 +114,14 @@ def _collect_main(args):
             result = run_plan(settings, ranking=args.ranking)
         elif args.collect_command == 'ingest':
             result = run_ingest(settings, inbox_file=args.inbox)
+        elif args.collect_command in ('detect-changes', 'export-changes'):
+            from .collect.service import run_detect_changes, run_export_changes
+            if args.collect_command == 'detect-changes':
+                result = run_detect_changes(settings, dry_run=args.dry_run, rebaseline=args.rebaseline)
+            else:
+                result = run_export_changes(settings, as_of=args.as_of)
+            print(json.dumps(result, ensure_ascii=False))
+            return 0 if result.get('state') == 'ok' else 2
         elif args.collect_command in ('report', 'promote'):
             if args.collect_command == 'promote':
                 result = run_promote(settings, policy_path=args.policy, dry_run=args.dry_run)

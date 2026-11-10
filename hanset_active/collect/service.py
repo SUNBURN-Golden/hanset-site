@@ -126,6 +126,7 @@ def _store_batch(db, rows, parsed, *, kind, clock, state):
                 claims=claims, venue_id=row['venue_id'], venue_key=row['venue_key'],
                 seen_at=row['seen_at'], clock=clock)
         if kind == 'web':
+            _observe_stored(db, row, text_hash)
             state.complete(row['url'], disposition)
         else:
             state.data['counts']['ig_reads'] += 1
@@ -135,6 +136,15 @@ def _store_batch(db, rows, parsed, *, kind, clock, state):
         state.save()
         pages.append({'url': row['url'], 'disposition': disposition})
     return pages, new_claims
+
+
+def _observe_stored(db, row, text_hash):
+    from .changes import insert_observation
+    from .store import read_claims
+    claims = [claim for claim in read_claims(db) if claim['content_hash'] == text_hash
+              and claim['source_url'] == row['url'] and claim['venue_id'] == row['venue_id']
+              and claim['venue_key'] == row['venue_key']]
+    insert_observation(db, {**row, 'content_hash': text_hash}, claims)
 
 
 def _extract(rows, *, kind, settings, state, session, clock):
@@ -151,6 +161,8 @@ def _extract(rows, *, kind, settings, state, session, clock):
                         (kind, row['url'], text_hash)).fetchone():
                     if kind == 'instagram':
                         state.data['counts']['ig_reads'] += 1
+                    else:
+                        _observe_stored(db, row, text_hash)
                     state.complete(row['url'], 'duplicate')
                     pages.append({'url': row['url'], 'disposition': 'duplicate'})
                 else:
@@ -186,8 +198,24 @@ def run_web(settings, *, targets_path=None, clock=None, session=None, search=Non
     try:
         _prepare_dir(settings.data_dir)
         with ProcessLock(settings.data_dir / 'daemon.lock'):
-            return _run_web(settings, targets_path=targets_path, clock=clock, session=session, search=search,
-                            testing=testing, planner=planner, planner_session=planner_session)
+            recovery = _change_cycle(settings, targets_path=targets_path, testing=testing, export=False)
+            try:
+                result = _run_web(settings, targets_path=targets_path, clock=clock, session=session, search=search,
+                                  testing=testing, planner=planner, planner_session=planner_session)
+            finally:
+                changes = _change_cycle(settings, targets_path=targets_path, testing=testing)
+            result['changes'] = changes
+            if recovery.get('reason') not in ('ok', 'no_events'):
+                result['changes']['recovery_reason'] = recovery['reason']
+            # Persist only fixed side diagnostics, never exception strings.
+            status = settings.data_dir / 'status.json'
+            if status.exists():
+                from .state import atomic_json
+                try:
+                    atomic_json(status, result)
+                except (CollectError, OSError):
+                    pass  # Side-artifact status must not invalidate collection.
+            return result
     except CollectorBusy:
         return public_result(_base('already_running', 'already_running', success=False, collected=False, mode=mode))
     except CollectError as error:
@@ -273,7 +301,8 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                             continue
                         proposal_evidence.extend(inspect_page(
                             job, fetched, observed_at=kst_now(clock).isoformat(), disposition=disposition))
-                        ready.append({**job, 'text': text, 'seen_at': kst_now(clock).isoformat()})
+                        ready.append({**job, 'text': text, 'seen_at': kst_now(clock).isoformat(),
+                                      'final_url': fetched.url or job['url'], '_testing': testing})
                 finally:
                     fetcher.close()
         except ActiveBusy:
@@ -393,6 +422,11 @@ def _review_result(report):
     identifier_keys = {'claim_id', 'claim_ids', 'newest_claim_ids', 'supporting_claim_ids',
                        'eligible_supporting_claim_ids', 'candidate_id', 'conflict_id',
                        'policy_fingerprint', 'assessment_fingerprint', 'assessment_digest', 'content_hash'}
+    identifier_keys.update({'change_id', 'change_ids', 'observation_id', 'observation_ids',
+                           'event_id', 'event_ids', 'old_observation_id', 'new_observation_id',
+                           'predecessor_observation_id', 'predecessor_claim_id', 'source_observation_id',
+                           'source_claim_id', 'target_fingerprint', 'event_digest', 'artifact_sha256',
+                           'manifest_sha256', 'latest_change_ids'})
 
     def clean(value, key=None):
         if isinstance(value, str):
@@ -439,6 +473,11 @@ def run_report(settings, *, policy_path=None, clock=None):
             if db:
                 db.execute('BEGIN')
             report = _assess_review(db, policy, clock)
+            from .changes import change_report
+            from .change_feeds import manifest_status
+            changes = change_report(db)
+            changes['manifest'] = manifest_status(settings.data_dir, expected_watermark=changes['events'])
+            report['changes'] = changes
         finally:
             if db:
                 db.close()
@@ -499,3 +538,87 @@ def run_status(settings, *, clock=None):
 
 def load_settings(**kwargs):
     return CollectSettings(**kwargs)
+
+
+def _change_targets(settings, targets_path=None, *, testing=False):
+    from .targets import parse_targets
+    try:
+        return parse_targets(Path(targets_path) if targets_path else settings.data_dir / 'web_targets.json', testing=testing)
+    except CollectError:
+        return None
+
+
+def _change_cycle(settings, *, targets_path=None, testing=False, export=True, rebaseline=False):
+    """Caller holds daemon.lock. Side failures never invalidate collection."""
+    from . import changes
+    from .change_feeds import export_changes
+    db = None
+    try:
+        db = claim_connect(settings.data_dir)
+        targets = _change_targets(settings, targets_path, testing=testing)
+        if changes.needs_rebaseline(db) and not rebaseline:
+            result = changes.process_pending(db, targets, testing=testing)
+        elif rebaseline:
+            result = changes.rebaseline(db, targets, testing=testing)
+        else:
+            changes.bootstrap_baselines(db, targets, testing=testing)
+            result = changes.process_pending(db, targets, testing=testing)
+        if export:
+            exported = export_changes(db, settings.data_dir)
+            result['export'] = exported
+            if exported['reason'] == 'export_failed':
+                result['reason'] = 'export_failed'
+        return result
+    except Exception:
+        return {'reason': 'detector_error'}
+    finally:
+        if db:
+            db.close()
+
+
+def run_detect_changes(settings, *, dry_run=False, rebaseline=False):
+    from .changes import change_report, rebaseline_candidates
+    from .store import connect_readonly
+    if dry_run:
+        db = connect_readonly(settings.data_dir)
+        try:
+            result = change_report(db)
+            if rebaseline:
+                result['would_reseed'] = len(rebaseline_candidates(db, _change_targets(settings)))
+            return _review_result({**result, 'state': 'ok', 'dry_run': True,
+                                   'would_rebaseline': rebaseline,
+                                   'rights': 'internal_review_only', 'auto_publish_to_site': False})
+        finally:
+            if db:
+                db.close()
+    try:
+        _prepare_dir(settings.data_dir)
+        with ProcessLock(settings.data_dir / 'daemon.lock'):
+            result = _change_cycle(settings, rebaseline=rebaseline)
+        return _review_result({**result, 'state': 'ok' if result['reason'] in ('ok', 'no_events') else 'error',
+                               'rights': 'internal_review_only', 'auto_publish_to_site': False})
+    except CollectorBusy:
+        return _review_error('already_running')
+    except (CollectError, OSError, ValueError, sqlite3.Error):
+        return _review_error('state_corrupt')
+
+
+def run_export_changes(settings, *, as_of=None):
+    from .change_feeds import export_changes
+    path = settings.data_dir / 'collector.sqlite3'
+    if not path.exists():
+        return {'state': 'ok', 'reason': 'no_events', 'rights': 'internal_review_only', 'auto_publish_to_site': False}
+    try:
+        _prepare_dir(settings.data_dir)
+        with ProcessLock(settings.data_dir / 'daemon.lock'):
+            db = claim_connect(settings.data_dir)
+            try:
+                result = export_changes(db, settings.data_dir, as_of=as_of)
+            finally:
+                db.close()
+        return _review_result({**result, 'state': 'error' if result['reason'] == 'export_failed' else 'ok',
+                               'rights': 'internal_review_only', 'auto_publish_to_site': False})
+    except CollectorBusy:
+        return _review_error('already_running')
+    except (CollectError, OSError, ValueError, sqlite3.Error):
+        return _review_error('state_corrupt')
