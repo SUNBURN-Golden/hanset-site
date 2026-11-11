@@ -59,13 +59,21 @@ def detect_outcome(content: bytes, content_type: str, status: int) -> str:
     return 'ok'
 
 class Fetcher:
-    def __init__(self, settings: Settings | None = None, db=None, clock: Clock | None = None):
+    def __init__(self, settings: Settings | None = None, db=None, clock: Clock | None = None, proxy: str = ''):
         self.settings=settings or Settings()
+        # Optional egress proxy (collect-web only). No direct fallback when set.
+        self.proxy=''
+        self.proxy_failed=False
+        if proxy:
+            from .web_proxy import configured
+            self.proxy=configured({'HANSET_WEB_PROXY':proxy})
         self.db=db if db is not None else connect(self.settings.data_dir/'active.sqlite3')
         self.clock=clock or Clock()
         self.session=requests.Session()
         self.session.trust_env=False
         self.session.headers.update({'User-Agent':USER_AGENT,'Accept-Encoding':'gzip'})
+        if self.proxy:
+            self.session.proxies={'http':self.proxy,'https':self.proxy}
         self._locks={}
         self._guard=threading.RLock()
         self._global_lock=threading.Lock()
@@ -144,12 +152,16 @@ class Fetcher:
             body=b''
             response=None
             reason=''
+            proxy_down=False
             try:
                 response=self.session.get(url,headers=headers,allow_redirects=False,timeout=(self.settings.timeout,self.settings.timeout),stream=True)
                 status=response.status_code
                 ct=response.headers.get('Content-Type','').lower()
                 limit=8*1024**2 if 'pdf' in ct else 4*1024**2 if ct.startswith('image/') else 2*1024**2
-                if int(response.headers.get('Content-Length','0'))>limit:
+                from .web_proxy import is_heavy
+                if self.proxy and is_heavy(ct):
+                    reason='heavy resource'
+                elif int(response.headers.get('Content-Length','0'))>limit:
                     reason='size limit'
                 else:
                     for chunk in response.iter_content(65536):
@@ -160,6 +172,10 @@ class Fetcher:
                             break
             except (requests.RequestException, ValueError) as exc:
                 reason=type(exc).__name__
+                if self.proxy and isinstance(exc,requests.ConnectionError):
+                    from .web_proxy import reachable
+                    if not reachable(self.proxy):
+                        proxy_down=True
             finally:
                 if response is not None:
                     response.close()
@@ -167,6 +183,11 @@ class Fetcher:
                     args=(strip_pii(url),domain,kst_now(self.clock).isoformat(),status,kind,len(body))
                     self.db.execute('INSERT INTO request_log(url,domain,ts,status,kind,bytes) VALUES (?,?,?,?,?,?)',args)
                     self.db.execute('INSERT INTO fetch_log(url,domain,ts,status,kind,bytes) VALUES (?,?,?,?,?,?)',args)
+            if proxy_down:
+                # Fail closed: never retry without the proxy, never cache robots.
+                from .web_proxy import ProxyUnavailable
+                self.proxy_failed=True
+                raise ProxyUnavailable('proxy_unavailable')
             return response,body,reason
     def _robots_allowed(self,url, *, mark_inaccessible=True):
         # fetch() defers the domain stop while considering one HTTPS origin.
