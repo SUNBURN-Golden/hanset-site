@@ -7,6 +7,7 @@ from urllib.parse import urlsplit
 
 from hanset_active.config import Settings
 from hanset_active.db import connect as active_connect
+from hanset_active import web_proxy
 from hanset_active.fetcher import Fetcher
 from hanset_active.locks import AlreadyRunning as ActiveBusy
 from hanset_active.locks import RunLock
@@ -272,12 +273,21 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
             return _finish(state, _base('error', 'missing_credentials', success=False, collected=False, mode='web', pages=notes), clock)
         if not state.can_model(1, OUTPUT_TOKENS):
             return _finish(state, _base('stopped', 'model_budget_exhausted', success=False, collected=False, mode='web', pages=notes), clock)
+        try:
+            proxy = web_proxy.configured()
+        except ValueError:
+            return _finish(state, _base('stopped', 'proxy_invalid', success=False, collected=False, mode='web', pages=notes), clock)
+        if proxy:
+            blocked = web_proxy.preflight(proxy)
+            if blocked:
+                # Fail closed: skip every web fetch; never use the box IP.
+                return _finish(state, _base('stopped', blocked, success=False, collected=False, mode='web', pages=notes), clock)
         ready, pages = [], list(notes)
         proposal_evidence = []
         stop_reason = None
         try:
             with RunLock(active, active_settings.data_dir, 'collect-web', clock=clock):
-                fetcher = Fetcher(active_settings, active, clock)
+                fetcher = Fetcher(active_settings, active, clock, proxy=proxy)
                 try:
                     run_pages = 0
                     for job in pending:
@@ -287,7 +297,11 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                         if run_pages >= PAGE_RUN_CAP:
                             stop_reason = 'run_cap'
                             break
-                        fetched = fetcher.fetch(job['url'])
+                        try:
+                            fetched = fetcher.fetch(job['url'])
+                        except web_proxy.ProxyUnavailable:
+                            stop_reason = 'proxy_unavailable'
+                            break
                         if fetched.outcome == 'cap_reached':
                             stop_reason = 'active_body_cap'
                             break

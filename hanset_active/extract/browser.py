@@ -7,6 +7,7 @@ from ..util.pii import strip_pii
 from ..util.hashing import content_hash
 from ..util.urls import canonicalize, registrable_domain, is_excluded
 from ..util.timeutil import kst_now
+from ..web_proxy import HEAVY_RESOURCES
 NAME='browser'
 VERSION='1.0.0'
 # Outcomes that must still discard the render. Transport failures of a
@@ -60,12 +61,21 @@ def fetch(fetcher, url: str) -> FetchResult:
         return FetchResult(strip_pii(url),'error',reason='browser unavailable',fetch_method=NAME)
     failure=[]
     with sync_playwright() as p:
-        browser=p.chromium.launch(headless=True)
+        proxy=getattr(fetcher,'proxy','')
+        if proxy:
+            from ..web_proxy import browser_server
+            # Defense in depth: every request is also routed through Fetcher.
+            browser=p.chromium.launch(headless=True,proxy={'server':browser_server(proxy)})
+        else:
+            browser=p.chromium.launch(headless=True)
         try:
             context=browser.new_context(user_agent=USER_AGENT,service_workers='block')
             def route_request(route):
                 request=route.request
                 document=_document_request(request)
+                if proxy and not document and getattr(request,'resource_type','') in HEAVY_RESOURCES:
+                    # Images, fonts, and media never cross the metered proxy.
+                    _drop_request(route); return
                 if request.method!='GET':
                     # A non-GET navigation is a policy denial. Aux beacons are
                     # refused too, but only the document request fails the render.
