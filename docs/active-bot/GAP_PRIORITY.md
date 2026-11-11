@@ -90,14 +90,27 @@ count, for the first 100 actionable candidates in canonical local order.
 The request contains anonymous indices, field IDs, channel IDs and gap counts;
 no names, handles, URLs, claims, evidence or page text. It uses the existing
 `DeepSeek.ask`, `temperature=0`, disabled thinking and persistent State budget.
+Ranking inherits the owner-approved Qwen backup tier (see COLLECTOR.md): a
+failed primary ranking call is retried once via `qwen4-max-preview` with the
+same anonymous payload; the Qwen request omits the DeepSeek-only `thinking`
+and `response_format` fields. Both attempts charge the same daily budget.
 
 The only accepted response is `{"order": [0, 1]}`, a complete exact permutation
 of supplied integer indices. Bools, duplicates, omissions, out-of-range indices
 and extra keys invalidate the entire response. No partial result is used.
-One full extraction input/output request and call are reserved as headroom.
+Two ranking attempts (primary plus one Qwen backup) and one full extraction
+input/output request and call are reserved as headroom.
 Missing credentials, insufficient reserved budget, timeout, transport, auth,
 rate limit, unavailable model and invalid output all yield local ordering with
-`fallback_*` reasons. Raw provider errors and reasoning are never retained.
+`fallback_*` reasons. When both providers fail, the original DeepSeek reason
+determines the `fallback_*` code. Raw provider errors and reasoning are never
+retained.
+
+Plan artifacts stay DeepSeek-id: `ranking.model` remains the configured
+DeepSeek model even when Qwen answered, so plan validation, the model
+allowlist and decision digests are unchanged. Which provider answered is
+transient per-run diagnostics only (`provider` in the `plan-gaps` result and
+in web/ingest status), never a plan or checkpoint field.
 
 ## Artifacts, freeze and recovery
 

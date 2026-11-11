@@ -12,7 +12,9 @@ from hanset_active.collect.config import CollectSettings
 from hanset_active.collect.service import run_ingest, run_status
 from hanset_active.collect.state import State
 from hanset_active.util.timeutil import FakeClock
-from tests.active_bot.test_collect_deepseek import HOURS, KEY, Session, _envelope, _hours_value
+from tests.active_bot.test_collect_deepseek import (
+    HOURS, KEY, QWEN_KEY, Response, Session, _envelope, _hours_value, _qwen_key_file,
+)
 
 SENTINEL = 'UNIQUE_SOURCE_SENTINEL_do_not_store'
 
@@ -137,6 +139,27 @@ def test_ingest_stores_source_claim_and_deletes_batch(tmp_path, monkeypatch):
     status = run_status(settings)
     assert status['state'] == 'done'
     assert SENTINEL not in json.dumps(status) and KEY not in json.dumps(status)
+
+
+def test_ingest_falls_back_to_qwen(tmp_path, monkeypatch):
+    from hanset_active.collect.deepseek import QWEN_ENDPOINT
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    _qwen_key_file(tmp_path, monkeypatch)
+    settings = _settings(tmp_path)
+    _watch(settings)
+    _batch(settings)
+    primary = Session(Response(429, b'provider text'))
+    qwen = _session()
+    monkeypatch.setattr('hanset_active.collect.deepseek.new_qwen_session', lambda: qwen)
+    result = run_ingest(settings, clock=_clock(), session=primary)
+    assert result['success'] is True and result['collected'] is True
+    assert result['provider'] == {'qwen': 1}
+    assert len(primary.calls) == 1 and len(qwen.calls) == 1
+    assert qwen.calls[0]['url'] == QWEN_ENDPOINT
+    assert qwen.calls[0]['json']['messages'] == primary.calls[0]['json']['messages']
+    assert qwen.calls[0]['json']['messages'][0]['content'].startswith('The input is a minimal operator summary')
+    assert QWEN_KEY not in json.dumps(result)
+    assert not (settings.inbox / 'batch.jsonl').exists()
 
 
 def test_quota_photo_follow_and_flag(tmp_path, monkeypatch):

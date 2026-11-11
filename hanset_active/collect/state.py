@@ -86,6 +86,8 @@ class State:
         self.path = self.directory / 'checkpoint.json'
         today = kst_day(self.clock)
         self.data = new_checkpoint(today)
+        # Per-run diagnostics only; never part of checkpoint.json.
+        self.model_providers = {}
         self.corrupt = False
         if not self.path.exists():
             return
@@ -134,6 +136,10 @@ class State:
         budgets['output_tokens'] += output_tokens
         self.save()
 
+    def record_provider(self, name):
+        if name in ('deepseek', 'qwen'):
+            self.model_providers[name] = self.model_providers.get(name, 0) + 1
+
     def reconcile_output(self, reserved, used):
         if type(used) is int and 0 <= used <= reserved:
             self.data['budgets']['output_tokens'] -= reserved - used
@@ -156,5 +162,6 @@ class State:
             'budgets': self.data['budgets'],
             'halt': self.data.get('halt'),
             'pages': result.get('pages') or [],
+            'provider': result.get('provider') or {},
         }
         atomic_json(self.directory / 'status.json', body)

@@ -81,6 +81,16 @@ def bot(tmp_path):
     result.close(); db.close()
 
 @pytest.fixture(autouse=True)
+def isolate_qwen_key(monkeypatch, tmp_path):
+    # The host may carry a real Qwen key file; tests must never read or use it.
+    from hanset_active.collect import credentials
+    monkeypatch.setenv('HANSET_QWEN_KEY_FILE', str(tmp_path / 'absent-qwen-key'))
+    credentials._read_key.cache_clear()
+    yield
+    credentials._read_key.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def forbid_external_requests(monkeypatch):
     # Fail fast on any accidental internet attempt, including direct requests.
     import socket

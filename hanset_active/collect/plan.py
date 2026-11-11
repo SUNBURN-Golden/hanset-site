@@ -210,10 +210,12 @@ class DeepSeekRanker:
         payload = model_payload(candidates)
         chars = len(json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
         budgets = self.state.data['budgets']
+        # Headroom: two ranking attempts (primary + one Qwen backup) plus one
+        # full extraction request. reserve_model still enforces caps per attempt.
         if (chars > INPUT_LIMIT or not self.state.can_model(chars, OUTPUT_TOKENS)
-                or budgets['model_calls'] + 2 > MODEL_CALL_CAP
-                or budgets['input_chars'] + chars + INPUT_LIMIT > MODEL_INPUT_CAP
-                or budgets['output_tokens'] + 2 * OUTPUT_TOKENS > MODEL_OUTPUT_CAP):
+                or budgets['model_calls'] + 3 > MODEL_CALL_CAP
+                or budgets['input_chars'] + 2 * chars + INPUT_LIMIT > MODEL_INPUT_CAP
+                or budgets['output_tokens'] + 3 * OUTPUT_TOKENS > MODEL_OUTPUT_CAP):
             return local, 'fallback_budget_reserved'
         brain = DeepSeek(self.state, model=self.model, session=self.session)
         try:
@@ -597,7 +599,9 @@ def run_plan(settings, *, ranking='model', clock=None, planner=None, planner_ses
                     'plan_path': redact(str(settings.data_dir / 'plans' / (day + '.json'))),
                     'ranked_count': len(plan['ranked_venues']), 'web_target_count': len(plan['web_targets']),
                     'ig_list_count': len(plan['ig_read_list']), 'ranking_mode': plan['ranking']['mode'],
-                    'ranking_reason': plan['ranking']['reason'], 'auto_publish_to_site': False}
+                    'ranking_reason': plan['ranking']['reason'], 'auto_publish_to_site': False,
+                    # Transient per-run diagnostics; plan artifacts keep the DeepSeek id.
+                    'provider': dict(state.model_providers)}
     except AlreadyRunning:
         return {'state': 'already_running', 'reason': 'already_running', 'auto_publish_to_site': False}
     except CollectError as error:

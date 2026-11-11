@@ -11,7 +11,9 @@ from hanset_active.locks import RunLock
 from hanset_active.search.tavily import SearchLead, SearchOutcome
 from hanset_active.util.timeutil import FakeClock
 from hanset_twin.daemon import ProcessLock
-from tests.active_bot.test_collect_deepseek import HOURS, KEY, Response, Session, _envelope, _hours_value
+from tests.active_bot.test_collect_deepseek import (
+    HOURS, KEY, QWEN_KEY, Response, Session, _envelope, _hours_value, _qwen_key_file,
+)
 
 SENTINEL = 'UNIQUE_SOURCE_SENTINEL_do_not_store'
 PHONE = '0' + '10' + '-' + '1234' + '-' + '5678'
@@ -124,6 +126,56 @@ def test_restart_retries_model_then_new_day_is_duplicate(server, tmp_path, monke
     saved = json.loads((settings.data_dir / 'checkpoint.json').read_text())
     assert saved['budgets']['model_calls'] == 0
     assert saved['day'] == clock.now().astimezone(KST).date().isoformat()
+
+
+def test_extraction_falls_back_to_qwen(server, tmp_path, monkeypatch):
+    import sqlite3
+    from hanset_active.collect.deepseek import QWEN_ENDPOINT
+    from hanset_active.collect.service import run_status
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    _qwen_key_file(tmp_path, monkeypatch)
+    server.add('/hours', _page())
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    _targets(settings.data_dir / 'web_targets.json', server.base + '/hours')
+    primary = Session(Response(429, b'provider text'))
+    qwen = _session()
+    monkeypatch.setattr('hanset_active.collect.deepseek.new_qwen_session', lambda: qwen)
+    result = run_web(settings, clock=FakeClock(), session=primary, testing=True)
+    assert result['state'] == 'done' and result['success'] is True and result['collected'] is True
+    assert result['provider'] == {'qwen': 1}
+    assert len(primary.calls) == 1 and len(qwen.calls) == 1
+    assert qwen.calls[0]['url'] == QWEN_ENDPOINT
+    status = json.loads((settings.data_dir / 'status.json').read_text())
+    assert status['provider'] == {'qwen': 1}
+    assert run_status(settings)['provider'] == {'qwen': 1}
+    db = sqlite3.connect(settings.data_dir / 'collector.sqlite3')
+    db.row_factory = sqlite3.Row
+    claim = db.execute('SELECT * FROM claims').fetchone()
+    assert claim['field'] == 'hours' and '06:00-22:00' in claim['value_json']
+    assert claim['status'] == 'source_claim'
+    db.close()
+    assert QWEN_KEY.encode() not in _stored_text(settings.data_dir)
+
+
+def test_extraction_both_fail_keeps_original_reason(server, tmp_path, monkeypatch):
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    _qwen_key_file(tmp_path, monkeypatch)
+    server.add('/hours', _page())
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    _targets(settings.data_dir / 'web_targets.json', server.base + '/hours')
+    primary = Session(Response(429, b'provider text'))
+    qwen = Session(Response(402, b'credit exhausted'))
+    monkeypatch.setattr('hanset_active.collect.deepseek.new_qwen_session', lambda: qwen)
+    result = run_web(settings, clock=FakeClock(), session=primary, testing=True)
+    assert result['state'] == 'partial' and result['reason'] == 'model_rate_limited'
+    assert result['success'] is False and result['collected'] is False
+    assert result['provider'] == {}
+    assert len(primary.calls) == 1 and len(qwen.calls) == 1
+    status = json.loads((settings.data_dir / 'status.json').read_text())
+    assert status['provider'] == {}
+    assert QWEN_KEY.encode() not in _stored_text(settings.data_dir)
 
 
 def test_robots_naver_cap_and_locks(server, tmp_path, monkeypatch):
