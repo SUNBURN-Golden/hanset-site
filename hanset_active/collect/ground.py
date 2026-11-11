@@ -8,6 +8,7 @@ from hanset_active.util.pii import strip_pii
 
 from . import CollectError
 from .config import MAX_TEXT
+from .credentials import qwen_key
 
 FIELDS = frozenset({
     'price_day_pass', 'hours', 'closures', 'tattoo_policy', 'foreigner_policy',
@@ -58,6 +59,9 @@ def secrets():
         value = os.environ.get(name, '').strip()
         if len(value) >= 8:
             found.append(value)
+    backup = qwen_key()
+    if backup:
+        found.append(backup)
     return found
 
 

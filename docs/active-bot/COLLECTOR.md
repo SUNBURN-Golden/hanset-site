@@ -30,9 +30,10 @@ post's original caption. Grounding that span checks the paraphrase only. It
 does not verify the post. Rows stored before provenance columns existed keep
 NULL origin and are unrecorded, not relabeled.
 
-DeepSeek is the existing account identified by `DEEPSEEK_API_KEY`. This
-change adds no new paid vendor. Tavily, when a target asks for it, remains
-the existing 30-request daily cap. Its secret stays on the host.
+DeepSeek is the existing account identified by `DEEPSEEK_API_KEY`. The
+owner-approved Qwen backup tier (below) uses a host-provided token-plan key.
+Tavily, when a target asks for it, remains the existing 30-request daily cap.
+Its secret stays on the host.
 
 The model default is `deepseek-flash` (DeepSeek's documented Flash id).
 `HANSET_DEEPSEEK_MODEL=deepseek-v4-pro` is an optional same-account override
@@ -42,6 +43,45 @@ at 1,200 output tokens. The persistent budget is 36 calls, 180,000 input
 characters, and 32,000 output tokens per KST day. A reserved call stays spent
 if the process stops. The next KST day starts a new budget. Rolling the clock
 backward fails closed as `state_corrupt`.
+
+## Qwen backup tier (owner-approved 2026-11-11)
+
+Every model step (web extraction, Instagram summary extraction, gap ranking)
+retries a failed DeepSeek call exactly once via Qwen4-Max. The retry fires
+only for `model_unavailable`, `model_rate_limited`, `model_transport`,
+`model_timeout`, and `model_auth` — which covers 402 credit exhaustion, 429
+limits, and 5xx. Invalid model output, an exhausted budget, and missing
+DeepSeek credentials (`missing_credentials`) never fall back; Qwen is a
+backup, not a replacement primary.
+
+- Endpoint: `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1/chat/completions`,
+  model `qwen4-max-preview`, same bounded messages as the primary attempt.
+  The Qwen request omits the DeepSeek-only `thinking` parameter and
+  `response_format` (the instruction already requires JSON-only output);
+  its read timeout is 60 s instead of 20 s.
+- Key: read at runtime from `/home/box/.qwen/token_plan_key`, overridable
+  with `HANSET_QWEN_KEY_FILE`. A missing, unreadable, symlinked, oversized,
+  or repo-internal key file silently skips the backup and keeps the original
+  error. The key is cached in process memory only; a new run picks up
+  rotation. It is redacted like other secrets and never logged, persisted,
+  or committed. No wrapper or cron change: the file is read at runtime, not
+  sourced.
+- If Qwen also fails (credit exhausted, 429, limit, timeout, invalid output),
+  the original DeepSeek reason is raised and existing retry/fallback
+  handling proceeds. There is no third tier in the collector.
+- Both attempts charge the same daily budget via `reserve_model`; the failed
+  primary reservation stays spent, so the caps cannot be exceeded by the
+  retry. With no headroom for the retry, the original error is kept.
+- `provider` in run results, `status.json`, and `collect status` counts which
+  provider answered successfully (`deepseek` / `qwen`). It is per-run
+  diagnostics: not part of `checkpoint.json`, and plan artifacts keep the
+  configured DeepSeek id in `ranking.model` (see GAP_PRIORITY.md).
+- Model calls (DeepSeek and Qwen) go direct with `trust_env=False` and never
+  use the SOCKS web proxy. Web-fetch proxy rules are unchanged.
+
+Before enabling the backup in production, the operator should make one live
+validation call to confirm the endpoint accepts the request shape; tests
+never make live calls.
 
 Web fetches use the existing active-bot fetcher: honest User-Agent, robots,
 denied hosts, redirect checks, and the active daily body/aux caps. This

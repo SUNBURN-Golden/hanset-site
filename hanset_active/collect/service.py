@@ -74,6 +74,11 @@ def public_result(result):
             isinstance(key, str) and key.replace('_', '').isalnum() and type(value) is int and 0 <= value <= 1000
             for key, value in rejections.items()):
         out['rejections'] = dict(rejections)
+    providers = result.get('provider')
+    if isinstance(providers, dict) and all(
+            key in ('deepseek', 'qwen') and type(value) is int and 0 <= value <= 1000
+            for key, value in providers.items()):
+        out['provider'] = dict(providers)
     blob = json.dumps(out, ensure_ascii=False)
     from .ground import secrets
     for secret in secrets():
@@ -85,6 +90,7 @@ def _finish(state, body, clock):
     body['at'] = kst_now(clock).isoformat()
     body['counts'] = dict(state.data['counts'])
     body['budgets'] = dict(state.data['budgets'])
+    body['provider'] = dict(state.model_providers)
     clean = public_result(body)
     state.write_status(clean)
     return clean
