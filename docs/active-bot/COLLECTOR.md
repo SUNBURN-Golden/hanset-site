@@ -193,6 +193,81 @@ python3 -m hanset_active collect web
 python3 -m hanset_active collect status
 ```
 
+## Optional web proxy recovery
+
+Only official-web fetches use `HANSET_WEB_PROXY`, a loopback SOCKS5 URL.
+When configured, preflight runs under the collector process lock, after
+planning/search and before the active fetch lock and `Fetcher` construction.
+Every retry probes the same configured proxy. Unavailable probes stop the run
+with `state=stopped`, `reason=proxy_unavailable`, `success=false`, and
+`collected=false`; a final wrong exit retains `proxy_exit_mismatch`. Invalid
+proxy configuration stops as `proxy_invalid` without invoking recovery.
+There is no direct fallback. DeepSeek, Qwen, Tavily and Instagram paths keep
+their existing routing.
+
+After an initial failed probe, an unset or blank
+`HANSET_WEB_PROXY_HEAL_CMD` causes two additional probes, after successive
+2- and 4-second waits. With a nonblank command, the collector attempts that
+command once, then makes at most three additional probes, after successive
+15-, 30- and 45-second waits. A healthy probe ends the retries immediately.
+An initially healthy proxy runs no command and incurs no retry wait.
+
+The optional command is split with `shlex.split()` and executed without a
+shell, with a 30-second timeout and stdin/stdout/stderr discarded. Shell
+operators, variable expansion and pipelines are not interpreted. Configure
+an executable or an interpreter plus script arguments in the external runtime
+environment. Parsing errors, launch failures, timeout and nonzero exit remain
+quiet and still lead to the bounded probes. Only a successful probe permits
+fetching; a zero hook exit alone does not. Command arguments, environment
+values, subprocess output and exception text are never included in diagnostics.
+
+The optional example is `bash scripts/proxy_heal_example.sh 1080` when invoked
+from the repository root; substitute the actual SOCKS port. An externally set
+`HANSET_WEB_PROXY_HEAL_CMD` can name that command. The script requires Linux
+pidfd support in both Python and the kernel. It inspects process metadata
+without printing command lines, matches the current user's actual `ssh`
+executable with `-N` and an exact `-D 127.0.0.1:<port>` argument (including
+attached short-option forms), and sends TERM only to a unique match.
+It pins the process with a pidfd and checks ownership, start ticks, executable
+identity and arguments again immediately before signaling. The existing
+external keep-alive loop performs reconnection. The script never terminates
+that parent or escalates to KILL. Exit codes are 0 for TERM sent, 2 for an
+invalid port, 3 for no match, 4 for ambiguous matches, 5 for metadata/identity,
+permission or signaling failure, and 6 for unavailable Python pidfd APIs.
+
+Each web invocation starts with these per-run diagnostics in its result and
+`status.json`, also returned by `collect status`:
+
+```json
+{"proxy_heal":{"attempted":false,"heal_exit":null,"retries":0,"recovered":false}}
+```
+
+`attempted` becomes true when the configured hook is attempted after a failed
+initial probe, including parsing or launch failure. `heal_exit` is the actual
+integer return code when available, otherwise null (including timeout).
+`retries` counts additional probes actually made, excluding the initial probe,
+from 0 through 3. `recovered` means a failed initial probe was followed by a
+successful probe, even without a hook; it does not imply collection succeeded.
+The values survive later successful, stopped, deferred and partial results.
+These diagnostics never enter `checkpoint.json`. Older status files remain
+readable, and Instagram results do not acquire this field. Public status only
+accepts the exact four fields with their declared types.
+
+Preflight preserves its existing detection limit: without
+`HANSET_WEB_PROXY_EXIT_IP`, it checks only the TCP listener. Detecting a
+listening but hung SOCKS tunnel requires that expected exit IP to be configured,
+which enables a proxied check using `HANSET_WEB_PROXY_CHECK_URL` (default
+`https://api.ipify.org`). Retries cannot detect a proxy the probe reports as
+healthy. The existing daily 04:15 KST web schedule remains unchanged; this
+feature installs no scheduler, tunnel supervisor or deployment step.
+
+Recovery tests mock probes, subprocesses and signals and use a fake clock:
+
+```sh
+python3 -m pytest tests/active_bot/test_web_proxy.py tests/active_bot/test_proxy_heal_example.py -q
+bash -n scripts/proxy_heal_example.sh
+```
+
 ## Desktop Instagram handoff
 
 Automatic profile reads, follows, and posts are not implemented. The desktop

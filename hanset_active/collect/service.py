@@ -42,6 +42,8 @@ def _base(state_name, reason, *, success, collected, mode, pages=None, rejection
         'mode': mode,
         'pages': pages or [],
     }
+    if mode == 'web':
+        body['proxy_heal'] = web_proxy.new_heal_status()
     if rejections:
         body['rejections'] = rejections
     return body
@@ -79,6 +81,14 @@ def public_result(result):
             key in ('deepseek', 'qwen') and type(value) is int and 0 <= value <= 1000
             for key, value in providers.items()):
         out['provider'] = dict(providers)
+    heal = result.get('proxy_heal')
+    if (isinstance(heal, dict) and
+            set(heal) == {'attempted', 'heal_exit', 'retries', 'recovered'} and
+            type(heal['attempted']) is bool and type(heal['recovered']) is bool and
+            (heal['heal_exit'] is None or type(heal['heal_exit']) is int) and
+            type(heal['retries']) is int and 0 <= heal['retries'] <= 3):
+        out['proxy_heal'] = {key: heal[key] for key in (
+            'attempted', 'heal_exit', 'retries', 'recovered')}
     blob = json.dumps(out, ensure_ascii=False)
     from .ground import secrets
     for secret in secrets():
@@ -91,6 +101,8 @@ def _finish(state, body, clock):
     body['counts'] = dict(state.data['counts'])
     body['budgets'] = dict(state.data['budgets'])
     body['provider'] = dict(state.model_providers)
+    if state.proxy_heal is not None:
+        body['proxy_heal'] = dict(state.proxy_heal)
     clean = public_result(body)
     state.write_status(clean)
     return clean
@@ -231,6 +243,7 @@ def run_web(settings, *, targets_path=None, clock=None, session=None, search=Non
 
 def _run_web(settings, *, targets_path, clock, session, search, testing, planner=None, planner_session=None):
     state = State(settings.data_dir, clock)
+    state.proxy_heal = web_proxy.new_heal_status()
     path = Path(targets_path) if targets_path else settings.data_dir / 'web_targets.json'
     if targets_path:
         from .config import outside
@@ -284,7 +297,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
         except ValueError:
             return _finish(state, _base('stopped', 'proxy_invalid', success=False, collected=False, mode='web', pages=notes), clock)
         if proxy:
-            blocked = web_proxy.preflight(proxy)
+            blocked, state.proxy_heal = web_proxy.preflight_with_retry(proxy, clock=clock)
             if blocked:
                 # Fail closed: skip every web fetch; never use the box IP.
                 return _finish(state, _base('stopped', blocked, success=False, collected=False, mode='web', pages=notes), clock)

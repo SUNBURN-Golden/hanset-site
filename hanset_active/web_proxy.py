@@ -8,12 +8,17 @@ never use this proxy.
 """
 import ipaddress
 import os
+import shlex
 import socket
+import subprocess
 from urllib.parse import urlsplit
+
+from hanset_active.util.timeutil import Clock
 
 ENV = 'HANSET_WEB_PROXY'
 EXIT_ENV = 'HANSET_WEB_PROXY_EXIT_IP'
 CHECK_ENV = 'HANSET_WEB_PROXY_CHECK_URL'
+HEAL_ENV = 'HANSET_WEB_PROXY_HEAL_CMD'
 DEFAULT_CHECK_URL = 'https://api.ipify.org'
 # Heavy resources never pass through the metered proxy.
 HEAVY_TYPES = ('image/', 'font/', 'audio/', 'video/', 'application/font', 'application/x-font')
@@ -87,3 +92,43 @@ def preflight(proxy, *, environ=None, session=None, timeout=10.0):
         if own:
             session.close()
     return '' if observed == expected else 'proxy_exit_mismatch'
+
+
+def new_heal_status():
+    """Fresh per-invocation diagnostics; no command or proxy details."""
+    return {'attempted': False, 'heal_exit': None, 'retries': 0, 'recovered': False}
+
+
+def preflight_with_retry(proxy, *, environ=None, clock=None):
+    """Probe the same proxy with bounded waits, optionally attempting one heal.
+
+    Hook success never authorizes fetching: only a successful probe does.
+    Hook arguments, output and exception details must never reach diagnostics.
+    """
+    env = environ if environ is not None else os.environ
+    clock = clock or Clock()
+    status = new_heal_status()
+    reason = preflight(proxy, environ=env)
+    if not reason:
+        return reason, status
+    command = env.get(HEAL_ENV, '').strip()
+    if command:
+        status['attempted'] = True
+        try:
+            args = shlex.split(command)
+            if args:
+                completed = subprocess.run(
+                    args, shell=False, timeout=30, check=False,
+                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL)
+                status['heal_exit'] = completed.returncode
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass  # Keep failures quiet and require a fresh successful probe.
+    for wait in ((15, 30, 45) if command else (2, 4)):
+        clock.sleep(wait)
+        status['retries'] += 1
+        reason = preflight(proxy, environ=env)
+        if not reason:
+            status['recovered'] = True
+            break
+    return reason, status

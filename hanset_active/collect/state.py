@@ -88,6 +88,7 @@ class State:
         self.data = new_checkpoint(today)
         # Per-run diagnostics only; never part of checkpoint.json.
         self.model_providers = {}
+        self.proxy_heal = None
         self.corrupt = False
         if not self.path.exists():
             return
@@ -164,4 +165,6 @@ class State:
             'pages': result.get('pages') or [],
             'provider': result.get('provider') or {},
         }
+        if 'proxy_heal' in result:
+            body['proxy_heal'] = dict(result['proxy_heal'])
         atomic_json(self.directory / 'status.json', body)
