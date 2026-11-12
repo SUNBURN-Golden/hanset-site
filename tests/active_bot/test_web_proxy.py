@@ -3,6 +3,10 @@ import socket
 import socketserver
 import struct
 import threading
+import json
+import subprocess
+from types import SimpleNamespace
+from unittest.mock import Mock, call
 
 import pytest
 
@@ -14,6 +18,20 @@ from hanset_active.fetcher import Fetcher
 from hanset_active.util.timeutil import FakeClock
 from tests.active_bot.test_collect_web import _page, _session, _settings, _targets
 from tests.active_bot.test_collect_deepseek import KEY
+
+
+PROXY = 'socks5h://127.0.0.1:1080'
+PRIVATE = 'SYNTHETIC_PRIVATE_ARGUMENT'
+
+
+class RetryClock(FakeClock):
+    def __init__(self):
+        super().__init__()
+        self.waits = []
+
+    def sleep(self, seconds):
+        self.waits.append(seconds)
+        super().sleep(seconds)
 
 
 def _unused_port():
@@ -139,3 +157,255 @@ def test_run_web_through_proxy_keeps_model_direct(server, socks, tmp_path, monke
     assert seen  # page traffic crossed the proxy
     assert session.calls and 'proxies' not in session.calls[0]  # model session untouched
     assert getattr(session, 'proxies', {}) in ({}, None)
+
+
+@pytest.mark.parametrize('heal,success_at', [
+    (True, 0), (True, 1), (True, 2), (True, 3),
+    (False, 0), (False, 1), (False, 2),
+])
+def test_retry_stops_at_first_healthy_probe(monkeypatch, heal, success_at):
+    env = {web_proxy.HEAL_ENV: "heal-example 'two words'"} if heal else {}
+    probe = Mock(side_effect=['proxy_unavailable'] * success_at + [''])
+    hook = Mock(return_value=SimpleNamespace(returncode=0))
+    monkeypatch.setattr(web_proxy, 'preflight', probe)
+    monkeypatch.setattr(web_proxy.subprocess, 'run', hook)
+    clock = RetryClock()
+    reason, status = web_proxy.preflight_with_retry(PROXY, environ=env, clock=clock)
+    assert reason == ''
+    assert probe.call_args_list == [call(PROXY, environ=env)] * (success_at + 1)
+    assert clock.waits == (([15, 30, 45] if heal else [2, 4])[:success_at])
+    assert clock.elapsed == sum(clock.waits)
+    assert status == {'attempted': heal and success_at > 0,
+                      'heal_exit': 0 if heal and success_at > 0 else None,
+                      'retries': success_at, 'recovered': success_at > 0}
+    if heal and success_at:
+        hook.assert_called_once_with(
+            ['heal-example', 'two words'], shell=False, timeout=30, check=False,
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        hook.assert_not_called()
+
+
+@pytest.mark.parametrize('command', [None, '', ' \t\n'])
+def test_retry_without_hook_exhausted(monkeypatch, command):
+    env = {} if command is None else {web_proxy.HEAL_ENV: command}
+    probe = Mock(return_value='proxy_unavailable')
+    hook = Mock()
+    monkeypatch.setattr(web_proxy, 'preflight', probe)
+    monkeypatch.setattr(web_proxy.subprocess, 'run', hook)
+    clock = RetryClock()
+    reason, status = web_proxy.preflight_with_retry(PROXY, environ=env, clock=clock)
+    assert reason == 'proxy_unavailable'
+    assert probe.call_count == 3 and clock.waits == [2, 4]
+    assert status == {**web_proxy.new_heal_status(), 'retries': 2}
+    hook.assert_not_called()
+
+
+@pytest.mark.parametrize('failure,exit_code,launched', [
+    ('timeout', None, True), ('launch', None, True), ('quoting', None, False),
+    ('nul', None, True), ('empty', None, False), ('nonzero', 7, True), ('zero', 0, True),
+])
+def test_hook_failure_is_quiet_and_never_authorizes_fetch(
+        monkeypatch, capsys, caplog, failure, exit_code, launched):
+    command = 'heal-example ' + PRIVATE
+    if failure == 'quoting':
+        command += " '"
+    elif failure == 'nul':
+        command += '\0'
+    hook = Mock(return_value=SimpleNamespace(returncode=exit_code))
+    if failure == 'timeout':
+        hook.side_effect = subprocess.TimeoutExpired(command, 30, output=PRIVATE, stderr=PRIVATE)
+    elif failure == 'launch':
+        hook.side_effect = OSError(PRIVATE)
+    elif failure == 'nul':
+        hook.side_effect = ValueError(PRIVATE)
+    if failure == 'empty':
+        monkeypatch.setattr(web_proxy.shlex, 'split', Mock(return_value=[]))
+    monkeypatch.setattr(web_proxy.subprocess, 'run', hook)
+    probe = Mock(return_value='proxy_unavailable')
+    monkeypatch.setattr(web_proxy, 'preflight', probe)
+    clock = RetryClock()
+    reason, status = web_proxy.preflight_with_retry(
+        PROXY, environ={web_proxy.HEAL_ENV: command}, clock=clock)
+    assert reason == 'proxy_unavailable'
+    assert status == {'attempted': True, 'heal_exit': exit_code, 'retries': 3, 'recovered': False}
+    assert probe.call_count == 4 and clock.waits == [15, 30, 45]
+    assert hook.call_count == int(launched)
+    output = capsys.readouterr()
+    assert PRIVATE not in output.out + output.err + caplog.text + json.dumps(status)
+    if launched:
+        assert hook.call_args.kwargs == {
+            'shell': False, 'timeout': 30, 'check': False,
+            'stdin': subprocess.DEVNULL, 'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL}
+
+
+@pytest.mark.parametrize('final', ['proxy_unavailable', 'proxy_exit_mismatch'])
+def test_retry_preserves_final_reason(monkeypatch, final):
+    probe = Mock(side_effect=['proxy_exit_mismatch', 'proxy_exit_mismatch', final])
+    monkeypatch.setattr(web_proxy, 'preflight', probe)
+    reason, status = web_proxy.preflight_with_retry(PROXY, environ={}, clock=RetryClock())
+    assert reason == final and status['retries'] == 2 and not status['recovered']
+
+
+@pytest.fixture
+def mocked_web(tmp_path, monkeypatch):
+    """No sockets, models, subprocesses or real sleeps in recovery integration."""
+    from hanset_active.collect import service
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    monkeypatch.setenv(web_proxy.ENV, PROXY)
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    service.State(settings.data_dir, FakeClock()).save()
+    targets = settings.data_dir / 'web_targets.json'
+    _targets(targets, 'https://venue.example/hours')
+    monkeypatch.setattr(service, '_change_cycle', Mock(return_value={'reason': 'no_events'}))
+    fetcher = Mock()
+    constructor = Mock(return_value=fetcher)
+    monkeypatch.setattr(service, 'Fetcher', constructor)
+    monkeypatch.setattr(service, 'classify_page', Mock(return_value=('ready', 'Official hours.')))
+    monkeypatch.setattr(service, 'inspect_page', Mock(return_value=[]))
+    monkeypatch.setattr(service, '_extract', Mock(return_value=([], 1)))
+    hook = Mock(return_value=SimpleNamespace(returncode=0))
+    monkeypatch.setattr(web_proxy.subprocess, 'run', hook)
+    return SimpleNamespace(settings=settings, targets=targets, clock=RetryClock(),
+                           constructor=constructor, fetcher=fetcher, hook=hook, service=service)
+
+
+@pytest.mark.parametrize('variant,reason,retries,attempted,exit_code', [
+    ('no_hook', 'proxy_unavailable', 2, False, None),
+    ('timeout', 'proxy_unavailable', 3, True, None),
+    ('launch', 'proxy_unavailable', 3, True, None),
+    ('quoting', 'proxy_unavailable', 3, True, None),
+    ('nonzero', 'proxy_unavailable', 3, True, 7),
+    ('zero', 'proxy_unavailable', 3, True, 0),
+    ('mismatch', 'proxy_exit_mismatch', 3, True, 0),
+    ('invalid', 'proxy_invalid', 0, False, None),
+])
+def test_web_retry_fail_closed_and_status(
+        mocked_web, monkeypatch, capsys, caplog, variant, reason, retries, attempted, exit_code):
+    web = mocked_web
+    if variant != 'no_hook':
+        monkeypatch.setenv(web_proxy.HEAL_ENV, 'heal-example ' + PRIVATE)
+    if variant == 'timeout':
+        web.hook.side_effect = subprocess.TimeoutExpired(PRIVATE, 30, output=PRIVATE, stderr=PRIVATE)
+    elif variant == 'launch':
+        web.hook.side_effect = OSError(PRIVATE)
+    elif variant == 'quoting':
+        monkeypatch.setenv(web_proxy.HEAL_ENV, "heal-example '" + PRIVATE)
+    elif variant == 'nonzero':
+        web.hook.return_value = SimpleNamespace(returncode=7)
+    if variant == 'invalid':
+        monkeypatch.setenv(web_proxy.ENV, 'https://127.0.0.1:1080')
+    probe = Mock(return_value='proxy_exit_mismatch' if variant == 'mismatch' else 'proxy_unavailable')
+    monkeypatch.setattr(web_proxy, 'preflight', probe)
+    result = run_web(web.settings, targets_path=web.targets, clock=web.clock, testing=True)
+    expected = {'attempted': attempted, 'heal_exit': exit_code, 'retries': retries, 'recovered': False}
+    assert result['state'] == 'stopped' and result['reason'] == reason
+    assert result['success'] is False and result['collected'] is False
+    assert result['proxy_heal'] == expected
+    assert probe.call_count == (0 if variant == 'invalid' else retries + 1)
+    assert web.clock.waits == ([15, 30, 45] if attempted else [2, 4] if retries else [])
+    assert web.hook.call_count == int(attempted and variant != 'quoting')
+    web.constructor.assert_not_called()
+    persisted = json.loads((web.settings.data_dir / 'status.json').read_text())
+    assert persisted['proxy_heal'] == expected
+    assert web.service.run_status(web.settings)['proxy_heal'] == expected
+    output = capsys.readouterr()
+    assert PRIVATE not in json.dumps(result) + json.dumps(persisted) + output.out + output.err + caplog.text
+
+
+@pytest.mark.parametrize('heal', [False, True])
+@pytest.mark.parametrize('outcome', ['done', 'deferred', 'partial_model', 'partial_proxy'])
+def test_recovery_status_survives_writers_and_cli(mocked_web, monkeypatch, capsys, outcome, heal):
+    from hanset_active.cli import main
+    from hanset_active.collect import CollectError
+    from hanset_active.collect.state import State
+    from hanset_active.locks import AlreadyRunning
+    web = mocked_web
+    if heal:
+        monkeypatch.setenv(web_proxy.HEAL_ENV, 'heal-example')
+    probe = Mock(side_effect=['proxy_unavailable', ''])
+    monkeypatch.setattr(web_proxy, 'preflight', probe)
+    expected = {'attempted': heal, 'heal_exit': 0 if heal else None, 'retries': 1, 'recovered': True}
+    written = []
+    original_write = State.write_status
+
+    def capture(state, result):
+        original_write(state, result)
+        written.append(json.loads((state.directory / 'status.json').read_text())['proxy_heal'])
+
+    monkeypatch.setattr(State, 'write_status', capture)
+    if outcome == 'deferred':
+        lock = Mock()
+        lock.__enter__ = Mock(side_effect=AlreadyRunning())
+        lock.__exit__ = Mock()
+        monkeypatch.setattr(web.service, 'RunLock', Mock(return_value=lock))
+    elif outcome == 'partial_model':
+        web.service._extract.side_effect = CollectError('model_timeout')
+    elif outcome == 'partial_proxy':
+        web.fetcher.fetch.side_effect = web_proxy.ProxyUnavailable()
+    result = run_web(web.settings, targets_path=web.targets, clock=web.clock, testing=True)
+    assert result['state'] == ('partial' if outcome.startswith('partial') else outcome)
+    assert result['proxy_heal'] == expected and written == [expected]
+    assert web.clock.waits == ([15] if heal else [2])
+    assert web.hook.call_count == int(heal)
+    assert json.loads((web.settings.data_dir / 'status.json').read_text())['proxy_heal'] == expected
+    assert web.service.run_status(web.settings)['proxy_heal'] == expected
+    assert 'proxy_heal' not in json.loads((web.settings.data_dir / 'checkpoint.json').read_text())
+    if outcome == 'deferred':
+        web.constructor.assert_not_called()
+    else:
+        assert web.constructor.call_args.kwargs['proxy'] == PROXY
+    monkeypatch.setenv('HANSET_IG_DIR', str(web.settings.data_dir))
+    assert main(['collect', 'status']) == (0 if outcome == 'done' else 2)
+    assert json.loads(capsys.readouterr().out)['proxy_heal'] == expected
+
+
+def test_public_heal_status_strict_types_and_legacy_files(tmp_path):
+    from hanset_active.collect.service import public_result, run_status
+    from hanset_active.collect.state import State
+    base = {'state': 'done', 'reason': 'ok', 'success': True, 'collected': False, 'mode': 'web'}
+    valid = {'attempted': True, 'heal_exit': -15, 'retries': 3, 'recovered': False}
+    assert public_result({**base, 'proxy_heal': valid})['proxy_heal'] == valid
+    assert public_result({**base, 'proxy_heal': valid})['proxy_heal'] is not valid
+    bad = [None, [], {}, {**valid, 'extra': PRIVATE}]
+    for key, values in {'attempted': [0, 'true', None], 'heal_exit': [True, '0', 0.0],
+                        'retries': [True, -1, 4, 1.0, '1'], 'recovered': [1, 'false', None]}.items():
+        bad.extend({**valid, key: value} for value in values)
+    bad.extend({key: value for key, value in valid.items() if key != missing} for missing in valid)
+    for value in bad:
+        assert 'proxy_heal' not in public_result({**base, 'proxy_heal': value})
+    settings = _settings(tmp_path)
+    state = State(settings.data_dir, FakeClock())
+    state.write_status(base)
+    assert 'proxy_heal' not in run_status(settings)
+    assert 'proxy_heal' not in public_result({**base, 'mode': 'instagram'})
+
+
+def test_web_defaults_do_not_reuse_previous_heal(mocked_web, monkeypatch):
+    web = mocked_web
+    monkeypatch.setattr(web_proxy, 'preflight', Mock(side_effect=['proxy_unavailable', '']))
+    first = run_web(web.settings, targets_path=web.targets, clock=web.clock, testing=True)
+    assert first['proxy_heal']['recovered'] is True
+    web.service.State(web.settings.data_dir, web.clock).complete('https://venue.example/hours', 'applied')
+    second = run_web(web.settings, targets_path=web.targets, clock=web.clock, testing=True)
+    assert second['reason'] == 'already_complete'
+    assert second['proxy_heal'] == web_proxy.new_heal_status()
+
+
+@pytest.mark.parametrize('expected,observed,reason', [
+    ('', '', ''), ('192.0.2.1', '192.0.2.1', ''),
+    ('192.0.2.1', '192.0.2.2', 'proxy_exit_mismatch'),
+])
+def test_preflight_connectivity_check_requires_expected_exit(monkeypatch, expected, observed, reason):
+    monkeypatch.setattr(web_proxy, 'reachable', Mock(return_value=True))
+    session = Mock()
+    session.get.return_value = SimpleNamespace(status_code=200, text=observed)
+    result = web_proxy.preflight(PROXY, environ={web_proxy.EXIT_ENV: expected}, session=session)
+    assert result == reason
+    if expected:
+        assert session.trust_env is False
+        session.get.assert_called_once_with(
+            web_proxy.DEFAULT_CHECK_URL, proxies={'http': PROXY, 'https': PROXY}, timeout=10.0)
+    else:
+        session.get.assert_not_called()

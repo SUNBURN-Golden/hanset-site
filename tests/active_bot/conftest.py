@@ -14,6 +14,15 @@ from hanset_active.util.timeutil import FakeClock
 
 FIXTURES=Path(__file__).parent/'fixtures'
 
+
+@pytest.fixture(autouse=True)
+def isolate_web_proxy(monkeypatch):
+    # Never inherit a host proxy or execute its optional recovery command.
+    from hanset_active import web_proxy
+    for name in (web_proxy.ENV, web_proxy.EXIT_ENV, web_proxy.CHECK_ENV, web_proxy.HEAL_ENV):
+        monkeypatch.delenv(name, raising=False)
+
+
 def minimal_pdf() -> bytes:
     stream=b'BT /F1 22 Tf 50 720 Td (Day pass 25000 KRW) Tj ET'
     objects=[b'<< /Type /Catalog /Pages 2 0 R >>',b'<< /Type /Pages /Kids [3 0 R] /Count 1 >>',b'<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',b'<< /Length '+str(len(stream)).encode()+b' >>\nstream\n'+stream+b'\nendstream']
