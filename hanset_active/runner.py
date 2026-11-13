@@ -10,9 +10,9 @@ from datetime import datetime, timedelta
 from .db import deterministic_id
 from .executor import Executor, BudgetExhausted, TaskFailure
 from .locks import RunLock, AlreadyRunning
-from .scheduler import Scheduler, enqueue, TASK_CLASSES, refresh_days
+from .scheduler import Scheduler, enqueue, TASK_CLASSES, refresh_days, defer_provider_task
 from . import gaps
-from .discover.search import queries, usable_providers
+from .discover.search import queries, usable_providers, DiscoveryDeferred
 from .util.timeutil import kst_now
 from .util.pii import strip_pii
 from .maintenance import prune_offsite_followups, requeue_browser_aux_softfail_trials, requeue_robots_trials, requeue_spa_shell_trials, scrub_portal_venue_domains
@@ -51,7 +51,9 @@ def bootstrap(fetcher):
             # A completed root is revisited on the next run. Candidate dedupe
             # lets bounded sitemaps continue past already registered entries.
             with db:
-                db.execute("UPDATE tasks SET state='pending',next_at=NULL WHERE task_id=? AND state='done'",(tid,))
+                reopened=db.execute("UPDATE tasks SET state='pending',next_at=NULL WHERE task_id=? AND state='done'",(tid,)).rowcount
+                if reopened:
+                    db.execute("DELETE FROM run_checkpoints WHERE task_id=? AND kind='discovery:osm'",(tid,))
     for row in db.execute("SELECT s.* FROM seed_venues s JOIN run_checkpoints c ON c.checkpoint_id='seed_freeze' AND c.cursor=s.seed_id").fetchall():
         if row['website']: fetcher.register_candidate(row['website'])
     now = kst_now(clock)
@@ -123,7 +125,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
             executor.run_id = run_id
             executor.heartbeat = lock.heartbeat
             executor.install()
-            scheduler = Scheduler(db,clock=clock,budget=max_requests,shares=profile['budgets'].get('class_shares'),discover_floor=profile['budgets'].get('discover_floor',.25),trial_limits={urlsplit(d['url']).hostname:min(5,d.get('max_candidates',5)) for d in profile.get('directories',[]) if d.get('low_prior')})
+            scheduler = Scheduler(db,clock=clock,budget=max_requests,shares=profile['budgets'].get('class_shares'),discover_floor=profile['budgets'].get('discover_floor',.25),trial_limits={urlsplit(d['url']).hostname:min(5,d.get('max_candidates',5)) for d in profile.get('directories',[]) if d.get('low_prior')},provider_defaults=[p.name for p in executor.providers])
             stopped = threading.Event()
             old_handler = None
             if threading.current_thread() is threading.main_thread():
@@ -156,6 +158,9 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
                         with db: db.execute("UPDATE tasks SET state='pending',lease_until=NULL WHERE task_id=?",(task['task_id'],))
                         state = 'budget_reached'
                         break
+                    except DiscoveryDeferred as deferred:
+                        with db:
+                            defer_provider_task(db,task['task_id'],deferred.next_at,clock=clock)
                     except Exception as error:
                         if os.environ.get('HANSET_ACTIVE_DEBUG'):
                             import traceback; traceback.print_exc()
@@ -181,9 +186,14 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
 def _pick(scheduler, selected, deadline, cooldowns=None):
     """Preserve scheduler fairness without allowing unselected task classes."""
     # The Stage B picker has no class predicate. Its queue can be filtered with
-    # a read-only connection facade; no queue states are changed for filtering.
+    # a connection facade; the class filter itself changes no queue state.
     original = scheduler.db
     class Filtered:
+        def __enter__(self):
+            original.__enter__()
+            return self
+        def __exit__(self,*args):
+            return original.__exit__(*args)
         def execute(self, sql, params=()):
             if "WHERE state='pending'" in sql:
                 sql = sql.replace("WHERE state='pending'", "WHERE state='pending' AND task_class IN ("+','.join('?' for _ in selected)+')')

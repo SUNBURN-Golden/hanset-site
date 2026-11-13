@@ -1,6 +1,6 @@
 """Public directory adapters using the common guarded discovery budget."""
 from urllib.parse import urlencode
-from .search import Nominatim, usable_providers
+from .search import Tavily, Nominatim, DiscoveryDeferred, usable_providers, provider_names, provider_retry_at
 from .sitemaps import expand, expand_feed, list_pages
 
 def discover(context, directory):
@@ -10,25 +10,56 @@ def discover(context, directory):
     if kind=='rss': return expand_feed(context,url)
     if kind=='html_list': return list_pages(context,url,max_pages=directory.get('max_pages',8),url_filter=directory.get('url_filter',''))
     if kind!='osm_search': raise ValueError('Unknown directory kind')
-    if not usable_providers(context.db,clock=context.clock,names=['nominatim']): return []
-    provider=Nominatim(context.get,context.db,clock=context.clock,endpoint=url)
+    names=provider_names(directory,[p.name for p in context.providers] if context.providers is not None else None)
+    available=usable_providers(context.db,clock=context.clock,names=names)
+    if not available:
+        if context.task_id: raise DiscoveryDeferred(next_at=provider_retry_at(context.db,names,clock=context.clock))
+        return []
+    cursor=context.progress('osm')
+    combinations=[(region,venue_type) for region in context.profile['regions'] for venue_type in context.profile['venue_types']]
+    if available[0]=='tavily':
+        provider=next((p for p in context.providers or [] if p.name=='tavily'),None)
+        if provider is None: provider=Tavily(context.get,context.db,clock=context.clock,context=context)
+        tasks=[]
+        for index,(region,venue_type) in enumerate(combinations):
+            if index<cursor: continue
+            query=f'{venue_type["en_terms"][0]} {region["osm_city"]} official website'
+            hits=provider.search(query,'en',3)
+            if not provider.completed:
+                raise DiscoveryDeferred(provider.reason,provider_retry_at(context.db,['tavily'],clock=context.clock))
+            for hit in hits:
+                task=context.candidate(hit.url,text=hit.title+' '+hit.snippet,via='directory:osm_search:tavily')
+                if task: tasks.append(task)
+            context.save_progress('osm',index+1)
+        return tasks
+    if available[0]!='nominatim':
+        raise DiscoveryDeferred()
+    provider=next((p for p in context.providers or [] if p.name=='nominatim'),None)
+    if provider is None: provider=Nominatim(context.get,context.db,clock=context.clock,endpoint=url)
     tasks=[]
-    for region in context.profile['regions']:
-        for venue_type in context.profile['venue_types']:
-            for page in range(min(8,directory.get('max_pages',8)) if directory.get('paginate') else 1):
-                if not context.remaining: return tasks
-                query=f'{venue_type["en_terms"][0]} {region["osm_city"]}'
-                params=provider.params(query,'en',10);params['offset']=page*10
-                result=context.get(url+'?'+urlencode(params),kind='api')
-                if not result or not result.ok:
-                    provider.state('inaccessible',result.reason if result else 'budget exhausted');break
-                hits=provider.parse(result,10)
-                if not hits: break
-                added=0
-                for hit in hits:
-                    task=context.candidate(hit.url,text=hit.title+' '+query,name=hit.name,website=hit.website,city=region['osm_city'],region=region['id'],via='directory:osm_search')
-                    if task: tasks.append(task);added+=1
-                if not added: break
+    for index,(region,venue_type) in enumerate(combinations):
+        if index<cursor: continue
+        result=None
+        for page in range(min(8,directory.get('max_pages',8)) if directory.get('paginate') else 1):
+            if not context.remaining:
+                if context.task_id: raise DiscoveryDeferred('tavily_run_limit')
+                return tasks
+            query=f'{venue_type["en_terms"][0]} {region["osm_city"]}'
+            params=provider.params(query,'en',10);params['offset']=page*10
+            result=provider.getter(url+'?'+urlencode(params),kind='api')
+            if not result or not result.ok:
+                provider.state('inaccessible',result.reason if result else 'budget exhausted');break
+            hits=provider.parse(result,10)
+            if not hits: break
+            added=0
+            for hit in hits:
+                task=context.candidate(hit.url,text=hit.title+' '+query,name=hit.name,website=hit.website,city=region['osm_city'],region=region['id'],via='directory:osm_search')
+                if task: tasks.append(task);added+=1
+            if not added: break
+        if not result or not result.ok:
+            if context.task_id: raise DiscoveryDeferred()
+            return tasks
+        context.save_progress('osm',index+1)
     return tasks
 
 

@@ -1,4 +1,4 @@
-# Optional Tavily search hook
+# Shared Tavily search and discovery
 
 This file is not a browser daemon. Session-file Playwright collection is not
 supported. Web collection and the desktop Instagram handoff are in
@@ -7,7 +7,9 @@ supported. Web collection and the desktop Instagram handoff are in
 This checkout has a paused Instagram connector, not a DeepSeek browser. The
 `hanset_active.search.discover_known_venue` add-on is the optional Tavily hook.
 [COLLECTOR.md](COLLECTOR.md) may call it when a web target asks, and otherwise
-leaves it unregistered in the broad web-search provider list. The hook itself
+leaves the known-venue hook optional. Broad active-bot discovery also uses the
+same private client through `discover.search.Tavily`, first in the default search
+provider order when credentials and shared allowance are available. The hook itself
 does not fetch Instagram, start a browser, or publish.
 
 ## Callable contract
@@ -47,6 +49,20 @@ candidates use existing URL exclusions, denylist, PII and private-address checks
 Review and access approval must happen separately before any later fetch.
 The add-on never writes the active DB, raw documents, site files, crawler state,
 clipper state or daemon checkpoint.
+
+Broad discovery separately calls `search.tavily.discover_query` after validating
+a bounded query; it does not invent a venue or gap to call the known-venue hook.
+Only the `official_page` filtering path is available to broad discovery. Its
+sanitized leads become `Hit` hints with empty identity fields and ordinary trial
+tasks carrying Tavily provenance. Search results never enter extraction or fact
+storage. The executor records only credential-free dispatch metadata and numeric
+directory progress in its existing SQLite tables. Missing credentials, daily
+exhaustion, cooldowns and other temporary provider failures leave unfinished jobs
+pending without adding failure attempts. Successful empty queries can complete.
+Provider-derived retry times clear when eligibility recovers. OSM directories
+prefer one Tavily query per region/type combination and resume from their cursor;
+Nominatim remains the fallback. Page fetching and robots enforcement are separate
+from authenticated search. No Instagram handling changes.
 
 ## Executable caller example
 
@@ -115,6 +131,10 @@ private permissions when absent. The add-on owns only `tavily_usage.json` and
 its stable `tavily_usage.lock`, independent of the future daemon's
 `checkpoint.json`. Both files are mode `0600`; keep the directory private and
 share it across every process/restart using this collector's allowance.
+The active-bot discovery provider uses this exact directory and lock as well;
+there is no separate discovery credit pool. Advisory availability checks acquire
+the lock without reserving credits or rewriting usage. The subsequent locked
+reservation remains authoritative against races between callers.
 
 Example state (no credential data):
 
@@ -181,6 +201,7 @@ URLs are discarded. Raw transport exceptions are replaced by fixed outcomes.
 | `ok` | Review any unverified leads separately; continue the run. |
 | `tavily_invalid_venue`, `tavily_unknown_venue`, `tavily_unsupported_gap`, `tavily_gap_missing`, `tavily_gap_resolved`, `tavily_unsupported_target`, `tavily_venue_excluded`, `tavily_invalid_identity` | Skip ineligible work without spending allowance. |
 | `tavily_key_missing`, `tavily_key_invalid` | Skip optional search; inspect credential provisioning privately. |
+| `tavily_invalid_query`, `tavily_run_limit` | Broad discovery rejects invalid input or pauses at its run allowance/deadline without dispatch. |
 | `tavily_budget_exhausted`, `tavily_cooldown`, `tavily_clock_changed` | Continue other steps; search can be considered at a later eligible time. |
 | `tavily_budget_unavailable` | No new dispatch; inspect external state/permissions privately. An earlier reserved request may already have failed or completed. |
 | `tavily_http_error`, `tavily_rate_limited`, `tavily_timeout`, `tavily_transport_error`, `tavily_invalid_response`, `tavily_response_too_large` | Attempt remains counted; continue without immediate retry. |
@@ -200,3 +221,13 @@ cap/restart/concurrent processes, KST rollover and clock rollback, crash after
 reservation, failed writes, malformed state, URL filtering and unchanged DB
 records. No browser behavior or collector/site integration is changed. Building
 for validation does not authorize deployment.
+
+Broad-discovery tests additionally cover provider ordering/pins and recovery,
+shared collector/discovery contention, run accounting/deadlines, pending search
+and directory jobs, budget races, resumable OSM queries, and hints-only storage.
+The global active-bot fixture redirects the Tavily key path, clears inherited
+credentials, uses temporary external usage state, and blocks external networking.
+The publication daemon runs focused discovery/scheduler/runner/Tavily tests first,
+then the suites and release build above, captures actual page counts and
+`leak check OK`, and runs `git diff --check` and a redacted diff contact/secret
+scan. No live Tavily smoke test is required.

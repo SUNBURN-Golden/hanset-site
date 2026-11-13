@@ -9,15 +9,69 @@ from bs4 import BeautifulSoup
 from ..util.timeutil import kst_now
 from ..util.pii import strip_pii
 from ..util.urls import is_denied, is_excluded
+from ..search import tavily as tavily_client
+from ..search.budget import availability as budget_availability
+
+DEFAULT_PROVIDERS = ('tavily','nominatim','wikipedia','brave','ddg_html')
+_TAVILY_RECHECK = frozenset({
+    'tavily_key_missing', 'tavily_key_invalid', 'tavily_budget_exhausted',
+    'tavily_budget_unavailable', 'tavily_cooldown', 'tavily_clock_changed',
+    'tavily_rate_limited',
+})
+
+
+class DiscoveryDeferred(RuntimeError):
+    """Unfinished discovery; leave pending without adding a failure attempt."""
+    def __init__(self, reason='search_provider_unavailable', next_at=None):
+        super().__init__(reason)
+        self.next_at = next_at
+
+
+def provider_names(payload, defaults=None):
+    """Keep explicit pins authoritative for both scheduler and executor."""
+    configured=list(DEFAULT_PROVIDERS if defaults is None else defaults)
+    if payload.get('provider'):
+        return [payload['provider']] if payload['provider'] in configured else []
+    if payload.get('kind') == 'osm_search':
+        return [name for name in ('tavily','nominatim') if name in configured]
+    return configured
+
+
+def _provider_state(db, name, state, reason='', next_at=None, *, clock=None):
+    with db:
+        db.execute('INSERT INTO provider_state VALUES (?,?,?,?,?) ON CONFLICT(provider) DO UPDATE SET state=excluded.state,reason=excluded.reason,next_at=excluded.next_at,updated_at=excluded.updated_at',
+                   (name,state,reason,next_at,kst_now(clock).isoformat()))
+
+
+def provider_retry_at(db, names, *, clock=None):
+    now = kst_now(clock)
+    times = [r['next_at'] for r in db.execute('SELECT * FROM provider_state')
+             if r['provider'] in names and r['next_at'] and r['next_at'] > now.isoformat()]
+    return min(times) if times else (now + timedelta(minutes=10)).isoformat()
 
 def usable_providers(db, *, clock=None, names=None):
     """Return provider names whose existing block/disable state permits work."""
-    names=names or ('nominatim','wikipedia','brave','ddg_html')
+    names=DEFAULT_PROVIDERS if names is None else names
     now=kst_now(clock).isoformat()
     states={r['provider']:r for r in db.execute('SELECT * FROM provider_state')}
-    return [name for name in names if not (name=='brave' and not os.environ.get('BRAVE_API_KEY'))
-            and not (name in states and states[name]['state'] in ('disabled','inaccessible')
-                     and (not states[name]['next_at'] or states[name]['next_at']>now))]
+    result=[]
+    for name in names:
+        row=states.get(name)
+        blocked=row and row['state'] in ('disabled','inaccessible') and (not row['next_at'] or row['next_at']>now)
+        if blocked and not (name=='tavily' and row['reason'] in _TAVILY_RECHECK):
+            continue
+        if name=='brave' and not os.environ.get('BRAVE_API_KEY'):
+            continue
+        if name=='tavily':
+            reason=tavily_client.credential_status()
+            retry=None
+            if reason=='ok':
+                available=budget_availability(clock=clock)
+                reason,retry=available.reason,available.retry_at
+            _provider_state(db,name,'ready' if reason=='ok' else 'inaccessible',reason,retry,clock=clock)
+            if reason!='ok': continue
+        result.append(name)
+    return result
 
 
 @dataclass
@@ -42,6 +96,7 @@ class SearchProvider:
     def params(self,query,lang,limit): return {'q':query}
     def parse(self,result,limit): raise NotImplementedError
     def search(self,query,lang='ko',limit=10):
+        self.completed=False
         row=self.db.execute('SELECT * FROM provider_state WHERE provider=?',(self.name,)).fetchone()
         if row and row['state'] in ('inaccessible','disabled') and (not row['next_at'] or row['next_at']>kst_now(self.clock).isoformat()): return []
         if is_excluded(query): return []
@@ -56,9 +111,51 @@ class SearchProvider:
                 self.state('inaccessible',result.reason or result.outcome,tomorrow);return []
             hits=self.parse(result,limit)
             self.state('ready')
+            self.completed=True
             return [h for h in hits if not is_denied(h.url) and not is_excluded(h.url,h.title,h.snippet,h.name)][:limit]
         except (ValueError,KeyError,TypeError,OSError) as exc:
             self.state('inaccessible',type(exc).__name__);return []
+
+
+class Tavily(SearchProvider):
+    """Adapt sanitized hints; never supply identity or fetched evidence."""
+    name='tavily'
+    endpoint=tavily_client.ENDPOINT
+
+    def __init__(self, getter, db, *, clock=None, context=None, transport=None):
+        super().__init__(getter,db,clock=clock)
+        bound=getattr(getter,'__self__',None)
+        self.context=context if context is not None else bound if hasattr(bound,'search_allowed') else None
+        self.transport=transport
+        self.completed=False
+        self.reason='search_provider_unavailable'
+
+    def search(self,query,lang='ko',limit=10):
+        self.completed=False
+        # Validate before availability loads credentials, including for bad jobs.
+        if tavily_client.query_status(query)!='ok':
+            self.reason='tavily_invalid_query'
+            self.completed=True
+            return []
+        if not usable_providers(self.db,clock=self.clock,names=[self.name]):
+            row=self.db.execute('SELECT reason FROM provider_state WHERE provider=?',(self.name,)).fetchone()
+            # Manual block reasons are not copied to diagnostics.
+            self.reason=row[0] if row and row[0] in _TAVILY_RECHECK else 'search_provider_unavailable'
+            return []
+        outcome=tavily_client.discover_query(query,clock=self.clock,transport=self.transport,
+            dispatch_guard=self.context.search_allowed if self.context else None,
+            on_dispatch=self.context.search_dispatch if self.context else None)
+        self.reason=outcome.reason
+        self.completed=outcome.status=='ok' or outcome.reason=='tavily_invalid_query'
+        if outcome.reason=='tavily_run_limit': return []
+        if outcome.status=='ok':
+            self.state('ready','ok')
+        else:
+            available=budget_availability(clock=self.clock) if outcome.reason in _TAVILY_RECHECK else None
+            retry=available.retry_at if available and available.retry_at else (kst_now(self.clock)+timedelta(minutes=10)).isoformat()
+            self.state('inaccessible',outcome.reason,retry)
+        return [Hit(lead.url,lead.title,lead.snippet,extra={'provider':self.name,'verification':'unverified'})
+                for lead in outcome.leads if not is_denied(lead.url) and not is_excluded(lead.url,lead.title,lead.snippet)][:max(0,limit)]
 
 class Nominatim(SearchProvider):
     name='nominatim';endpoint='https://nominatim.openstreetmap.org/search'

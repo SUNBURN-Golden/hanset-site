@@ -17,7 +17,7 @@ from hanset_active.util.timeutil import FakeClock
 
 
 @pytest.fixture(autouse=True)
-def isolated(tmp_path, monkeypatch):
+def isolated(tmp_path, monkeypatch, isolate_tavily_credentials):
     monkeypatch.setenv('HANSET_IG_DIR', str(tmp_path / 'ig'))
     monkeypatch.setenv('TAVILY_API_KEY', 'sentinel-budget-private-value')
     monkeypatch.setattr(tavily, '_KEY_PATH', tmp_path / 'absent-key')

@@ -1,4 +1,4 @@
-"""Task dispatcher and evidence pipeline. All HTTP passes through one fetcher."""
+"""Task dispatcher and evidence pipeline with guarded page and search requests."""
 import hashlib
 import json
 import os
@@ -11,7 +11,9 @@ from . import evaluator, gaps, labeling, venues
 from .db import deterministic_id
 from .fetcher import FetchResult
 from .discover import Discovery, directories, links, mentions
-from .discover.search import Nominatim, Wikipedia, Brave, DDGHtml
+from .discover.search import (Tavily, Nominatim, Wikipedia, Brave, DDGHtml,
+                              DiscoveryDeferred, provider_retry_at)
+from .search.tavily import ENDPOINT as TAVILY_ENDPOINT
 from .extract import html, pdf, ocr, feed, sitemap, browser, fields
 from .scheduler import enqueue
 from .util.hashing import content_hash
@@ -54,15 +56,29 @@ class Executor:
         for row in self.db.execute('SELECT structured FROM extractions'):
             saved = json.loads(row[0] or '{}').get('_active_page')
             if saved: self.documents[saved['url']] = saved
-        self.context = Discovery(fetcher, getter=self.get, budget=max_requests)
-        self.providers = providers if providers is not None else [p(self.context.get, self.db, clock=self.clock) for p in (Nominatim, Wikipedia, Brave, DDGHtml)]
         self.heartbeat = lambda: None
+        self.context = Discovery(fetcher, getter=self.get, budget=max_requests,
+                                 search_guard=self.search_allowed, on_search_dispatch=self.search_dispatch)
+        self.providers = providers if providers is not None else [p(self.context.get, self.db, clock=self.clock) for p in (Tavily, Nominatim, Wikipedia, Brave, DDGHtml)]
+        for provider in self.providers:
+            if isinstance(provider,Tavily): provider.context=self.context
+        self.context.providers=self.providers
         self._original_request = fetcher._request
         self._original_fetch = fetcher.fetch
 
     @property
     def requests(self):
         return self.db.execute('SELECT count(*) FROM request_log').fetchone()[0] - self.start_requests
+
+    def search_allowed(self):
+        self.heartbeat()
+        return self.requests<self.max_requests and (self.deadline is None or self.clock.monotonic()<self.deadline)
+
+    def search_dispatch(self):
+        # Only fixed, credential-free metadata crosses the private client boundary.
+        with self.db:
+            self.db.execute('INSERT INTO request_log(url,domain,ts,kind,bytes,run_id) VALUES (?,?,?,?,?,?)',
+                (TAVILY_ENDPOINT,registrable_domain(TAVILY_ENDPOINT),kst_now(self.clock).isoformat(),'api',0,self.run_id))
 
     def guarded_request(self, *args, **kwargs):
         self.heartbeat()
@@ -282,16 +298,28 @@ class Executor:
 
     def execute(self, task):
         self.task = dict(task)
+        self.context.task_id=task['task_id']
         payload = json.loads(task.get('payload') or '{}')
         kind = task.get('kind') or 'fetch'
         if kind == 'search' or (kind == 'directory' and 'query' in payload):
-            for provider in self.providers:
-                if payload.get('provider') and payload['provider']!=provider.name: continue
+            completed=False
+            selected=[p for p in self.providers if not payload.get('provider') or payload['provider']==p.name]
+            for provider in selected:
                 for hit in provider.search(payload.get('query',''),payload.get('lang','ko'),10):
                     self.context.candidate(hit.url,text=hit.title+' '+hit.snippet,name=hit.name,website=hit.website,
                         depth=task.get('depth',0),via='search:'+provider.name,parent_task_id=task['task_id'],low_prior=bool(hit.extra.get('low_prior')))
+                completed=completed or getattr(provider,'completed',True)
+                if completed and (not self.context.remaining or not self.search_allowed()): break
+            if not completed:
+                if not self.context.remaining or not self.search_allowed(): raise BudgetExhausted()
+                raise DiscoveryDeferred(next_at=provider_retry_at(self.db,[p.name for p in selected],clock=self.clock))
         elif kind == 'directory':
-            directories.discover(self.context,payload)
+            try:
+                directories.discover(self.context,payload)
+            except DiscoveryDeferred as error:
+                if str(error)=='tavily_run_limit' or not self.context.remaining or not self.search_allowed():
+                    raise BudgetExhausted() from None
+                raise
         else:
             result = self.get(task['url'])
             if result is None or result.outcome == 'cap_reached': raise BudgetExhausted()
