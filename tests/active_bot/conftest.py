@@ -16,6 +16,16 @@ FIXTURES=Path(__file__).parent/'fixtures'
 
 
 @pytest.fixture(autouse=True)
+def isolate_tavily_credentials(monkeypatch, tmp_path):
+    # Default provider selection must never read the host key or budget files.
+    from hanset_active.search import tavily
+    monkeypatch.setattr(tavily, '_KEY_PATH', tmp_path / 'absent-tavily-key')
+    monkeypatch.delenv('TAVILY_API_KEY', raising=False)
+    monkeypatch.delenv('BRAVE_API_KEY', raising=False)
+    monkeypatch.setenv('HANSET_IG_DIR', str(tmp_path / 'tavily-budget'))
+
+
+@pytest.fixture(autouse=True)
 def isolate_web_proxy(monkeypatch):
     # Never inherit a host proxy or execute its optional recovery command.
     from hanset_active import web_proxy

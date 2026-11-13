@@ -78,6 +78,39 @@ def _load_credential():
         return _Credential(reason='tavily_key_invalid')
 
 
+def credential_status():
+    """Recheck the existing loader; expose only a fixed reason, never a key."""
+    return _load_credential().reason
+
+
+def query_status(query):
+    """Validate broad input without touching credentials or persistent state."""
+    if (not isinstance(query, str) or not query.strip() or len(query) > MAX_QUERY
+            or any(not c.isprintable() for c in query) or is_excluded(_decoded(query))
+            or strip_pii(_decoded(query)) != _decoded(query) or _CREDENTIAL_URL.search(_decoded(query))):
+        return 'tavily_invalid_query'
+    return 'ok'
+
+
+def discover_query(query, *, clock=None, transport=None, dispatch_guard=None, on_dispatch=None):
+    """Broad discovery hints only, using the official-page filtering path.
+
+    Hooks receive no credentials or request objects. The guard is checked before
+    reservation and immediately before dispatch; accounting runs once per POST.
+    """
+    if query_status(query) != 'ok':
+        return SearchOutcome('skipped', 'tavily_invalid_query')
+    return _search(query.strip(), 'official_page', clock=clock, transport=transport,
+                   dispatch_guard=dispatch_guard, on_dispatch=on_dispatch)
+
+
+def _allowed(guard):
+    try:
+        return guard is None or bool(guard())
+    except Exception:
+        return False
+
+
 def _decoded(value):
     for _ in range(4):
         decoded = unquote(value)
@@ -156,7 +189,8 @@ def _retry_after(value, clock):
     return min(3600, max(1, seconds))
 
 
-def _request(query, target, credential, reservation, *, clock=None, transport=None):
+def _request(query, target, credential, reservation, *, clock=None, transport=None,
+             dispatch_guard=None, on_dispatch=None):
     session = None
     response = None
     try:
@@ -172,6 +206,13 @@ def _request(query, target, credential, reservation, *, clock=None, transport=No
                 return reservation.reason, (), 0
         except Exception:
             return 'tavily_budget_unavailable', (), 0
+        if not _allowed(dispatch_guard):
+            return 'tavily_run_limit', (), 0
+        if on_dispatch is not None:
+            try:
+                on_dispatch()
+            except Exception:
+                return 'tavily_budget_unavailable', (), 0
         response = transport(
             ENDPOINT,
             headers={'Authorization': 'Bearer ' + credential.value},
@@ -219,8 +260,10 @@ def _request(query, target, credential, reservation, *, clock=None, transport=No
                     pass
 
 
-def _search(query, target, *, clock=None, transport=None):
-    """Internal: discovery must validate venue identity before calling this."""
+def _search(query, target, *, clock=None, transport=None, dispatch_guard=None, on_dispatch=None):
+    """Internal: callers validate a known venue or a bounded discovery query."""
+    if not _allowed(dispatch_guard):
+        return SearchOutcome('skipped', 'tavily_run_limit')
     credential = _load_credential()
     if credential.reason != 'ok':
         return SearchOutcome('skipped', credential.reason)
@@ -230,9 +273,10 @@ def _search(query, target, *, clock=None, transport=None):
             if not reservation.reserve():
                 return SearchOutcome('skipped', reservation.reason, budget=reservation.snapshot)
             snapshot = reservation.snapshot
-            reason, leads, cooldown = _request(query, target, credential, reservation, clock=clock, transport=transport)
+            reason, leads, cooldown = _request(query, target, credential, reservation, clock=clock, transport=transport,
+                                               dispatch_guard=dispatch_guard, on_dispatch=on_dispatch)
             snapshot = reservation.snapshot
-            if reason in {'tavily_budget_unavailable', 'tavily_budget_exhausted', 'tavily_cooldown', 'tavily_clock_changed'}:
+            if reason in {'tavily_budget_unavailable', 'tavily_budget_exhausted', 'tavily_cooldown', 'tavily_clock_changed', 'tavily_run_limit'}:
                 return SearchOutcome('skipped', reason, budget=snapshot)
             reservation.finish(reason, cooldown)
             return SearchOutcome('ok' if reason == 'ok' else 'error', reason, leads=leads, budget=snapshot)

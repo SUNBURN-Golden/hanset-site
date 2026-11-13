@@ -1,7 +1,7 @@
 """Durable, fail-closed Tavily reservations, serialized through dispatch on Linux."""
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 import fcntl
 import json
 import math
@@ -12,7 +12,7 @@ import tempfile
 import threading
 
 from ..config import REPO_ROOT
-from ..util.timeutil import kst_day, kst_now
+from ..util.timeutil import KST, kst_day, kst_now
 
 DAILY_LIMIT = 30
 _STATE_LIMIT = 1024 * 1024
@@ -33,6 +33,13 @@ class BudgetSnapshot:
     @property
     def remaining(self):
         return max(0, DAILY_LIMIT - self.used)
+
+
+@dataclass(frozen=True)
+class BudgetAvailability:
+    reason: str
+    snapshot: BudgetSnapshot | None = None
+    retry_at: str | None = None
 
 
 class BudgetUnavailable(Exception):
@@ -121,6 +128,19 @@ class Reservation:
         self.snapshot = None
         self.reason = 'ok'
 
+    def availability(self):
+        """Inspect under the dispatch lock without reserving or writing state."""
+        now = kst_now(self.clock)
+        budget = self.state['budgets']['tavily']
+        snapshot = BudgetSnapshot(now.date().isoformat(), budget['days'].get(now.date().isoformat(), {}).get('used', 0))
+        if not snapshot.remaining:
+            retry = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
+            return BudgetAvailability('tavily_budget_exhausted', snapshot, retry.isoformat())
+        cooldown = budget.get('cooldown_until', 0)
+        if cooldown > now.timestamp():
+            return BudgetAvailability('tavily_cooldown', snapshot, datetime.fromtimestamp(cooldown, KST).isoformat())
+        return BudgetAvailability('ok', snapshot)
+
     def reserve(self):
         day = kst_day(self.clock)
         budget = self.state['budgets']['tavily']
@@ -196,3 +216,12 @@ def locked_budget(*, clock=None):
             yield reservation
         finally:
             os.close(fd)
+
+
+def availability(*, clock=None):
+    """Non-reserving advisory check; reservation at dispatch stays authoritative."""
+    try:
+        with locked_budget(clock=clock) as reservation:
+            return reservation.availability()
+    except Exception:
+        return BudgetAvailability('tavily_budget_unavailable')

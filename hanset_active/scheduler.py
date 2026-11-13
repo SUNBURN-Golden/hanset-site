@@ -57,11 +57,19 @@ def enqueue(db, *, kind, url='', task_class='discover', depth=0, payload=None, p
         db.execute('INSERT OR IGNORE INTO tasks(task_id,dedupe_key,url,domain,kind,task_class,payload,source_id,venue_id,parent_url,parent_task_id,discovered_via,depth,priority,novelty,gap_importance,urgency,source_quality,cost,duplication,repeat_failures,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',(task_id,key,url,registrable_domain(url) if url else '',kind,task_class,safe_payload,source_id,venue_id,strip_pii(parent_url) if parent_url else None,parent_task_id,strip_pii(discovered_via),depth,score(values),*(values[k] for k in ('novelty','gap_importance','urgency','source_quality','cost','duplication','repeat_failures')),now,now))
     return task_id
 
+
+def defer_provider_task(db, task_id, next_at, *, clock=None):
+    """Mark the source of next_at so credential/budget recovery can clear it."""
+    db.execute("UPDATE tasks SET state='pending',lease_until=NULL,next_at=? WHERE task_id=?",(next_at,task_id))
+    db.execute('INSERT INTO run_checkpoints(checkpoint_id,task_id,kind,cursor,updated_at) VALUES (?,?,?,?,?) ON CONFLICT(checkpoint_id) DO UPDATE SET updated_at=excluded.updated_at',
+        (deterministic_id('provider_deferred',task_id),task_id,'provider_deferred','pending',kst_now(clock).isoformat()))
+
 class Scheduler:
-    def __init__(self, db, *, clock=None, budget=100, shares=None, discover_floor=.25, trial_limits=None):
+    def __init__(self, db, *, clock=None, budget=100, shares=None, discover_floor=.25, trial_limits=None, provider_defaults=None):
         self.trial_limits=trial_limits or {}
         self.trial_used={}
         self.db=db;self.clock=clock or Clock();self.budget=budget
+        self.provider_defaults=provider_defaults
         self.allocations=split_budget(budget,shares,discover_floor); self.used={k:0 for k in TASK_CLASSES}
     def pick(self, *, cooldowns=None, deadline=None):
         """Select one task; the executor owns its running/done lease transitions.
@@ -74,20 +82,23 @@ class Scheduler:
             now=kst_now(self.clock)
             rows=[dict(r) for r in self.db.execute("SELECT * FROM tasks WHERE state='pending' ORDER BY priority DESC,created_at,task_id")]
             if not rows: return None
-            from .discover.search import usable_providers
+            from .discover.search import usable_providers, provider_names, provider_retry_at
             active=[]
             for row in rows:
                 host=urlsplit(row.get('url') or '').hostname
                 if host in self.trial_limits and self.trial_used.get(host,0)>=self.trial_limits[host]: continue
                 payload=json.loads(row.get('payload') or '{}')
                 if row['kind']=='search' or (row['kind']=='directory' and ('query' in payload or payload.get('kind')=='osm_search')):
-                    names=['nominatim'] if payload.get('kind')=='osm_search' else [payload['provider']] if payload.get('provider') else None
+                    names=provider_names(payload,self.provider_defaults)
                     if not usable_providers(self.db,clock=self.clock,names=names):
-                        states=list(self.db.execute("SELECT provider,next_at FROM provider_state WHERE state IN ('disabled','inaccessible')"))
-                        times=[r['next_at'] for r in states if (names is None or r['provider'] in names) and r['next_at'] and r['next_at']>now.isoformat()]
-                        due=min(times) if times else None
-                        self.db.execute('UPDATE tasks SET next_at=? WHERE task_id=?',(due,row['task_id']))
+                        due=provider_retry_at(self.db,names,clock=self.clock)
+                        defer_provider_task(self.db,row['task_id'],due,clock=self.clock)
                         continue
+                    marker=deterministic_id('provider_deferred',row['task_id'])
+                    if self.db.execute('SELECT 1 FROM run_checkpoints WHERE checkpoint_id=?',(marker,)).fetchone():
+                        self.db.execute('UPDATE tasks SET next_at=NULL WHERE task_id=?',(row['task_id'],))
+                        self.db.execute('DELETE FROM run_checkpoints WHERE checkpoint_id=?',(marker,))
+                        row['next_at']=None
                 active.append(row)
             rows=active
             if not rows: return None

@@ -31,7 +31,7 @@ class Response:
 
 
 @pytest.fixture(autouse=True)
-def credentials(tmp_path, monkeypatch):
+def credentials(tmp_path, monkeypatch, isolate_tavily_credentials):
     monkeypatch.setattr(tavily, '_KEY_PATH', tmp_path / 'fake_key')
     monkeypatch.setenv('TAVILY_API_KEY', SENTINEL)
     monkeypatch.setenv('HANSET_IG_DIR', str(tmp_path / 'ig'))
