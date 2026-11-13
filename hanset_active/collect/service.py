@@ -26,7 +26,7 @@ from .store import connect as claim_connect
 from .store import digest, record
 from .targets import resolve_jobs
 from .web import classify_page
-from .plan import ensure_daily_plan, load_targets, local_target_order, order_targets
+from .plan import assemble_targets, ensure_daily_plan, load_targets, local_target_order, order_targets
 from .watchlist_proposals import inspect_page, write_proposals
 
 RETRYABLE = frozenset({
@@ -217,12 +217,12 @@ def run_web(settings, *, targets_path=None, clock=None, session=None, search=Non
     try:
         _prepare_dir(settings.data_dir)
         with ProcessLock(settings.data_dir / 'daemon.lock'):
-            recovery = _change_cycle(settings, targets_path=targets_path, testing=testing, export=False)
+            recovery = _change_cycle(settings, targets_path=targets_path, testing=testing, export=False, clock=clock)
             try:
                 result = _run_web(settings, targets_path=targets_path, clock=clock, session=session, search=search,
                                   testing=testing, planner=planner, planner_session=planner_session)
             finally:
-                changes = _change_cycle(settings, targets_path=targets_path, testing=testing)
+                changes = _change_cycle(settings, targets_path=targets_path, testing=testing, clock=clock)
             result['changes'] = changes
             if recovery.get('reason') not in ('ok', 'no_events'):
                 result['changes']['recovery_reason'] = recovery['reason']
@@ -248,16 +248,19 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
     if targets_path:
         from .config import outside
         path = outside(path)
-    targets, targets_status = load_targets(path, testing=testing)
     if targets_path:
+        targets, targets_status = load_targets(path, testing=testing)
         # Ad-hoc input never reads/writes the daily plan or invokes its model.
         targets = local_target_order(settings, targets, now=kst_now(clock))
         planning_notes = [{'code': 'adhoc_targets_local_order', 'count': 1}]
     else:
+        assembled = assemble_targets(settings, now=kst_now(clock), testing=testing)
+        targets, targets_status = assembled['targets'], assembled['targets_status']
         plan = ensure_daily_plan(settings, state, targets, targets_status, clock=clock,
-                                 planner=planner, planner_session=planner_session, testing=testing)
+                                 planner=planner, planner_session=planner_session, testing=testing,
+                                 assembled=assembled)
         targets, planning_notes = order_targets(
-            local_target_order(settings, targets, now=kst_now(clock)), plan)
+            local_target_order(settings, targets, now=kst_now(clock), materialized=assembled['snapshot']), plan)
     if targets_status == 'invalid':
         return _finish(state, _base('error', 'targets_invalid', success=False, collected=False, mode='web'), clock)
     if not targets:
@@ -573,22 +576,27 @@ def load_settings(**kwargs):
     return CollectSettings(**kwargs)
 
 
-def _change_targets(settings, targets_path=None, *, testing=False):
+def _change_targets(settings, targets_path=None, *, testing=False, clock=None):
     from .targets import parse_targets
+    if not targets_path:
+        assembled = assemble_targets(settings, now=kst_now(clock), testing=testing, include_watchlist=False)
+        if assembled['targets_status'] == 'invalid' or assembled['db_status'] != 'ok':
+            return None
+        return assembled['targets']
     try:
-        return parse_targets(Path(targets_path) if targets_path else settings.data_dir / 'web_targets.json', testing=testing)
+        return parse_targets(Path(targets_path), testing=testing)
     except CollectError:
         return None
 
 
-def _change_cycle(settings, *, targets_path=None, testing=False, export=True, rebaseline=False):
+def _change_cycle(settings, *, targets_path=None, testing=False, export=True, rebaseline=False, clock=None):
     """Caller holds daemon.lock. Side failures never invalidate collection."""
     from . import changes
     from .change_feeds import export_changes
     db = None
     try:
         db = claim_connect(settings.data_dir)
-        targets = _change_targets(settings, targets_path, testing=testing)
+        targets = _change_targets(settings, targets_path, testing=testing, clock=clock)
         if changes.needs_rebaseline(db) and not rebaseline:
             result = changes.process_pending(db, targets, testing=testing)
         elif rebaseline:

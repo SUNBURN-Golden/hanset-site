@@ -360,3 +360,61 @@ def test_detector_failure_is_side_diagnostic_and_recovers_before_completed_retur
     assert db.execute('SELECT count(*) FROM claims').fetchone()[0] == 2
     assert db.execute('SELECT count(*) FROM web_change_events').fetchone()[0] == 1
     db.close()
+
+
+def test_default_web_fetches_derived_target_and_authorizes_observation(tmp_path, monkeypatch):
+    from hanset_active.collect import plan
+    from hanset_active.collect.targets import target_fingerprint
+    from hanset_active.fetcher import FetchResult
+    from tests.active_bot.test_collect_targets import eligible
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    active = connect(settings.active_dir / 'active.sqlite3')
+    eligible(active, 1, website='https://venue1.example/hours')
+    clock = FakeClock()
+    expected = plan.assemble_targets(settings, now=clock.now(), testing=True)['targets'][0]
+    fetched = []
+    def fetch(self, url, *args, **kwargs):
+        fetched.append(url)
+        return FetchResult(url=url, outcome='ok', status=200, content=_page().encode(),
+                           content_type='text/html', content_hash='fixture-hash')
+    monkeypatch.setattr('hanset_active.collect.service.Fetcher.fetch', fetch)
+    # _run_web must reuse the assembly for BOTH plan creation and local ordering.
+    def no_snapshot(*args, **kwargs):
+        raise AssertionError('execution reread the materialized snapshot')
+    monkeypatch.setattr(plan, 'snapshot', no_snapshot)
+    result = run_web(settings, clock=clock, session=_session(), testing=True)
+    assert result['success'] and result['collected'] and fetched == expected['urls']
+    import sqlite3
+    with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
+        obs = db.execute('SELECT venue_id,venue_key,target_fingerprint,processed FROM web_change_observations').fetchone()
+        assert obs == (expected['venue_id'], expected['venue_key'], target_fingerprint(expected), 1)
+        assert db.execute("SELECT count(*) FROM web_change_baselines WHERE state='active'").fetchone()[0] == 1
+    assert result['changes']['reason'] == 'ok'
+    assert not (settings.data_dir / 'web_targets.json').exists()
+    active.close()
+
+
+def test_derived_targets_keep_existing_page_run_and_day_caps(tmp_path, monkeypatch):
+    from hanset_active.fetcher import FetchResult
+    from tests.active_bot.test_collect_targets import eligible
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    active = connect(settings.active_dir / 'active.sqlite3')
+    for n in range(25):
+        eligible(active, n, website=f'https://venue{n}.example/hours')
+    fetched = []
+    def blocked(self, url):
+        fetched.append(url)
+        return FetchResult(url=url, outcome='blocked', status=403)
+    monkeypatch.setattr('hanset_active.collect.service.Fetcher.fetch', blocked)
+    clock = FakeClock()
+    assert run_web(settings, clock=clock, testing=True)['reason'] == 'run_cap'
+    assert len(fetched) == 10
+    second = run_web(settings, clock=clock, testing=True)
+    assert second['reason'] == 'daily_cap' and len(fetched) == 20
+    assert run_web(settings, clock=clock, testing=True)['reason'] == 'daily_cap'
+    assert len(fetched) == 20 and State(settings.data_dir, clock).data['counts']['pages'] == 20
+    active.close()

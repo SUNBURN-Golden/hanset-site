@@ -662,3 +662,56 @@ def test_missing_watchlist_and_unreadable_active_store_fall_back(env):
     assert plan['ranked_venues'][0]['gap_count'] is None and not plan['ig_read_list']
     assert {'code': 'active_db_unreadable', 'count': 1} in plan['diagnostics']
     assert {'code': 'watchlist_missing', 'count': 1} in plan['diagnostics']
+
+
+def test_hash_id_and_korean_watchlist_key_are_valid_plan_identities(env):
+    from hanset_active.db import deterministic_id
+    settings, clock, db = env
+    target = venue(db, 1)
+    target.update(venue_id=deterministic_id('fixture'), venue_key='한셋 사우나')
+    with db:
+        db.execute('UPDATE venues SET venue_id=?,venue_key=?', (target['venue_id'], target['venue_key']))
+    entry = {k: target[k] for k in ('venue_id', 'venue_key', 'name')}
+    (settings.data_dir / 'watchlist.json').write_text(json.dumps({
+        'schema_version': 1, 'venues': [{**entry, 'enabled': True, 'handle': 'fixture.sauna'}]}))
+    plan = make_plan(env, [target])
+    assert validate_plan(plan, plan['day']) and len(plan['ig_read_list']) == 1
+    assert not any(n['code'] == 'watchlist_invalid' for n in plan['diagnostics'])
+    assert plan['web_targets'][0]['venue_id'] == target['venue_id']
+
+
+@pytest.mark.parametrize('field,value', [
+    ('venue_id', 'fixture' + '@' + 'example.test'),
+    ('venue_key', '0' + '10' + '-' + '1234' + '-' + '5678'),
+    ('name', 'Bearer ' + 'synthetic-credential'),
+    ('name', 'eyJfixture.payload.signature'),
+    ('venue_id', 'abcdef12' * 8),
+])
+def test_watchlist_rejects_real_pii_and_configured_secret_in_hash(env, monkeypatch, field, value):
+    from collections import Counter
+    from hanset_active.collect.plan import _watchlist, _ident
+    settings, _, _ = env
+    entry = {'venue_id': 'fixture-id', 'venue_key': 'fixture-key', 'name': 'Fixture', 'handle': 'fixture.sauna'}
+    entry[field] = value
+    if value == 'abcdef12' * 8:
+        monkeypatch.setenv('DEEPSEEK_API_KEY', 'abcdef12' * 2)
+        assert not _ident(entry)
+    (settings.data_dir / 'watchlist.json').write_text(json.dumps({'schema_version': 1, 'venues': [entry]}))
+    notes = Counter()
+    assert _watchlist(settings, notes) == [] and notes['watchlist_invalid'] == 1
+
+
+def test_default_derived_replay_keeps_zero_candidate_plan_frozen(env):
+    settings, clock, db = env
+    result = run_plan(settings, clock=clock, testing=True)
+    path = settings.data_dir / 'plans' / (result['day'] + '.json')
+    before = path.read_bytes()
+    assert json.loads(before)['ranking']['candidate_count'] == 0
+    target = venue(db, 1)
+    gap(db, target)
+    with db:
+        db.execute('UPDATE venues SET website=?', (target['urls'][0],))
+    replay = run_web(settings, clock=clock, testing=True)
+    assert replay['reason'] == 'missing_credentials'
+    assert {'targets_changed', 'unplanned_targets'} <= {r['disposition'] for r in replay['pages']}
+    assert path.read_bytes() == before

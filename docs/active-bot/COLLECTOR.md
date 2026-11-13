@@ -105,7 +105,7 @@ and discarded. A missing Tavily key skips that target. The key file remains
 | --- | --- |
 | `/workspace/hanset-data/ig` | Checkpoint, status, claims DB, inbox, logs. Mode `0700`. |
 | `/workspace/hanset-data/ig/deepseek.env` | Optional `0600` file owned by the runtime user. |
-| `/workspace/hanset-data/ig/web_targets.json` | Approved official URLs. Not the example in git. |
+| `/workspace/hanset-data/ig/web_targets.json` | Manual official URLs and disabled selectors; merged with active DB gap targets. Not the example in git. |
 | `/workspace/hanset-data/ig/watchlist.json` | Official handles allowed in a desktop batch. |
 | `/workspace/hanset-data/ig/inbox/*.jsonl` | Transient desktop batch. |
 | `/workspace/hanset-data/active` | Existing fetcher budgets and robots cache. |
@@ -144,7 +144,18 @@ Web targets:
 }
 ```
 
-`official_urls` is the supported activation path. `tavily` is optional and
+Default web runs also derive venue-owned URLs from open/conflict priority gaps
+in a read-only active DB snapshot. Manual targets take precedence; disabled
+identity selectors suppress derivation, and invalid files block derivation.
+Missing/empty manual files permit derivation. Effective targets cap at 100;
+existing 10-page run / 20-page daily limits and all fetch guards are unchanged.
+See [GAP_PRIORITY.md](GAP_PRIORITY.md) for ownership/seed ties, identity
+resolution, count-only diagnostics, snapshot reuse and DB failure semantics.
+Planning/execution can fall back to manual targets on DB failure; change
+detection defers instead, retaining baselines and pending observations.
+`--targets other.json` remains manual-only and never derives or writes plans.
+
+`official_urls` is the manual activation path. `tavily` is optional and
 still requires `official_domains`:
 
 ```json
