@@ -19,17 +19,57 @@ is explicitly injected. The planner session is independent of extraction.
 
 ## Scoring and identity
 
-Candidates are enabled web targets plus enabled schema-1 watchlist entries.
-Both `venue_id` and `venue_key` must match the active store; names and handles
-never resolve identity. Unknown identities/types get `gap_count: null` and
-cannot enter the IG list. Closed venues cannot enter IG and sort last for web.
-Excluded watchlist entries are skipped with `watchlist_excluded`.
+Candidates are effective web targets plus enabled schema-1 watchlist entries.
+Web targets combine the manual `web_targets.json` with owned URLs derived from
+nonclosed active-store venues that have an open/conflict gap in an applicable
+priority field still unresolved by `project_needs`. Fresh verified evidence can
+therefore suppress stale gap rows. No lifecycle rows or identities are edited.
+
+Derivation uses the venue's HTTPS website (preserving its path), then HTTPS
+roots of its recorded domains and uniquely tied frozen seed domains, at most
+three canonical URLs per venue. HTTP websites are never upgraded or fetched;
+a separately recorded usable domain may still supply its HTTPS root. URLs
+pass credential/PII, private-host, official-domain, portal, Naver, Instagram and
+RUNPORT checks. Seed ownership requires the current `seed_freeze` checkpoint,
+a seed name/domain row in that set, and an exact normalized venue name or alias
+matching exactly one venue. The `frozen_seed` marker is not an ownership join.
+Derived targets never enable Tavily or discovery.
+
+Web identity resolves by exact `(venue_id, venue_key)` first, then the union of
+exact normalized names/aliases and venue website/domain matches. Only a unique
+union resolves. Unmatched/ambiguous manual targets stay visible with row reason
+`identity_unknown` and plan diagnostics `manual_identity_unmatched` or
+`manual_identity_ambiguous`. Watchlist identities still require the exact DB
+pair; handles never resolve identity. Unknown identities/types get
+`gap_count: null` and cannot enter the IG list. Closed venues cannot enter IG
+and sort last for manual web entries. Excluded watchlist entries are skipped
+with `watchlist_excluded`. Korean keys are accepted. Only the `venue_id` field
+has a narrow SHA-256 ID exception to generic PII redaction; configured secrets
+inside those IDs remain forbidden.
+
+Manual targets take precedence per canonical identity and canonical URL.
+Their explicit URLs, domains and Tavily spec are preserved; appended derived
+URLs must fit within their existing domain authorization and three-URL limit.
+Well-formed identity pairs from disabled rows suppress that venue's derivation,
+using the same conservative identity resolution. Other malformed disabled data
+is ignored as before. Enabled manual rows win over disabled selectors.
+All enabled manual identities are retained; remaining capacity up to 100 is
+filled in local gap-count/importance/identity order. Disabled rows still count
+toward the manual file's 100-row cap. Fixed count-only diagnostics are
+`derived_http_only`, `derived_domain_denied`, `derived_suppressed` and
+`derived_truncated` (including when a full manual file leaves zero capacity).
 
 `gaps.project_needs` is a SELECT-only projection of the existing lifecycle;
 it creates no parallel gap store. The planner opens only `active.sqlite3` via
 SQLite `mode=ro`, `query_only=ON` and one read transaction. Missing/unreadable
-stores produce `active_db_missing`/`active_db_unreadable` and a usable local
-fallback with unknown identities. No migrations or lifecycle writes run.
+stores produce `active_db_missing`/`active_db_unreadable` and a usable manual
+fallback with unknown identities. All ownership, seed, alias, projection and
+evidence fingerprint reads share this transaction. Effective targets and rows
+are materialized before closing it; planning and local execution ordering reuse
+that snapshot, with no transaction held across ranking or fetch I/O. Website,
+domains, aliases and tied seed inputs enter the snapshot digest. Authorization
+fingerprints cover only identity, URLs and domains, never ranking or gaps.
+No migrations or lifecycle writes run.
 
 Exactly six profile field IDs are scored: `hours`, `price_day_pass`,
 `sauna_temp_c`, `cold_bath_temp_c`, `tattoo_policy`, `foreigner_policy`.
@@ -152,18 +192,33 @@ resets those fields. Only the existing model budget methods charge planning.
 
 The target-set digest identifies the frozen default config; drift is reported
 at replay, never used as permission to fetch plan URLs. Execution always uses
-current parsed configuration. Removed/disabled targets disappear; new or
-changed target IDs append in canonical local order. Diagnostics are
+the freshly assembled effective targets. Removed/disabled targets disappear; new
+or changed target IDs append in canonical local order. Diagnostics are
 `targets_changed`, `removed_targets`, `unplanned_targets`. No enabled current
 target is filtered. URL order within a target is preserved. Exact duplicates
-share one plan entry with `occurrences`, while current instances execute
-consecutively in file order. IDs hash identity, ordered URLs, effective domains
-and Tavily spec. The planner never searches.
+share one effective job in default assembly. Direct planner callers and ad-hoc
+files retain the existing duplicate-instance `occurrences` behavior. IDs hash
+identity, ordered URLs, effective domains and Tavily spec. The planner never searches.
 
 `collect web --targets other.json` does not read/write daily plans or call the
 ranking model. It orders that config locally and reports
-`adhoc_targets_local_order`. Missing/empty/invalid default web target sets still
-prepare the IG handoff before returning `no_targets`/`targets_invalid`.
+`adhoc_targets_local_order`; it never derives targets. Missing/empty manual files
+allow default derivation. An invalid file blocks all derivation because its
+disabled selectors cannot be trusted, while still preparing the IG handoff
+before returning `targets_invalid`. `targets_status` records the manual-file
+status independently of effective targets. Completed plans remain frozen,
+including earlier zero-candidate plans; new current targets still append at
+execution through replay drift diagnostics.
+
+Change detection assembles identical authorization without ranking or plan
+writes. If either the manual file is invalid or the active DB is missing,
+unreadable or fails midway through its snapshot, it passes `None` to the change
+detector: `targets_invalid`, baselines untouched, observations pending for retry.
+A readable DB with no eligible venues is authoritative (possibly empty), so
+removed derived authorization can retire normally. Collection alone may use
+manual fallback on DB failure; detection must defer rather than treat that
+fallback as removal of all derived authorization. Explicit ad-hoc authorization
+uses only that file and does not depend on the active DB.
 
 ## IG operator handoff
 

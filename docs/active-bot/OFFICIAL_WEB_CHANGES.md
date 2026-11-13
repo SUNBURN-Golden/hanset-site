@@ -28,9 +28,13 @@ reseed or export.
 
 ## Evidence and transitions
 
-An exact enabled `official_urls` entry in the external `web_targets.json` is
-required. A domain-approved search lead alone is insufficient. Requests still
-pass the existing robots, block, login and redirect guards. Requested URL and
+An exact URL in the current effective target assembly is required: either an
+enabled manual `official_urls` entry in external `web_targets.json`, or a permitted
+venue-owned URL derived from active DB gaps. Manual precedence, disabled
+selectors, conservative identity resolution and domain authorization follow
+[GAP_PRIORITY.md](GAP_PRIORITY.md). A domain-approved search lead alone is
+insufficient. Requests still pass the existing robots, block, login and redirect
+guards. Requested URL and
 resolved URL are retained separately. Unsafe URLs (including credentials,
 private/denied hosts or redaction markers) are rejected, never repaired into a
 different source identity. Loopback URLs are permitted only in collector tests
@@ -68,8 +72,14 @@ Collection recovers pending observations before its work and attempts detection
 and export after every return path. Derivation uses a savepoint per observation.
 A detector error rolls back derived changes, retains durable claims and the
 pending observation, and defers subsequent observations of that source until
-retry. Other sources continue. Collection success is preserved and a fixed
-side diagnostic appears in the result/status. `report.changes` includes counts,
+retry. Invalid manual targets or a missing/unreadable/partially read active DB
+also defer detection (`targets_invalid`): baselines remain untouched and all
+observations remain pending. A manual-only fallback must never retire derived
+authorization on a transient DB failure. A readable DB with zero eligible venues
+is authoritative; removed derived baselines then retire normally. The change
+cycle uses the same effective identities, URLs and fingerprints as execution,
+without invoking ranking or writing plans. Collection success is preserved and
+a fixed side diagnostic appears in the result/status. `report.changes` includes counts,
 pending observations, baseline/event counts, diagnostics, version state and
 manifest status. No exception text, secret values or credential paths are
 included in the review artifacts.

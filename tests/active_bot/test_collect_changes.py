@@ -9,7 +9,7 @@ from hanset_active.collect import changes
 from hanset_active.collect.config import CollectSettings
 from hanset_active.collect.service import run_detect_changes, run_export_changes, run_report
 from hanset_active.collect.store import connect, connect_readonly, digest, read_claims, record
-from hanset_active.collect.targets import source_authorization
+from hanset_active.collect.targets import source_authorization, target_fingerprint
 from hanset_twin.daemon import ProcessLock
 
 FIXTURES = json.loads((Path(__file__).parent / 'fixtures/official_web_changes/transitions.json').read_text())
@@ -292,3 +292,58 @@ def test_readonly_snapshot_includes_commits_and_ignores_uncommitted_wal(store):
     assert changes.metadata(ro)['committed'] == 'visible'
     assert changes.change_report(ro)['observations'] == 1
     ro.close()
+
+
+@pytest.mark.parametrize('failure', ['missing', 'unreadable', 'mid_snapshot'])
+def test_derived_change_authorization_defers_db_failure_and_recovers(store, tmp_path, monkeypatch, failure):
+    from hanset_active.collect import plan
+    from hanset_active.collect.service import _change_cycle, _change_targets
+    from hanset_active.db import connect as active_connect
+    from hanset_active.util.timeutil import FakeClock, kst_now
+    from tests.active_bot.test_collect_targets import eligible
+    db, root = store
+    settings = CollectSettings(data_dir=root, active_dir=tmp_path / 'active', twin_dir=tmp_path / 'twin')
+    active = active_connect(settings.active_dir / 'active.sqlite3')
+    eligible(active, 1, website=URL)
+    clock = FakeClock()
+    target = plan.assemble_targets(settings, now=kst_now(clock))['targets'][0]
+    assert target_fingerprint(target) == target_fingerprint(_change_targets(settings)[0])
+    observe(db, target=target)
+    before = [dict(r) for r in db.execute('SELECT * FROM web_change_baselines')]
+    oid, _ = observe(db, value=FIXTURES['hours']['after'], day=2, target=target, detect=False)
+    with monkeypatch.context() as patch:
+        broken = settings
+        if failure in ('missing', 'unreadable'):
+            broken = CollectSettings(data_dir=root, active_dir=tmp_path / failure, twin_dir=settings.twin_dir)
+            if failure == 'unreadable':
+                broken.active_dir.mkdir()
+                (broken.active_dir / 'active.sqlite3').write_bytes(b'invalid sqlite')
+        else:
+            original = plan._snapshot_rows
+            def fail(connection, *args, **kwargs):
+                if connection is not None:
+                    raise sqlite3.OperationalError('synthetic snapshot failure')
+                return original(connection, *args, **kwargs)
+            patch.setattr(plan, '_snapshot_rows', fail)
+        assert _change_targets(broken) is None
+        result = _change_cycle(broken, export=False)
+        assert result['reason'] == 'targets_invalid'
+        assert before == [dict(r) for r in db.execute('SELECT * FROM web_change_baselines')]
+        assert db.execute('SELECT processed FROM web_change_observations WHERE observation_id=?', (oid,)).fetchone()[0] == 0
+    assert _change_cycle(settings, export=False)['reason'] == 'ok'
+    assert db.execute('SELECT processed FROM web_change_observations WHERE observation_id=?', (oid,)).fetchone()[0] == 1
+    assert len(events(db)) == 1 and events(db)[0]['event_kind'] == 'hours'
+    active.close()
+
+
+def test_readable_empty_active_db_is_authoritative_for_retirement(store, tmp_path):
+    from hanset_active.collect.service import _change_targets
+    from hanset_active.db import connect as active_connect
+    db, root = store
+    observe(db)
+    settings = CollectSettings(data_dir=root, active_dir=tmp_path / 'active', twin_dir=tmp_path / 'twin')
+    active = active_connect(settings.active_dir / 'active.sqlite3')
+    assert _change_targets(settings) == []
+    assert changes.process_pending(db, _change_targets(settings))['reason'] == 'ok'
+    assert db.execute('SELECT state FROM web_change_baselines').fetchone()[0] == 'needs_rebaseline'
+    active.close()

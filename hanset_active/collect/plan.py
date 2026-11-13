@@ -20,7 +20,7 @@ from .deepseek import DeepSeek, INPUT_LIMIT, OUTPUT_TOKENS, credentials_present
 from .ground import redact
 from .ingest import load_watchlist
 from .state import State, atomic_json
-from .targets import parse_targets
+from .targets import derive_target, merge_targets, ownership_index, parse_targets
 
 POLICY = 'gap-priority-v1'
 MAX_PLAN_BYTES = 512_000
@@ -34,6 +34,8 @@ DIAGNOSTIC_CODES = frozenset({
     'watchlist_excluded', 'stale_gap_state', 'targets_missing', 'targets_empty', 'targets_invalid',
     'plan_invalid', 'plan_symlink', 'targets_changed', 'removed_targets', 'unplanned_targets',
     'adhoc_targets_local_order', 'ig_window_passed', 'ig_halted_today', 'incomplete_discarded',
+    'manual_identity_unmatched', 'manual_identity_ambiguous', 'derived_http_only',
+    'derived_domain_denied', 'derived_suppressed', 'derived_truncated',
 })
 RANK_REASONS = frozenset({
     'local', 'testing_local', 'model_ranked', 'decision_cached', 'fallback_no_candidates',
@@ -62,11 +64,11 @@ def target_set_digest(targets):
     return digest([target_id(target) for target in targets])
 
 
-def load_targets(path, *, testing=False):
+def load_targets(path, *, testing=False, disabled=None):
     if not path.exists() and not path.is_symlink():
         return [], 'missing'
     try:
-        targets = parse_targets(path, testing=testing)
+        targets = parse_targets(path, testing=testing, disabled=disabled)
         return targets, 'ok' if targets else 'empty'
     except CollectError:
         return [], 'invalid'
@@ -92,15 +94,14 @@ def _watchlist(settings, notes):
     for entry in entries:
         if is_excluded(entry['name'], entry['venue_key']):
             notes['watchlist_excluded'] += 1
-        elif redact(entry) == entry:
+        elif (_ident(entry) and _text(entry['name']) and _text(entry['handle'])):
             result.append(entry)
         else:
             notes['watchlist_invalid'] += 1
     return result
 
 
-def snapshot(settings, targets, watchlist, *, now):
-    """One SQLite read transaction, never the claim/collector database."""
+def _snapshot_rows(db, targets, watchlist, *, now, ownership=()):
     notes, candidates, fingerprints = Counter(), {}, []
     for channel, entries in (('web', targets), ('ig', watchlist)):
         for entry in entries:
@@ -112,48 +113,120 @@ def snapshot(settings, targets, watchlist, *, now):
             })
             if channel not in row['channels']:
                 row['channels'].append(channel)
-    path = settings.active_dir / 'active.sqlite3'
-    db = None
-    try:
-        if not path.is_file():
-            notes['active_db_missing'] += 1
-        else:
-            db = sqlite3.connect(path.as_uri() + '?mode=ro', uri=True)
-            db.row_factory = sqlite3.Row
-            db.execute('PRAGMA query_only=ON')
-            db.execute('BEGIN')
-            for key, row in sorted(candidates.items()):
-                venue = db.execute('SELECT * FROM venues WHERE venue_id=? AND venue_key=?', key).fetchone()
-                if venue is None:
-                    continue
-                projected = project_needs(db, key[0], now=now)
-                row.update({k: v for k, v in projected.items() if k != 'diagnostics'})
-                row.update(state=venue['state'] or 'unknown', identity_status='resolved')
-                notes.update(projected['diagnostics'])
-                # Hash evidence metadata, never persist fact values, quotes or source pages.
-                evidence = [dict(r) for r in db.execute(
-                    'SELECT obs_id,field,value_hash,label_status,source_url,source_type,observed_at '
-                    'FROM observations WHERE venue_key=? ORDER BY obs_id', (key[1],))]
-                current = [dict(r) for r in db.execute(
-                    'SELECT vf_id,field,value_hash,label_status,obs_id,valid_from,valid_to '
-                    'FROM venue_fields WHERE venue_id=? ORDER BY vf_id', (key[0],))]
-                gaps = [dict(r) for r in db.execute(
-                    'SELECT field,state,obs_id,next_at,updated_at FROM gaps WHERE venue_id=? ORDER BY field', (key[0],))]
-                fingerprints.append(digest([key, venue['type'], venue['state'], evidence, current, gaps]))
-    except (OSError, sqlite3.Error, ValueError):
-        notes['active_db_unreadable'] += 1
-        # A partial snapshot must not accidentally appear authoritative.
-        fingerprints = []
-        for row in candidates.values():
-            row.update(gap_count=None, fields=[], importance=0, state='unknown',
-                       identity_status='unknown', reason='identity_unknown')
-    finally:
-        if db is not None:
-            db.close()
+    if db is not None:
+        for key, row in sorted(candidates.items()):
+            venue = db.execute('SELECT * FROM venues WHERE venue_id=? AND venue_key=?', key).fetchone()
+            if venue is None:
+                continue
+            projected = project_needs(db, key[0], now=now)
+            row.update({k: v for k, v in projected.items() if k != 'diagnostics'})
+            row.update(state=venue['state'] or 'unknown', identity_status='resolved')
+            notes.update(projected['diagnostics'])
+            # Hash metadata only; never persist quotes or source pages.
+            evidence = [dict(r) for r in db.execute(
+                'SELECT obs_id,field,value_hash,label_status,source_url,source_type,observed_at '
+                'FROM observations WHERE venue_key=? ORDER BY obs_id', (key[1],))]
+            current = [dict(r) for r in db.execute(
+                'SELECT vf_id,field,value_hash,label_status,obs_id,valid_from,valid_to '
+                'FROM venue_fields WHERE venue_id=? ORDER BY vf_id', (key[0],))]
+            gaps = [dict(r) for r in db.execute(
+                'SELECT field,state,obs_id,next_at,updated_at FROM gaps WHERE venue_id=? ORDER BY field', (key[0],))]
+            fingerprints.append(digest([key, venue['type'], venue['state'], venue['website'],
+                                        venue['domains'], evidence, current, gaps]))
     for row in candidates.values():
         row['channels'].sort()
     ranked = sorted(candidates.values(), key=_local_key)
-    return ranked, digest([ranked, fingerprints]), notes
+    return ranked, digest([ranked, fingerprints, ownership]), notes
+
+
+def _readonly(settings):
+    path = settings.active_dir / 'active.sqlite3'
+    if not path.is_file():
+        raise FileNotFoundError
+    db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)
+    try:
+        db.row_factory = sqlite3.Row
+        db.execute('PRAGMA query_only=ON')
+        db.execute('BEGIN')
+        return db
+    except BaseException:
+        db.close()
+        raise
+
+
+def snapshot(settings, targets, watchlist, *, now):
+    """Compatibility entry point: materialize one read-only transaction."""
+    db = None
+    try:
+        db = _readonly(settings)
+        return _snapshot_rows(db, targets, watchlist, now=now)
+    except (OSError, sqlite3.Error, ValueError) as error:
+        rows, fingerprint, notes = _snapshot_rows(None, targets, watchlist, now=now)
+        notes['active_db_missing' if isinstance(error, FileNotFoundError) else 'active_db_unreadable'] += 1
+        return rows, fingerprint, notes
+    finally:
+        if db is not None:
+            db.close()
+
+
+def assemble_targets(settings, *, now, testing=False, include_watchlist=True):
+    """One materialized authorization/evidence snapshot, closed before ranking/I/O.
+
+    Planning may fall back to manual input on a DB failure. Change detection
+    must inspect db_status and defer instead of retiring derived authorization.
+    """
+    notes, disabled = Counter(), []
+    manual, status = load_targets(settings.data_dir / 'web_targets.json',
+                                  testing=testing, disabled=disabled)
+    watchlist = _watchlist(settings, notes) if include_watchlist else []
+    targets, db_status, db = manual, 'ok', None
+    try:
+        db = _readonly(settings)
+        venues = [dict(r) for r in db.execute('SELECT * FROM venues ORDER BY venue_id')]
+        aliases = [dict(r) for r in db.execute('SELECT * FROM venue_aliases ORDER BY alias_id')]
+        marker = db.execute("SELECT cursor FROM run_checkpoints WHERE checkpoint_id='seed_freeze'").fetchone()
+        seed_id = marker['cursor'] if marker else None
+        seeds = [dict(r) for r in db.execute(
+            'SELECT * FROM seed_venues WHERE seed_id=? ORDER BY seed_venue_id', (seed_id,))]
+        seed_domains = [dict(r) for r in db.execute(
+            'SELECT * FROM seed_domains WHERE seed_id=? ORDER BY seed_domain_id', (seed_id,))]
+        ownership = ownership_index(venues, aliases, seeds, seed_domains)
+        derived = []
+        if status != 'invalid':
+            for venue in venues:
+                if venue['state'] == 'closed' or is_excluded(venue['name'], venue['venue_key']):
+                    continue
+                gaps = {r['field'] for r in db.execute(
+                    "SELECT field FROM gaps WHERE venue_id=? AND state IN ('open','conflict')",
+                    (venue['venue_id'],))} & set(KEY_FIELDS)
+                if not gaps:
+                    continue
+                projected = project_needs(db, venue['venue_id'], now=now)
+                # Missing unrelated fields must not revive stale-satisfied gaps.
+                if not gaps.intersection(f['field_id'] for f in projected['fields']):
+                    continue
+                target = derive_target(venue, ownership[2][venue['venue_id']], notes)
+                if target:
+                    derived.append((target, {**venue, **projected}))
+            derived.sort(key=lambda pair: _local_key(pair[1]))
+            targets = merge_targets(manual, [t for t, _ in derived], disabled,
+                                    ownership, notes, testing=testing)
+        materialized = _snapshot_rows(db, targets, watchlist, now=now,
+                                      ownership=[venues, aliases, seed_id, seeds, seed_domains])
+    except (OSError, sqlite3.Error, ValueError, TypeError):
+        # Discard ALL partially derived/resolved authorization on failure.
+        db_status = 'missing' if not (settings.active_dir / 'active.sqlite3').is_file() else 'unreadable'
+        notes = Counter({k: v for k, v in notes.items() if k.startswith('watchlist_')})
+        notes['active_db_' + db_status] += 1
+        targets = manual
+        materialized = _snapshot_rows(None, targets, watchlist, now=now)
+    finally:
+        if db is not None:
+            db.close()
+    rows, fingerprint, snapshot_notes = materialized
+    notes.update(snapshot_notes)
+    return {'targets': targets, 'targets_status': status, 'db_status': db_status,
+            'watchlist': watchlist, 'snapshot': (rows, fingerprint, notes)}
 
 
 class Ranker(Protocol):
@@ -284,7 +357,10 @@ def _keys(value, keys):
 
 
 def _ident(value):
-    return _text(value.get('venue_id')) and _text(value.get('venue_key'))
+    from .ground import secrets
+    vid = value.get('venue_id')
+    safe_id = (_text(vid) or (_hash(vid) and not any(secret in vid for secret in secrets())))
+    return safe_id and _text(value.get('venue_key'))
 
 
 def _field_list(fields):
@@ -451,7 +527,7 @@ def _decision(path, candidates, ranker):
 
 
 def ensure_daily_plan(settings, state, targets, targets_status, *, clock, day=None,
-                      planner=None, planner_session=None, testing=False, ranking='model'):
+                      planner=None, planner_session=None, testing=False, ranking='model', assembled=None):
     now = kst_now(clock)
     day = day or now.date().isoformat()
     if date.fromisoformat(day).isoformat() != day:
@@ -474,8 +550,9 @@ def ensure_daily_plan(settings, state, targets, targets_status, *, clock, day=No
         notes['plan_invalid'] += 1
     if targets_status != 'ok':
         notes['targets_' + targets_status] += 1
-    watchlist = _watchlist(settings, notes)
-    rows, snapshot_digest, snapshot_notes = snapshot(settings, targets, watchlist, now=now)
+    watchlist = assembled['watchlist'] if assembled is not None else _watchlist(settings, notes)
+    rows, snapshot_digest, snapshot_notes = (assembled['snapshot'] if assembled is not None
+                                             else snapshot(settings, targets, watchlist, now=now))
     notes.update(snapshot_notes)
     ranker = choose_ranker(settings, state, planner=planner, planner_session=planner_session,
                            testing=testing, ranking=ranking)
@@ -574,8 +651,8 @@ def order_targets(targets, plan):
     return sorted(targets, key=lambda t: positions.get(target_id(t), len(positions))), _diagnostics(notes)
 
 
-def local_target_order(settings, targets, *, now):
-    rows, _, _ = snapshot(settings, targets, [], now=now)
+def local_target_order(settings, targets, *, now, materialized=None):
+    rows, _, _ = materialized if materialized is not None else snapshot(settings, targets, [], now=now)
     positions = {identity(row): index for index, row in enumerate(rows)}
     return sorted(targets, key=lambda t: (positions[identity(t)], target_id(t)))
 
@@ -589,9 +666,11 @@ def run_plan(settings, *, ranking='model', clock=None, planner=None, planner_ses
         settings.data_dir.chmod(0o700)
         with ProcessLock(settings.data_dir / 'daemon.lock'):
             state = State(settings.data_dir, clock)
-            targets, status = load_targets(settings.data_dir / 'web_targets.json', testing=testing)
+            assembled = assemble_targets(settings, now=now, testing=testing)
+            targets, status = assembled['targets'], assembled['targets_status']
             plan = ensure_daily_plan(settings, state, targets, status, clock=clock, day=day,
-                                     planner=planner, planner_session=planner_session, testing=testing, ranking=ranking)
+                                     planner=planner, planner_session=planner_session, testing=testing, ranking=ranking,
+                                     assembled=assembled)
             # The selected day's window is always in the future, so a late run
             # reports what it prepared rather than a passed window.
             reason = 'prepared_tomorrow' if now.hour >= 14 else 'ok'
