@@ -88,6 +88,7 @@ class State:
         self.data = new_checkpoint(today)
         # Per-run diagnostics only; never part of checkpoint.json.
         self.model_providers = {}
+        self.primary_skipped = None
         self.proxy_heal = None
         self.corrupt = False
         if not self.path.exists():
@@ -167,4 +168,6 @@ class State:
         }
         if 'proxy_heal' in result:
             body['proxy_heal'] = dict(result['proxy_heal'])
+        if result.get('primary_skipped') == 'insufficient_balance':
+            body['primary_skipped'] = 'insufficient_balance'
         atomic_json(self.directory / 'status.json', body)

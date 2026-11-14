@@ -32,6 +32,7 @@ from .watchlist_proposals import inspect_page, write_proposals
 RETRYABLE = frozenset({
     'model_timeout', 'model_transport', 'model_rate_limited', 'model_invalid',
     'model_unavailable', 'model_auth', 'model_budget_exhausted',
+    'model_insufficient_balance',
 })
 def _base(state_name, reason, *, success, collected, mode, pages=None, rejections=None):
     body = {
@@ -81,6 +82,8 @@ def public_result(result):
             key in ('deepseek', 'qwen') and type(value) is int and 0 <= value <= 1000
             for key, value in providers.items()):
         out['provider'] = dict(providers)
+    if result.get('primary_skipped') == 'insufficient_balance':
+        out['primary_skipped'] = 'insufficient_balance'
     heal = result.get('proxy_heal')
     if (isinstance(heal, dict) and
             set(heal) == {'attempted', 'heal_exit', 'retries', 'recovered'} and
@@ -101,6 +104,8 @@ def _finish(state, body, clock):
     body['counts'] = dict(state.data['counts'])
     body['budgets'] = dict(state.data['budgets'])
     body['provider'] = dict(state.model_providers)
+    if state.primary_skipped == 'insufficient_balance':
+        body['primary_skipped'] = 'insufficient_balance'
     if state.proxy_heal is not None:
         body['proxy_heal'] = dict(state.proxy_heal)
     clean = public_result(body)

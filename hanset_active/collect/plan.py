@@ -42,6 +42,7 @@ RANK_REASONS = frozenset({
     'fallback_missing_credentials', 'fallback_budget_reserved', 'fallback_model_invalid',
     'fallback_model_timeout', 'fallback_model_transport', 'fallback_model_rate_limited',
     'fallback_model_unavailable', 'fallback_model_auth', 'fallback_model_budget_exhausted',
+    'fallback_model_insufficient_balance',
 })
 
 
@@ -674,13 +675,16 @@ def run_plan(settings, *, ranking='model', clock=None, planner=None, planner_ses
             # The selected day's window is always in the future, so a late run
             # reports what it prepared rather than a passed window.
             reason = 'prepared_tomorrow' if now.hour >= 14 else 'ok'
-            return {'state': 'done', 'reason': reason, 'day': day,
+            result = {'state': 'done', 'reason': reason, 'day': day,
                     'plan_path': redact(str(settings.data_dir / 'plans' / (day + '.json'))),
                     'ranked_count': len(plan['ranked_venues']), 'web_target_count': len(plan['web_targets']),
                     'ig_list_count': len(plan['ig_read_list']), 'ranking_mode': plan['ranking']['mode'],
                     'ranking_reason': plan['ranking']['reason'], 'auto_publish_to_site': False,
                     # Transient per-run diagnostics; plan artifacts keep the DeepSeek id.
                     'provider': dict(state.model_providers)}
+            if state.primary_skipped == 'insufficient_balance':
+                result['primary_skipped'] = 'insufficient_balance'
+            return result
     except AlreadyRunning:
         return {'state': 'already_running', 'reason': 'already_running', 'auto_publish_to_site': False}
     except CollectError as error:
