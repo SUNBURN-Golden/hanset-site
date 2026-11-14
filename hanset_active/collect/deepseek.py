@@ -5,6 +5,7 @@ runtime from a host file and is never logged, persisted, or committed.
 """
 import json
 import os
+import re
 
 import requests
 
@@ -26,15 +27,15 @@ DEEPSEEK_EXTRAS = {
 QWEN_ENDPOINT = 'https://token-plan.maas.qwencloudapi.com/compatible-mode/v1/chat/completions'
 QWEN_MODEL = 'qwen4-max-preview'
 QWEN_TIMEOUT = (5, 60)
-# No DeepSeek-only thinking param; JSON mode omitted until validated live.
-QWEN_EXTRAS = {}
+# Qwen thinking can consume the output cap without producing JSON content.
+QWEN_EXTRAS = {'enable_thinking': False}
 
 # Owner-approved backup tier (2026-11-11): one Qwen retry after these primary
 # failures. Invalid output, exhausted budget, and missing DeepSeek credentials
 # never fall back.
 FALLBACK_REASONS = frozenset({
     'model_unavailable', 'model_rate_limited', 'model_transport',
-    'model_timeout', 'model_auth',
+    'model_timeout', 'model_auth', 'model_insufficient_balance',
 })
 
 
@@ -59,6 +60,7 @@ class DeepSeek:
         if self._own:
             self.session.trust_env = False
         self.qwen_session = qwen_session
+        self._primary_insufficient_balance = False
 
     def close(self):
         if self._own:
@@ -78,7 +80,7 @@ class DeepSeek:
         body.update(extras)
         return body
 
-    def _attempt(self, session, endpoint, headers, payload, *, timeout):
+    def _attempt(self, session, endpoint, headers, payload, *, timeout, qwen=False):
         response = None
         try:
             response = session.post(
@@ -95,6 +97,8 @@ class DeepSeek:
                     raise CollectError('model_unavailable')
                 if code in (401, 403):
                     raise CollectError('model_auth')
+                if code == 402:
+                    raise CollectError('model_insufficient_balance')
                 if code == 429:
                     raise CollectError('model_rate_limited')
                 raise CollectError('model_transport')
@@ -107,7 +111,13 @@ class DeepSeek:
             envelope = json.loads(bytes(body))
             message = envelope['choices'][0]['message']
             # Reasoning text is discarded even if the provider includes it.
-            parsed = json.loads(message['content'])
+            content = message['content']
+            if qwen and isinstance(content, str):
+                content = content.strip()
+                fence = re.fullmatch(r'```json[ \t]*\r?\n(.*?)\r?\n```', content, re.DOTALL)
+                if fence:
+                    content = fence[1]
+            parsed = json.loads(content)
             if not isinstance(parsed, dict):
                 raise CollectError('model_invalid')
             usage = envelope.get('usage')
@@ -131,6 +141,11 @@ class DeepSeek:
         content = json.dumps(documents, ensure_ascii=False, separators=(',', ':'))
         if len(content) > INPUT_LIMIT:
             raise CollectError('model_budget_exhausted')
+        if self._primary_insufficient_balance:
+            # Client-local routing only: status from an earlier run cannot skip
+            # the primary, and skipped attempts consume no reservation.
+            return self._qwen_fallback(
+                content, instruction, CollectError('model_insufficient_balance'))
         # A reserved call stays spent even when the attempt fails.
         self.state.reserve_model(len(content), OUTPUT_TOKENS)
         try:
@@ -143,6 +158,9 @@ class DeepSeek:
                 timeout=DEEPSEEK_TIMEOUT,
             )
         except CollectError as original:
+            if original.reason == 'model_insufficient_balance':
+                self._primary_insufficient_balance = True
+                self.state.primary_skipped = 'insufficient_balance'
             if original.reason not in FALLBACK_REASONS:
                 raise
             return self._qwen_fallback(content, instruction, original)
@@ -169,6 +187,7 @@ class DeepSeek:
                 {'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
                 self._payload(content, instruction, model=QWEN_MODEL, extras=QWEN_EXTRAS),
                 timeout=QWEN_TIMEOUT,
+                qwen=True,
             )
         except CollectError:
             # No third tier: keep the original primary reason for existing handling.

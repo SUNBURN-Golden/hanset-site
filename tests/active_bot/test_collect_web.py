@@ -178,6 +178,74 @@ def test_extraction_both_fail_keeps_original_reason(server, tmp_path, monkeypatc
     assert QWEN_KEY.encode() not in _stored_text(settings.data_dir)
 
 
+@pytest.mark.parametrize('backup', ['success', 'empty', 'transport'])
+def test_primary_402_extraction_reports_skip_without_network(tmp_path, monkeypatch, backup):
+    import sqlite3
+    from hanset_active.collect.deepseek import OUTPUT_TOKENS
+    from hanset_active.collect.service import run_status
+    from hanset_active.fetcher import FetchResult
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    _qwen_key_file(tmp_path, monkeypatch)
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    targets = settings.data_dir / 'web_targets.json'
+    targets.write_text(json.dumps({'schema_version': 1, 'targets': [{
+        'enabled': True, 'venue_id': f'venue-{n}', 'venue_key': f'sauna-{n}',
+        'name': f'Sauna {n}', 'official_urls': [f'https://venue{n}.example/hours'],
+    } for n in range(6)]}))
+    # Six bounded pages exceed one extraction batch; fetches remain entirely fake.
+    page = f'<main>{HOURS} ' + 'Official sauna guide. ' * 200 + SENTINEL + '</main>'
+    def fetch(self, url):
+        return FetchResult(url=url, outcome='ok', status=200, content=page.encode(),
+                           content_type='text/html', content_hash='fixture-hash')
+    monkeypatch.setattr('hanset_active.collect.service.Fetcher.fetch', fetch)
+    primary = Session(Response(402, b'PRIVATE_PROVIDER_BODY ' + KEY.encode()))
+
+    class Qwen(Session):
+        def post(self, url, **kwargs):
+            documents = json.loads(kwargs['json']['messages'][1]['content'])
+            payload = {'items': [{'index': i, 'claims': [{
+                'field': 'hours', 'value': _hours_value(), 'quote': HOURS,
+            }]} for i in range(len(documents))]}
+            content = '```json\n' + json.dumps(payload) + '\n```' if backup == 'success' else ''
+            envelope = {'choices': [{'message': {
+                'content': content, 'reasoning_content': 'REASONING_TRACE_DO_NOT_STORE',
+            }}], 'usage': {'completion_tokens': 20}}
+            self.response = (Response(500, b'PRIVATE_BACKUP_BODY') if backup == 'transport'
+                             else Response(200, json.dumps(envelope).encode()))
+            return super().post(url, **kwargs)
+
+    qwen = Qwen()
+    monkeypatch.setattr('hanset_active.collect.deepseek.new_qwen_session', lambda: qwen)
+    result = run_web(settings, targets_path=targets, clock=FakeClock(), session=primary, testing=True)
+    assert len(primary.calls) == 1
+    assert result['primary_skipped'] == 'insufficient_balance'
+    status = json.loads((settings.data_dir / 'status.json').read_text())
+    assert status['primary_skipped'] == run_status(settings)['primary_skipped'] == 'insufficient_balance'
+    if backup == 'success':
+        assert result['state'] == 'done' and result['reason'] == 'ok'
+        assert result['success'] and result['collected']
+        assert len(qwen.calls) == 2 and result['provider'] == {'qwen': 2}
+        assert result['counts']['claims'] == 6
+        assert result['budgets']['model_calls'] == 3
+        assert result['budgets']['output_tokens'] == OUTPUT_TOKENS + 40
+    else:
+        assert result['state'] == 'partial' and result['reason'] == 'model_insufficient_balance'
+        assert not result['success'] and not result['collected']
+        assert len(qwen.calls) == 1 and result['provider'] == {}
+        assert result['counts']['claims'] == 0
+        assert result['budgets']['model_calls'] == 2
+    assert status['provider'] == run_status(settings)['provider'] == result['provider']
+    with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
+        claims = db.execute('SELECT field,quote,status,rights,evidence_origin FROM claims').fetchall()
+    assert len(claims) == (6 if backup == 'success' else 0)
+    assert all(row == ('hours', HOURS, 'source_claim', 'internal_review_only', 'web_verbatim') for row in claims)
+    assert 'primary_skipped' not in json.loads((settings.data_dir / 'checkpoint.json').read_text())
+    blob = _stored_text(settings.data_dir) + _stored_text(settings.active_dir) + json.dumps(result).encode()
+    for private in (KEY, QWEN_KEY, SENTINEL, 'PRIVATE_PROVIDER_BODY', 'PRIVATE_BACKUP_BODY', 'REASONING_TRACE_DO_NOT_STORE'):
+        assert private.encode() not in blob
+
+
 def test_robots_naver_cap_and_locks(server, tmp_path, monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
     server.add('/private', _page())

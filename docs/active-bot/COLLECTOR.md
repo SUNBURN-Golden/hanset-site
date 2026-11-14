@@ -49,16 +49,22 @@ backward fails closed as `state_corrupt`.
 Every model step (web extraction, Instagram summary extraction, gap ranking)
 retries a failed DeepSeek call exactly once via Qwen4-Max. The retry fires
 only for `model_unavailable`, `model_rate_limited`, `model_transport`,
-`model_timeout`, and `model_auth` — which covers 402 credit exhaustion, 429
-limits, and 5xx. Invalid model output, an exhausted budget, and missing
-DeepSeek credentials (`missing_credentials`) never fall back; Qwen is a
-backup, not a replacement primary.
+`model_timeout`, `model_auth`, and `model_insufficient_balance` — which covers
+402 credit exhaustion, 429 limits, and 5xx. Invalid model output, an exhausted
+budget, and missing DeepSeek credentials (`missing_credentials`) never fall back.
+After a primary 402, that client skips DeepSeek for its remaining calls and
+goes straight to Qwen. The first primary reservation stays spent; skipped
+attempts make no request and reserve no budget. Extraction reuses one client
+across batches; ranking uses a separate client. A new client tries DeepSeek
+again. A Qwen 402 does not activate the primary skip.
 
 - Endpoint: `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1/chat/completions`,
   model `qwen4-max-preview`, same bounded messages as the primary attempt.
-  The Qwen request omits the DeepSeek-only `thinking` parameter and
-  `response_format` (the instruction already requires JSON-only output);
-  its read timeout is 60 s instead of 20 s.
+  The Qwen request sets `enable_thinking: false`, omits the DeepSeek-only
+  `thinking` parameter and `response_format`, and uses a 60 s read timeout
+  instead of 20 s. A single surrounding Markdown `json` fence is accepted for
+  Qwen only; the content must still parse as a JSON object. Empty content,
+  including reasoning-only replies, is `model_invalid`; reasoning is discarded.
 - Key: read at runtime from `/home/box/.qwen/token_plan_key`, overridable
   with `HANSET_QWEN_KEY_FILE`. A missing, unreadable, symlinked, oversized,
   or repo-internal key file silently skips the backup and keeps the original
@@ -76,12 +82,17 @@ backup, not a replacement primary.
   provider answered successfully (`deepseek` / `qwen`). It is per-run
   diagnostics: not part of `checkpoint.json`, and plan artifacts keep the
   configured DeepSeek id in `ranking.model` (see GAP_PRIORITY.md).
+- Run results, `status.json`, `collect status`, and planning results also report
+  `primary_skipped: "insufficient_balance"` when a primary 402 occurred, even if
+  Qwen fails. This diagnostic is absent otherwise, is never checkpointed, and
+  never controls routing on a later run. Successful fallback retains its ordinary
+  success reason; failed fallback retains `model_insufficient_balance`.
 - Model calls (DeepSeek and Qwen) go direct with `trust_env=False` and never
   use the SOCKS web proxy. Web-fetch proxy rules are unchanged.
 
-Before enabling the backup in production, the operator should make one live
-validation call to confirm the endpoint accepts the request shape; tests
-never make live calls.
+The 2026-11-15 live probe confirmed that disabling Qwen thinking produces JSON
+content within the output cap. Adding `response_format` produced malformed
+output, so it remains omitted. Tests never make live model calls.
 
 Web fetches use the existing active-bot fetcher: honest User-Agent, robots,
 denied hosts, redirect checks, and the active daily body/aux caps. This
