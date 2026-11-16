@@ -464,6 +464,35 @@ def test_default_web_fetches_derived_target_and_authorizes_observation(tmp_path,
     active.close()
 
 
+def test_same_day_instagram_completed_keys_do_not_abort_web(server, tmp_path, monkeypatch):
+    # The daily checkpoint is shared: Instagram ingestion completes denied
+    # instagram.com URLs, which must stay inert for the web run, not corrupt it.
+    from hanset_active.collect.service import run_ingest
+    from tests.active_bot.test_collect_ingest import _batch, _clock, _watch
+    from tests.active_bot.test_collect_ingest import _session as ig_session
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    monkeypatch.delenv('HANSET_IG_SESSION', raising=False)
+    settings = _settings(tmp_path)
+    settings.data_dir.mkdir()
+    settings.inbox.mkdir()
+    _watch(settings)
+    _batch(settings)
+    clock = _clock()
+    ingested = run_ingest(settings, clock=clock, session=ig_session())
+    assert ingested['success'] is True and ingested['collected'] is True
+    ig_url = 'https://www.instagram.com/p/Abcd1234/'
+    assert ig_url in State(settings.data_dir, clock).data['completed']
+    server.add('/hours', _page())
+    _targets(settings.data_dir / 'web_targets.json', server.base + '/hours')
+    result = run_web(settings, clock=clock, session=_session(), testing=True)
+    assert result['reason'] != 'state_corrupt'
+    assert result['success'] is True and result['collected'] is True
+    assert sum(item['path'] == '/hours' for item in server.log) == 1
+    # The foreign key is neither canonicalized away nor deleted from the checkpoint.
+    completed = State(settings.data_dir, clock).data['completed']
+    assert ig_url in completed and completed[ig_url] == 'applied'
+
+
 def test_derived_targets_keep_existing_page_run_and_day_caps(tmp_path, monkeypatch):
     from hanset_active.fetcher import FetchResult
     from tests.active_bot.test_collect_targets import eligible

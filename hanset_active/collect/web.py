@@ -1,11 +1,77 @@
 """Official-page classification after the existing guarded fetcher returns."""
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urljoin, urlsplit
+
+from bs4 import BeautifulSoup
 
 from hanset_active.extract import html as html_rules
 from hanset_active.util.urls import is_denied, is_excluded
 
 from .ground import bounded_text
 from .safety import POLICY_RE, asset_type, looks_like_security
+from .config import SUBPAGE_MAX, domain_allowed
+from .targets import _https_or_test, canonical_requested_url
+
+_KEYWORDS = {
+    **dict.fromkeys(('요금', '가격', '이용요금', 'price', 'pricing', 'rates', '드롭인',
+                     'drop-in', '이용시간', '운영시간', '영업시간', '시간표', 'schedule'), 3),
+    **dict.fromkeys(('시설', 'facilities', 'sauna', 'spa'), 2),
+    **dict.fromkeys(('안내', '이용안내', 'info', 'about', 'membership'), 1),
+}
+# In addition to asset_type's image/PDF checks, never queue downloadable files.
+_DOWNLOAD_EXTENSIONS = ('.zip', '.gz', '.tar', '.rar', '.7z', '.exe', '.dmg',
+                        '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx', '.hwp',
+                        '.hwpx', '.csv', '.mp3', '.wav', '.ogg', '.webm', '.mov')
+
+
+def select_subpages(content, parent_url, domains, *, testing=False, limit=SUBPAGE_MAX):
+    """Rank safe information links from guarded raw HTML, including navigation.
+
+    Returns at most ``limit`` candidates, or every ranked candidate when None;
+    the fetch queue enforces the per-target cap after cooldown filtering so a
+    cooling candidate never consumes a slot.
+    """
+    from hanset_active.config import load_profile
+    from hanset_active.util.followups import portal_domains
+    from hanset_active.util.urls import registrable_domain
+
+    try:
+        parent = canonical_requested_url(parent_url, testing=testing)
+    except (ValueError, TypeError, UnicodeError):
+        # Redirect targets only pass canonicalize(), not the requested-URL
+        # guard (e.g. a ?sid= landing page). The page itself fetched fine;
+        # without a safe parent identity it simply supplies no children.
+        return []
+    parent_domain = registrable_domain(parent)
+    # One profile read per page, not per anchor on link-heavy homepages.
+    profile = load_profile()
+    portals = portal_domains(profile)
+    terms = profile['exclusion_terms']
+    scores = {}
+    soup = BeautifulSoup(content, 'lxml')
+    for anchor in soup.select('a[href]'):
+        if anchor.has_attr('download'):
+            continue
+        try:
+            candidate = urljoin(parent_url, anchor['href'])
+            if not _https_or_test(candidate, testing=testing):
+                continue
+            # Validate the original identity before stripping trackers/fragments.
+            url = canonical_requested_url(candidate, testing=testing)
+            path = unquote(urlsplit(url).path).casefold()
+            if (url == parent or registrable_domain(url) != parent_domain
+                    or registrable_domain(url) in portals or not domain_allowed(url, domains)
+                    or POLICY_RE.search(path) or asset_type('', path)
+                    or path.endswith(_DOWNLOAD_EXTENSIONS)):
+                continue
+            label = ' '.join((anchor.get_text(' ', strip=True) + ' ' + path).split()).casefold()
+            if is_excluded(label, terms=terms):
+                continue
+            score = sum(weight for word, weight in _KEYWORDS.items() if word in label)
+            if score:
+                scores[url] = max(score, scores.get(url, 0))
+        except (TypeError, ValueError, UnicodeError):
+            continue
+    return sorted(scores, key=lambda url: (-scores[url], url))[:limit]
 
 
 def classify_page(fetched, domains):

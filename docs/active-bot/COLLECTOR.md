@@ -103,6 +103,81 @@ must be HTTPS except loopback fixtures in tests. A redirect that leaves the
 approved domain is `off_domain` and is not sent to the model. Asset and policy
 URLs are not sent either.
 
+### Information subpages and URL cooldowns
+
+Web runs select up to two information links per venue identity per invocation,
+shared across its initial URLs. Links are read from raw HTML, including navigation,
+only when the fetch outcome is `ok` and classification is `ready` or `empty_body`.
+Price and hours keywords rank ahead of facilities, then general information;
+ties sort by canonical URL. Relative links resolve against the final response URL.
+Candidates must be HTTPS (HTTP loopback only in tests), share the parent's
+registrable domain, belong to the target's approved domains, and pass the existing
+portal/exclusion and safe-URL guards. Policy pages, downloads, credential-bearing
+URLs and external links are rejected. Tracking parameters and fragments collapse;
+meaningful query parameters remain distinct.
+
+Selected pages run immediately after their parent, ahead of new roots, through
+the same fetcher, proxy, robots rules, locks and budgets. Children never recurse.
+A selected child under cooldown is noted as skipped without consuming one of the
+two subpage slots. A redirect landing URL that fails the safe-URL check (the
+fetcher only canonicalizes redirects, e.g. a `?sid=` homepage) is still classified
+and extracted, but supplies no subpage links.
+Every non-`cap_reached` fetch attempt counts toward the existing 10-page run and
+20-page daily caps, including robots refusals and collateral domain stops. Link
+selection precedes extraction and receipt deduplication, so unchanged or
+empty-extraction roots can still yield useful children. Unprocessed children
+remain in memory and must be rediscovered on a later eligible root fetch.
+The fetcher is unchanged: a shell it already returns as `empty_body` without
+HTML cannot yield links; the classifier's `empty_body` fallback can when the
+fetcher returned `ok` with HTML.
+
+Discovered children retain the venue identity and approved domains, but inherit
+no `source_authorization`. They can create `source_claim` / `internal_review_only`
+receipts and claims under their own requested URLs, without automatic change
+observations or altered target fingerprints. An already queued explicit URL
+promoted into the child position retains its own exact-URL authorization.
+Ready children also pass through web watchlist inspection and may produce
+watchlist proposals under their own URL and the target's venue identity; this
+does not activate Instagram ingestion or update the live watchlist.
+
+The external collector DB adds `web_target_blocks` without modifying historical
+rows. It stores only a SHA-256 hash of the safely canonicalized requested URL,
+the terminal disposition, and a timezone-aware timestamp from the collector
+clock. `robots_disallowed` always establishes a hold. `login_wall` and `blocked`
+establish holds only when a real response status exists, including security text
+on a 200 response. A later URL stopped collaterally by the fetcher's in-run domain
+stop has `blocked` with no status: it still counts this run, but gets no hold and
+can be retried next run. A blocked homepage therefore does not create a cooldown
+for an independently approved venue subpage.
+
+Holds last 14 days per URL. `recent_block_skipped` makes no fetcher call, consumes
+no page slot, and is never added to checkpoint `completed`. The checkpoint is
+shared with same-day Instagram ingestion: completed keys that fail the safe-URL
+check (such as denied `instagram.com` post URLs) stay inert for web deduplication
+and never abort a web run. Skips do not refresh the timestamp. Exactly at expiry the URL is eligible; a new genuine terminal
+result starts a fresh hold. Expired entries are pruned when opening cooldown
+state and in each write transaction; malformed entries fail as `state_corrupt`.
+Skip notes follow fetch/extraction notes so the 20-entry public status limit
+preserves real results; `rejections.recent_block_skipped` reports the total.
+When no unfinished URL remains outside cooldown, the result is successful with
+`collected: false`, reason `recent_block_skipped`, before extraction credential
+checks or proxy preflight.
+
+Search leads are only scheme/domain-checked upstream. A lead whose identity fails
+the safe-URL check (credential params such as `?sid=`/`?key=`, redaction markers,
+over-length) skips that one job with an `unsafe_url_skipped` note and a
+`rejections.unsafe_url_skipped` count; it is never fetched and its raw URL is not
+echoed into status. Other jobs in the same run proceed normally. If every job is
+unsafe, the run stops with reason `unsafe_url_skipped` before credential checks
+or proxy preflight.
+
+Cooldowns start with new genuine evaluations; historical timestamps are not
+invented. The existing fetcher folds robots-unavailable (including transport
+failures and 5xx responses) into `robots_disallowed`, so these conservatively
+receive the same 14-day hold. No anti-bot workaround or domain-wide cross-day
+suppression is introduced. Discovery, providers, Instagram, the Linux
+collector/clipper, and the static site remain separate and unchanged.
+
 Tavily is optional. A target with no URL and a `tavily` venue/field pair may
 call the existing `discover_known_venue` hook, which already caps basic search
 at 30 requests per KST day. Only a lead whose domain is in that target's

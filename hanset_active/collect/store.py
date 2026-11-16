@@ -2,14 +2,16 @@
 import hashlib
 import json
 import os
+import re
 import sqlite3
 import struct
+from datetime import datetime, timedelta
 
 from hanset_active.db import deterministic_id
 from hanset_active.util.timeutil import kst_now
 
 from . import CollectError
-from .config import outside
+from .config import BLOCK_COOLDOWN_DAYS, outside
 from .ground import secrets
 
 SCHEMA = '''
@@ -137,6 +139,15 @@ CREATE TABLE IF NOT EXISTS web_change_metadata (key TEXT PRIMARY KEY, value TEXT
 CREATE INDEX IF NOT EXISTS web_change_pending ON web_change_observations(processed,observed_seq);
 '''
 
+BLOCK_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS web_target_blocks (
+    url_hash TEXT PRIMARY KEY,
+    disposition TEXT NOT NULL CHECK (disposition IN ('robots_disallowed','login_wall','blocked')),
+    blocked_at TEXT NOT NULL
+);
+'''
+_BLOCK_DISPOSITIONS = frozenset({'robots_disallowed', 'login_wall', 'blocked'})
+
 
 def connect(directory):
     directory = outside(directory)
@@ -153,6 +164,7 @@ def connect(directory):
     _migrate(db)
     db.executescript(CANDIDATE_SCHEMA)
     db.executescript(CHANGE_SCHEMA)
+    db.executescript(BLOCK_SCHEMA)
     os.chmod(path, 0o600)
     return db
 
@@ -188,6 +200,53 @@ def _migrate(db):
 
 def digest(text):
     return hashlib.sha256(text.encode()).hexdigest()
+
+
+def _block_expiry(row):
+    try:
+        at = datetime.fromisoformat(row['blocked_at'])
+        if (at.utcoffset() is None or row['disposition'] not in _BLOCK_DISPOSITIONS
+                or not re.fullmatch(r'[0-9a-f]{64}', row['url_hash'])):
+            raise ValueError
+        return at + timedelta(days=BLOCK_COOLDOWN_DAYS)
+    except (ValueError, TypeError, KeyError, OverflowError):
+        raise CollectError('state_corrupt') from None
+
+
+def _prune_web_target_blocks(db, now):
+    # Parse before deleting: malformed state must never silently bypass a hold.
+    expired = []
+    for row in db.execute('SELECT * FROM web_target_blocks'):
+        if _block_expiry(row) <= now:
+            expired.append((row['url_hash'],))
+    db.executemany('DELETE FROM web_target_blocks WHERE url_hash=?', expired)
+
+
+def prune_web_target_blocks(db, *, clock=None):
+    with db:
+        _prune_web_target_blocks(db, kst_now(clock))
+
+
+def recent_web_target_block(db, url, *, clock=None, testing=False):
+    from .targets import canonical_requested_url
+    key = digest(canonical_requested_url(url, testing=testing))
+    row = db.execute('SELECT * FROM web_target_blocks WHERE url_hash=?', (key,)).fetchone()
+    return bool(row and kst_now(clock) < _block_expiry(row))
+
+
+def remember_web_target_block(db, url, disposition, *, status, clock=None, testing=False):
+    """Only per-URL evaluations establish holds; collateral domain stops do not."""
+    if disposition not in _BLOCK_DISPOSITIONS or (disposition != 'robots_disallowed' and status is None):
+        return
+    from .targets import canonical_requested_url
+    key = digest(canonical_requested_url(url, testing=testing))
+    now = kst_now(clock)
+    with db:
+        _prune_web_target_blocks(db, now)
+        db.execute('''INSERT INTO web_target_blocks(url_hash,disposition,blocked_at) VALUES (?,?,?)
+                      ON CONFLICT(url_hash) DO UPDATE SET
+                      disposition=excluded.disposition,blocked_at=excluded.blocked_at''',
+                   (key, disposition, now.isoformat()))
 
 
 def _clean(value):
