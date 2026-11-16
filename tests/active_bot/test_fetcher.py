@@ -194,6 +194,87 @@ def fake_http(bot,monkeypatch):
     monkeypatch.setattr(bot.session,'get',get)
     return routes,calls
 
+
+@pytest.mark.parametrize('path', ['/facilities/', '/guide%2Fsauna/', '/%EC%82%AC%EC%9A%B0%EB%82%98/'])
+def test_subpage_requests_slash_form_directly(bot, fake_http, venue, path):
+    routes, calls = fake_http
+    root = 'https://venue.example'
+    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
+    routes[root + path.rstrip('/')] = (307, {'Location': path}, b'')
+    routes[root + path] = (200, {'Content-Type': 'text/html'}, venue)
+    result = bot.fetch(root + path + '?utm_source=nav#info', subpage=True)
+    assert result.ok
+    assert [url for url, _ in calls] == [root + '/robots.txt', root + path]
+    assert all(not kwargs['allow_redirects'] for _, kwargs in calls)
+
+
+def test_subpage_redirect_preserves_path_and_checks_destination_robots(bot, fake_http, venue):
+    routes, calls = fake_http
+    root, destination = 'https://venue.example', 'https://info.venue.example'
+    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
+    routes[root + '/guide/'] = (307, {'Location': destination + '/sauna/?utm_source=nav#info'}, b'')
+    routes[destination + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
+    routes[destination + '/sauna/'] = (200, {'Content-Type': 'text/html'}, venue)
+    result = bot.fetch(root + '/guide/', subpage=True)
+    assert result.ok and result.url == destination + '/sauna/'
+    assert [url for url, _ in calls] == list(routes)
+    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0] == 2
+    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='aux'").fetchone()[0] == 2
+
+
+def test_subpage_redirect_robots_denies_only_slash_path(bot, fake_http):
+    routes, calls = fake_http
+    root = 'https://venue.example'
+    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nDisallow: /sauna/\n')
+    routes[root + '/guide/'] = (307, {'Location': '/sauna/'}, b'')
+    result = bot.fetch(root + '/guide/', subpage=True)
+    assert result.outcome == 'robots_disallowed' and result.url == root + '/sauna/'
+    assert [url for url, _ in calls] == list(routes)
+
+
+@pytest.mark.parametrize('destination', ['https://other.example/sauna/', 'http://venue.example/sauna/'])
+def test_subpage_rejects_external_redirect_or_downgrade_before_any_destination_request(bot, fake_http, destination):
+    routes, calls = fake_http
+    root = 'https://venue.example'
+    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
+    routes[root + '/guide/'] = (302, {'Location': destination}, b'')
+    assert bot.fetch(root + '/guide/', subpage=True).outcome == 'denied'
+    assert [url for url, _ in calls] == list(routes)
+
+
+@pytest.mark.parametrize('hops', [2, 3])
+def test_subpage_redirect_limit_is_two(bot, fake_http, venue, hops):
+    routes, calls = fake_http
+    root = 'https://venue.example'
+    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
+    for index in range(hops):
+        routes[root + f'/guide{index}/'] = (308, {'Location': f'/guide{index + 1}/'}, b'')
+    routes[root + f'/guide{hops}/'] = (200, {'Content-Type': 'text/html'}, venue)
+    result = bot.fetch(root + '/guide0/', subpage=True)
+    assert result.outcome == ('ok' if hops == 2 else 'error')
+    assert [url for url, _ in calls] == [root + '/robots.txt'] + [root + f'/guide{i}/' for i in range(3)]
+
+
+def test_default_fetch_retains_path_and_external_redirect_semantics(bot, fake_http, venue):
+    routes, calls = fake_http
+    root, destination = 'https://venue.example', 'https://other.example'
+    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
+    routes[root + '/guide'] = (302, {'Location': destination + '/sauna/'}, b'')
+    routes[destination + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
+    routes[destination + '/sauna'] = (200, {'Content-Type': 'text/html'}, venue)
+    assert bot.fetch(root + '/guide/').ok
+    assert [url for url, _ in calls] == list(routes)
+
+
+@pytest.mark.parametrize('destination', ['https://naver.com/guide/', 'https://venue.example/runport/'])
+def test_subpage_redirect_keeps_denials(bot, fake_http, destination):
+    routes, calls = fake_http
+    root = 'https://venue.example'
+    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
+    routes[root + '/guide/'] = (302, {'Location': destination}, b'')
+    assert bot.fetch(root + '/guide/', subpage=True).outcome == 'denied'
+    assert [url for url, _ in calls] == list(routes)
+
 @pytest.mark.parametrize('http_status',[None,500,503])
 @pytest.mark.parametrize('https_status',[200,404])
 def test_http_robots_unavailable_upgrades_to_https(bot,fake_http,venue,http_status,https_status):

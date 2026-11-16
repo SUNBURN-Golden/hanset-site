@@ -40,8 +40,8 @@ def fake_http(monkeypatch, routes):
         self.session.close()
         self.session = Session()
 
-    def fetch(self, url):
-        result = original_fetch(self, url)
+    def fetch(self, url, **kwargs):
+        result = original_fetch(self, url, **kwargs)
         evaluations.append((url, result.outcome, result.status))
         return result
 
@@ -221,14 +221,14 @@ def test_cooling_child_does_not_consume_subpage_slot(tmp_path, monkeypatch):
     remember_web_target_block(db, ROOT + '/price', 'blocked', status=403, clock=clock)
     db.close()
     calls = fake_pages(monkeypatch, {
-        ROOT: html('<a href="/price">Price</a><a href="/about">About</a><a href="/rates">Rates</a>'),
-        ROOT + '/about': html(), ROOT + '/rates': html(),
+        ROOT: html('<a href="/price/">Price</a><a href="/about/">About</a><a href="/rates/">Rates</a>'),
+        ROOT + '/about/': html(), ROOT + '/rates/': html(),
     })
     capture_extraction(monkeypatch)
     result = service.run_web(settings, targets_path=path, clock=clock, testing=True)
     assert result['success'] and result['counts']['pages'] == 3
     # The cooling top-scored child is noted, and the two slots go to live pages.
-    assert calls == [ROOT, ROOT + '/rates', ROOT + '/about']
+    assert calls == [ROOT, ROOT + '/rates/', ROOT + '/about/']
     assert result['rejections'] == {'recent_block_skipped': 1}
     assert any(page['url'] == ROOT + '/price' and page['disposition'] == 'recent_block_skipped'
                for page in result['pages'])
