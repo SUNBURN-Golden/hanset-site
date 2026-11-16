@@ -8,11 +8,11 @@ Nothing is deployed, nothing is sent. No trackers, no external requests.
 
   .venv/bin/python build_site.py                 # preview build (noindex)
   .venv/bin/python build_site.py --release       # indexable + canonical/sitemap for hanset.soulbound.co.kr
-  .venv/bin/python build_site.py --ads path.json # test 광고 labels from an alternative ads file
 """
 import argparse, csv, datetime as dt, html, json, re, shutil, sys
+from html.parser import HTMLParser
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse
 from zoneinfo import ZoneInfo
 import verified as VF
 
@@ -988,8 +988,15 @@ def subset_fonts(dist):
     except ImportError:
         print("WARN: fonttools not installed; skipping font subsetting (site falls back to system fonts). Use .venv/bin/python.")
         return
-    text = "".join(p.read_text(encoding="utf-8") for p in dist.rglob("*.html"))
-    text += "".join(p.read_text(encoding="utf-8") for p in (dist / "assets/js").glob("*.js"))
+    corpus = []
+    for p in list(dist.rglob("*.html")) + list((dist / "assets/js").glob("*.js")):
+        try:
+            corpus.append(p.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError):
+            # The mandatory post-generation leak check reports unreadable text
+            # safely. Font collection must not print raw decoding exceptions.
+            continue
+    text = "".join(corpus)
     chars = "".join(sorted(set(text + "".join(chr(c) for c in range(0x20, 0x7F)) + "₩–—·→›×℃™…“”‘’")))
     out = dist / "assets/fonts"; out.mkdir(parents=True, exist_ok=True)
     for w in ("Regular", "Bold"):
@@ -999,16 +1006,468 @@ def subset_fonts(dist):
         f.flavor = "woff2"; f.save(out / f"Pretendard-{w}.subset.woff2")
     shutil.copy(ROOT / "static/fonts/Pretendard-OFL-LICENSE.txt", out / "Pretendard-OFL-LICENSE.txt")
 
+# Leak rules are deliberately a vocabulary, not a semantic claim detector. Keep
+# diagnostics separate from inspected values: only (relative path, rule) escapes.
+LEAK_SUFFIXES = {'.html', '.svg', '.css', '.js', '.json', '.xml', '.ics'}
+LEAK_EMAIL = re.compile(r"[\w.!#$%&'*+/=?^`{|}~\-]+@[\w\-]+(?:\.[\w\-]+)+", re.I)
+# Korean mobile, regional, internet and service numbers; overseas numbers need
+# an explicit +country/00country prefix. No generic long-number heuristic.
+_PHONE_SEP = r'[\s.()\-–]*'
+LEAK_PHONE = re.compile(
+    r'(?<![\w₩$])(?<!\d[.,])(?:'
+    r'(?:0(?:1[016789]|2|31|32|33|41|42|43|44|51|52|53|54|55|61|62|63|64|70|80))' + _PHONE_SEP + r'\d{3,4}' + _PHONE_SEP + r'\d{4}'
+    r'|1[568]\d{2}' + _PHONE_SEP + r'\d{4}'
+    r'|(?:\+|00)\d{1,3}' + _PHONE_SEP + r'(?:\(0\)' + _PHONE_SEP + r')?\d(?:[\s.()\-–]*\d){6,11}'
+    r')(?!\w|[.,]\d|\s*(?:원|KRW|USD)\b)', re.I)
+LEAK_ADVERTISING = re.compile(
+    r'광[\W_]*고|협[\W_]*찬|제[\W_]*휴|후[\W_]*원|스[\W_]*폰[\W_]*서|'
+    r'파[\W_]*트[\W_]*너[\W_]*십|미[\W_]*디[\W_]*어[\W_]*킷|노[\W_]*출[\W_]*료|'
+    r'sponsor|advertis|partnership|media[\W_]*kit|collaborat', re.I)
+LEAK_HEALTH = re.compile(
+    r'디[\W_]*톡[\W_]*스|해[\W_]*독|면역(?:력)?[\W_]*(?:증가|증진|강화|향상)|'
+    r'살[\W_]*빠(?:진다|짐|지)|체중[\W_]*(?:감량|감소)|지방[\W_]*연소|치유|완치|힐링|'
+    r'\bdetox\w*|\bheal(?:s|ing|ed)?\b|\bcur(?:e[sd]?|ing)\b|fat[\W_]*burn\w*|'
+    r'weight[\W_]*loss|los(?:e|ing)[\W_]*weight|'
+    r'(?:boost\w*|enhanc\w*|improv\w*|increas\w*|strengthen\w*)[\W_]*(?:the[\W_]+)?immun\w*|'
+    r'immun\w*[\W_]*(?:boost\w*|enhanc\w*|improv\w*|increas\w*)', re.I)
+LEAK_TRACKER = re.compile(r'google-analytics|googletagmanager|facebook\.net|doubleclick|hotjar|clarity\.ms|kakao\.com/js', re.I)
+# The legacy numeric owner reference belongs in prose, never SVG coordinates or
+# numeric code tokens. All other historical terms are retained on raw/decoded text.
+LEAK_LEGACY = re.compile('|'.join(
+    '(?i:' + p.replace('(?i)', '') + ')' if '(?i)' in p else '(?:' + p + ')'
+    for p in FORBIDDEN if p != r'\b442\b'))
+
+
+def _js_unescape(value):
+    def replace(m):
+        part = m.group(1)
+        if part.startswith(('u{', 'u', 'x')):
+            try:
+                return chr(int(part[2:-1] if part.startswith('u{') else part[1:], 16))
+            except (ValueError, OverflowError):
+                return ''
+        return {'n': '\n', 'r': '\r', 't': '\t', 'b': '\b', 'f': '\f', 'v': '\v', '0': '\0',
+                '\n': '', '\r\n': ''}.get(part, part)
+    return re.sub(r'\\(u\{[0-9a-fA-F]+\}|u[0-9a-fA-F]{4}|x[0-9a-fA-F]{2}|\r\n|[\s\S])', replace, value)
+
+
+def _css_unescape(value):
+    def replace(m):
+        if m.group(1):
+            n = int(m.group(1), 16)
+            return chr(n) if 0 < n <= 0x10ffff else '\ufffd'
+        return '' if m.group(2) in ('\n', '\r', '\f') else m.group(2)
+    return re.sub(r'\\(?:([0-9a-fA-F]{1,6})\s?|([\s\S]))', replace, value)
+
+
+# This lexer preserves strings/comments as tokens; operation names inside them
+# cannot turn source-link strings into loads. It does not run any JavaScript.
+_JS_TOKEN = re.compile(
+    r'(?P<comment>//[^\r\n]*|/\*[\s\S]*?\*/)|'
+    r'''(?P<string>"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`)|'''
+    r'(?P<number>\b(?:0[xX][0-9a-fA-F]+|\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b)|'
+    r'(?P<id>(?:[$\w]|\\u[0-9a-fA-F]{4}|\\u\{[0-9a-fA-F]+\})+)|'
+    r'(?P<punct>===|!==|=>|==|!=|\+=|\?\.|[^\s])')
+
+
+def _js_tokens(text):
+    tokens, prose = [], []
+    pos = 0
+    while (m := _JS_TOKEN.search(text, pos)) is not None:
+        pos = m.end()
+        kind, value = m.lastgroup, m.group()
+        if kind == 'punct' and value == '/' and (not tokens or tokens[-1][1] in {'=', '(', '[', ',', ':', '!', '?', 'return', '=>'}):
+            # Skip regexp literals, including escaped slashes and character
+            # classes, so names such as fetch in a regexp are inert.
+            end, bracket = pos, False
+            while end < len(text) and text[end] not in '\r\n':
+                c = text[end]
+                if c == '\\': end += 2; continue
+                if c == '[': bracket = True
+                if c == ']': bracket = False
+                if c == '/' and not bracket:
+                    end += 1
+                    while end < len(text) and text[end].isalpha(): end += 1
+                    tokens.append(('regex', text[m.start():end])); pos = end; break
+                end += 1
+            if pos == end: continue
+        if kind == 'comment':
+            prose.append(value)
+        elif kind == 'string':
+            decoded = _js_unescape(value[1:-1])
+            prose.extend((value[1:-1], decoded))
+            interpolation = value[0] == '`' and re.search(r'(?<!\\)(?:\\\\)*\$\{', value[1:-1])
+            tokens.append(('dynamic' if interpolation else 'string', decoded))
+        else:
+            tokens.append((kind, _js_unescape(value) if kind == 'id' else value))
+    return tokens, prose
+
+
+def _js_arguments(tokens, start):
+    """Split a call/parenthesized expression without losing nested expressions."""
+    args, current, stack = [], [], []
+    for i in range(start + 1, len(tokens)):
+        v = tokens[i][1]
+        if tokens[i][0] == 'punct':
+            if v == ')' and not stack:
+                return args + [current], i
+            if v == ',' and not stack:
+                args.append(current); current = []; continue
+            if v in ('(', '[', '{'): stack.append(v)
+            if v in (')', ']', '}') and stack: stack.pop()
+        current.append(tokens[i])
+    return args + [current], len(tokens)
+
+
+def _js_constant(tokens, constants):
+    """Only strings, static templates, immutable constants, parentheses and +."""
+    i = 0
+    def expression():
+        nonlocal i
+        result = atom()
+        while i < len(tokens) and tokens[i] == ('punct', '+'):
+            i += 1
+            other = atom()
+            result = result + other if result is not None and other is not None else None
+        return result
+    def atom():
+        nonlocal i
+        if i >= len(tokens): return None
+        kind, value = tokens[i]; i += 1
+        if kind == 'string': return value
+        if kind == 'id': return constants.get(value)
+        if (kind, value) == ('punct', '('):
+            result = expression()
+            if i < len(tokens) and tokens[i] == ('punct', ')'):
+                i += 1
+                return result
+        return None
+    result = expression()
+    return result if i == len(tokens) else None
+
+
+class _LeakScanner:
+    def __init__(self, path):
+        self.path = path
+        self.rules = set()
+        self.seen = set()
+
+    def words(self, text, prose=True):
+        if len(text) < 4096:
+            if (text, prose) in self.seen: return
+            self.seen.add((text, prose))
+        decoded = html.unescape(text) if '&' in text else text
+        values = {text, decoded}
+        if '%' in decoded: values.add(unquote(decoded))
+        for value in values:
+            if LEAK_ADVERTISING.search(value): self.rules.add('wording.advertising')
+            if LEAK_HEALTH.search(value): self.rules.add('wording.health')
+            if LEAK_LEGACY.search(value): self.rules.add('wording.forbidden')
+            if LEAK_TRACKER.search(value): self.rules.add('resource.tracker')
+            if '@' in value and any(m.group().casefold() != 'hanset@soulbound.co.kr' for m in LEAK_EMAIL.finditer(value)):
+                self.rules.add('contact.email')
+            if re.search(r'\b(?:tel|sms)\s*:', value, re.I): self.rules.add('contact.phone')
+            if prose:
+                if LEAK_PHONE.search(value): self.rules.add('contact.phone')
+                if re.search(r'\b442\b', value): self.rules.add('wording.forbidden')
+
+    def url(self, value):
+        if value is None:
+            self.rules.add('resource.unresolved'); return
+        # WHATWG URLs accept backslashes and ignore ASCII tabs/newlines. Origin
+        # comparison uses parsed components, never string-prefix matching.
+        value = re.sub(r'[\x00-\x20\x7f]', '', html.unescape(value)).replace('\\', '/')
+        if not value or value.startswith('#') or value.lower().startswith('data:'): return
+        # Browsers treat additional leading slashes as an authority, whereas
+        # urllib treats three slashes as a local path. Normalize that difference.
+        value = re.sub(r'^([a-zA-Z][a-zA-Z0-9+.-]*:)?/{2,}', lambda m: (m.group(1) or '') + '//', value)
+        try:
+            u = urlparse(urljoin(SITE_URL + '/' + self.path, value))
+            port = u.port if u.port is not None else {'https': 443, 'http': 80}.get(u.scheme.lower())
+            origin = (u.scheme.lower(), unquote(u.hostname or '').lower(), port)
+            site = urlparse(SITE_URL)
+            expected = (site.scheme, site.hostname, site.port if site.port is not None else 443)
+            if u.username is not None or u.password is not None or origin != expected:
+                self.rules.add('resource.external')
+        except (ValueError, UnicodeError):
+            self.rules.add('resource.unresolved')
+
+    def srcset(self, value):
+        # A data URI may itself contain commas. Whitespace separates its optional
+        # descriptor; other candidates begin after the candidate-separator comma.
+        for m in re.finditer(r'(?:^|,\s*)\s*(data:[^\s]+|[^\s,]+)', value):
+            self.url(m.group(1))
+
+    def css(self, text):
+        self.words(text, prose=False)
+        decoded = _css_unescape(text)
+        self.words(decoded, prose=False)
+        for m in re.finditer(r'/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'', decoded):
+            self.words(m.group())
+        # Comments can split @import and url tokens. Strip them only for the
+        # load scanner; their contents were still checked above.
+        code = re.sub(r'/\*[\s\S]*?\*/', '', decoded)
+        for m in re.finditer(r'''url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*))\s*\)|@import\s+(?:"([^"]*)"|'([^']*)')|"[^"]*"|'[^']*' ''', code, re.I | re.X):
+            destination = next((v for v in m.groups() if v is not None), None)
+            if destination is not None: self.url(destination.strip())
+
+    def javascript(self, text):
+        self.words(text, prose=False)
+        tokens, prose = _js_tokens(text)
+        for value in prose: self.words(value)
+        for i, token in enumerate(tokens):
+            if token[0] != 'string': continue
+            end = i+1
+            while end+1 < len(tokens) and tokens[end] == ('punct', '+') and tokens[end+1][0] == 'string':
+                end += 2
+            if end > i+1:
+                self.words(''.join(v for k, v in tokens[i:end] if k == 'string'))
+        # Normalize static bracket members after decoding, so escaped property
+        # names receive exactly the same checks as dotted property names.
+        i = 0
+        while i < len(tokens):
+            if tokens[i] == ('punct', '['):
+                end = i+1
+                while end < len(tokens) and tokens[end] != ('punct', ']'): end += 1
+                member = _js_constant(tokens[i+1:end], {})
+                if member and re.fullmatch(r'[A-Za-z_$][\w$]*', member):
+                    tokens[i:end+1] = [('punct', '.'), ('id', member)]
+            i += 1
+        constants = {}
+        parameters = set()
+        for i, token in enumerate(tokens):
+            if token == ('id', 'function'):
+                start = i+1
+                while start < len(tokens) and tokens[start] != ('punct', '('): start += 1
+                if start < len(tokens):
+                    args, _ = _js_arguments(tokens, start)
+                    parameters.update(v for arg in args for k, v in arg if k == 'id')
+            elif token == ('punct', '=>') and i:
+                if tokens[i-1][0] == 'id': parameters.add(tokens[i-1][1])
+                elif tokens[i-1] == ('punct', ')'):
+                    depth, start = 1, i-2
+                    while start >= 0 and depth:
+                        if tokens[start] == ('punct', ')'): depth += 1
+                        if tokens[start] == ('punct', '('): depth -= 1
+                        start -= 1
+                    parameters.update(v for k, v in tokens[start+2:i-1] if k == 'id')
+        for i, t in enumerate(tokens[:-3]):
+            if t == ('id', 'const') and tokens[i+1][0] == 'id' and tokens[i+2] == ('punct', '='):
+                name = tokens[i+1][1]
+                end = i+3
+                while end < len(tokens) and tokens[end] not in (('punct', ';'), ('punct', ',')): end += 1
+                # Repeated declarations/shadowing are deliberately unresolved.
+                declarations = sum(tokens[j][1] in {'const', 'let', 'var'} and tokens[j+1] == ('id', name) for j in range(len(tokens)-1))
+                if declarations == 1 and name not in parameters:
+                    constants[name] = _js_constant(tokens[i+3:end], constants)
+                    if constants[name] is not None: self.words(constants[name])
+        def value(arg): return _js_constant(arg, constants)
+        def load(arg, kind='url'):
+            v = value(arg)
+            if kind == 'css' and v is not None: self.css(v)
+            elif kind == 'html' and v is not None: self.markup(v)
+            elif kind == 'srcset' and v is not None: self.srcset(v)
+            else: self.url(v)
+        values = [v for _, v in tokens]
+        request_calls = {'fetch', 'sendBeacon', 'WebSocket', 'EventSource', 'Worker', 'SharedWorker', 'Request', 'import', 'importScripts'}
+        resource_attrs = {'src', 'href', 'srcset', 'poster', 'data', 'action', 'formaction', 'codebase', 'background'}
+        for i, (kind, name) in enumerate(tokens):
+            if kind != 'id': continue
+            # ES module import/export declarations. Dynamic import is a call.
+            if name in ('import', 'export') and i+1 < len(tokens) and values[i+1] != '(':
+                if tokens[i+1][0] == 'string': self.url(values[i+1])
+                else:
+                    for j in range(i+1, len(tokens)-1):
+                        if values[j] == ';': break
+                        if tokens[j] == ('id', 'from'):
+                            self.url(values[j+1] if tokens[j+1][0] == 'string' else None); break
+            # Property writes, including automatic navigation. Bracket notation
+            # with a static property name was normalized above too.
+            assignment = i+1
+            if (i > 0 and values[i-1] in ('.', '?.')) or name == 'location':
+                if assignment < len(tokens) and values[assignment] in ('=', '+=') and name in resource_attrs | {'location', 'cssText', 'innerHTML', 'outerHTML'}:
+                    end = assignment+1
+                    depth = 0
+                    while end < len(tokens):
+                        v = values[end]
+                        if tokens[end][0] == 'punct':
+                            if depth == 0 and v in (';', ',', ')', '}'): break
+                            if v in ('(', '[', '{'): depth += 1
+                            if v in (')', ']', '}'): depth -= 1
+                        end += 1
+                    load(tokens[assignment+1:end] if values[assignment] == '=' else [],
+                         'css' if name == 'cssText' else 'html' if name in ('innerHTML', 'outerHTML') else 'srcset' if name == 'srcset' else 'url')
+            call = i+1
+            if call < len(tokens) and tokens[call] == ('punct', '?.'): call += 1
+            if call >= len(tokens) or tokens[call] != ('punct', '('): continue
+            args, _ = _js_arguments(tokens, call)
+            prefix = values[max(0, i-4):i]
+            if name in request_calls:
+                for arg in (args if name == 'importScripts' else args[:1]): load(arg)
+            elif name == 'open':
+                navigation = i == 0 or values[i-1] not in ('.', '?.') or 'window' in prefix or 'globalThis' in prefix
+                load(args[0] if navigation else args[1] if len(args) > 1 else [])
+            elif name == 'register' and 'serviceWorker' in prefix: load(args[0])
+            elif name in ('assign', 'replace') and 'location' in prefix: load(args[0])
+            elif name in ('setAttribute', 'setAttributeNS'):
+                offset = 1 if name == 'setAttributeNS' else 0
+                attr = value(args[offset]) if len(args) > offset else None
+                if attr and attr.lower() in resource_attrs | {'style'}:
+                    load(args[offset+1] if len(args) > offset+1 else [], 'css' if attr == 'style' else 'srcset' if attr == 'srcset' else 'url')
+                elif attr is None: self.rules.add('resource.unresolved')
+            elif name in ('insertRule', 'replaceSync'): load(args[0], 'css')
+            elif name in ('write', 'writeln') and 'document' in prefix:
+                for arg in args: load(arg, 'html')
+            elif name == 'insertAdjacentHTML': load(args[1] if len(args) > 1 else [], 'html')
+
+    def json(self, text):
+        self.words(text, prose=False)
+        try:
+            obj = json.loads(text)
+        except (ValueError, RecursionError):
+            self.rules.add('validation.parse'); return
+        def walk(value):
+            if isinstance(value, str): self.words(value)
+            elif isinstance(value, dict):
+                for key, item in value.items(): self.words(key); walk(item)
+            elif isinstance(value, list):
+                for item in value: walk(item)
+        walk(obj)
+
+    def markup(self, text):
+        self.words(text, prose=False)
+        entities = dict(re.findall(r'<!ENTITY\s+([\w-]+)\s+["\']([^"\']*)["\']\s*>', text, re.I))
+        # Expand only bounded, internal string entities. No XML parser, DTD
+        # retrieval or network entity resolution is involved.
+        for _ in range(8):
+            expanded = re.sub(r'&([\w-]+);', lambda m: entities.get(m.group(1), m.group()), text)
+            if expanded == text: break
+            if len(expanded) > max(1048576, len(text) * 4):
+                self.rules.add('validation.parse'); return
+            text = expanded
+        else:
+            self.rules.add('validation.parse'); return
+        parser = _LeakMarkup(self)
+        try:
+            parser.feed(text); parser.close(); parser.flush()
+        except (ValueError, AssertionError, RecursionError):
+            self.rules.add('validation.parse')
+        # HTMLParser never resolves DTDs/entities. Only inspect declarations and
+        # stylesheet processing instructions; namespace/source URLs are inert.
+        for m in re.finditer(r'<![^>]*\b(?:SYSTEM|PUBLIC)\s+(?:"[^"]*"\s+)?["\']([^"\']+)["\']', text, re.I):
+            self.url(m.group(1))
+        for m in re.finditer(r'<\?xml-stylesheet\b[^?]*\?>', text, re.I):
+            href = re.search(r'''\bhref\s*=\s*['"]([^'"]+)['"]''', m.group(), re.I)
+            self.url(href.group(1) if href else None)
+        for m in re.finditer(r'<!ENTITY\s+\S+\s+["\']([^"\']*)["\']\s*>', text, re.I):
+            self.words(m.group(1))
+
+    def calendar(self, text):
+        text = re.sub(r'\r?\n[ \t]', '', text)
+        text = re.sub(r'\\([nN,;\\])', lambda m: '\n' if m.group(1).lower() == 'n' else m.group(1), text)
+        self.words(text)
+        for line in text.splitlines():
+            if re.match(r'ATTACH(?:;|:)', line, re.I):
+                head, _, value = line.partition(':')
+                if 'VALUE=BINARY' not in head.upper(): self.url(value)
+
+
+class _LeakMarkup(HTMLParser):
+    # SVG geometry and other purely numeric presentation attributes are code,
+    # while text/title/desc, metadata, comments and string attributes are prose.
+    GEOMETRY = {'d', 'points', 'viewbox', 'transform', 'gradienttransform', 'x', 'y', 'x1', 'x2', 'y1', 'y2',
+                'cx', 'cy', 'r', 'rx', 'ry', 'width', 'height', 'offset', 'opacity', 'stroke-width', 'pathlength'}
+    def __init__(self, scanner):
+        super().__init__(convert_charrefs=True)
+        self.scanner = scanner
+        self.block = None
+        self.chunks = []
+
+    def flush(self):
+        if self.block:
+            text = ''.join(self.chunks)
+            if self.block == 'style': self.scanner.css(text)
+            elif self.block == 'json': self.scanner.json(text)
+            elif self.block == 'script': self.scanner.javascript(text)
+            else: self.scanner.words(text)
+            self.block = None; self.chunks = []
+
+    def handle_starttag(self, tag, attrs):
+        tag = tag.rsplit(':', 1)[-1]
+        s = self.scanner
+        attrs = dict(attrs)
+        for key, value in attrs.items():
+            if value is None: continue
+            s.words(value, prose=key not in self.GEOMETRY and key not in {'style'} and not key.startswith('on'))
+            if key == 'style': s.css(value)
+            if key.startswith('on'): s.javascript(value)
+            if key in {'src', 'poster', 'background', 'codebase', 'manifest'} or (key == 'data' and tag == 'object'):
+                s.url(value)
+            if key in {'srcset', 'imagesrcset'}: s.srcset(value)
+            if key == 'ping':
+                for url in value.split(): s.url(url)
+            if key == 'srcdoc': s.markup(value)
+        if tag in {'image', 'use', 'feimage', 'base', 'script'}:
+            for key in ('href', 'xlink:href'):
+                if key in attrs: s.url(attrs[key])
+        if tag == 'link':
+            rel = set((attrs.get('rel') or '').lower().split())
+            if rel - {'canonical', 'alternate', 'author', 'help', 'license', 'next', 'prev'}:
+                if 'href' in attrs: s.url(attrs['href'])
+        if tag == 'meta' and (attrs.get('http-equiv') or '').strip().lower() == 'refresh':
+            m = re.search(r'url\s*=\s*(.*)', attrs.get('content') or '', re.I)
+            if m: s.url(m.group(1).strip(' \t\'"'))
+        # SMIL may change resource destinations without scripting.
+        if tag in {'animate', 'set'} and (attrs.get('attributename') or '').lower() in {'href', 'xlink:href', 'src'}:
+            for key in ('to', 'from', 'values'):
+                for value in (attrs.get(key) or '').split(';'):
+                    if value: s.url(value)
+        if tag in {'script', 'style'}:
+            self.flush()
+            script_type = (attrs.get('type') or '').lower()
+            self.block = 'style' if tag == 'style' else 'json' if script_type in {'application/json', 'application/ld+json', 'importmap'} else 'script'
+
+    def handle_startendtag(self, tag, attrs):
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
+
+    def handle_endtag(self, tag):
+        tag = tag.rsplit(':', 1)[-1]
+        if tag in {'script', 'style'}: self.flush()
+
+    def handle_data(self, text):
+        if self.block: self.chunks.append(text)
+        else: self.scanner.words(text)
+
+    def handle_comment(self, text):
+        self.scanner.words(text)
+
+    def handle_pi(self, text):
+        self.scanner.words(text)
+
+    def unknown_decl(self, text):
+        self.scanner.words(text)
+
+
 def leak_check(dist):
-    bad = []
-    for p in list(dist.rglob("*.html")) + list(dist.rglob("*.ics")) + list(dist.rglob("*.xml")):
-        t = p.read_text(encoding="utf-8")
-        for pat in FORBIDDEN:
-            m = re.search(pat, t)
-            if m: bad.append((str(p.relative_to(dist)), pat, t[max(0, m.start() - 20):m.end() + 20]))
-    if re.search(r"https?://[^\"' >]*(google-analytics|googletagmanager|facebook\.net|doubleclick|hotjar|clarity\.ms|kakao\.com/js)", "".join(p.read_text(encoding="utf-8") for p in dist.rglob("*.html"))):
-        bad.append(("*", "tracker", ""))
-    return bad
+    """Inspect emitted text without network access; return safe, stable findings."""
+    bad = set()
+    for p in sorted(dist.rglob('*')):
+        if not p.is_file() or p.suffix.lower() not in LEAK_SUFFIXES: continue
+        rel = p.relative_to(dist).as_posix()
+        scanner = _LeakScanner(rel)
+        try:
+            text = p.read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            bad.add((rel, 'validation.read')); continue
+        suffix = p.suffix.lower()
+        if suffix in {'.html', '.svg', '.xml'}: scanner.markup(text)
+        elif suffix == '.css': scanner.css(text)
+        elif suffix == '.js': scanner.javascript(text)
+        elif suffix == '.json': scanner.json(text)
+        else: scanner.calendar(text)
+        bad.update((rel, rule) for rule in scanner.rules)
+    return sorted(bad)
 
 ARCHIVE_DATE = "2026.10.18"
 # (file, venue slug, title, short title, alt text, source label, source URL)
@@ -1150,6 +1609,9 @@ def main():
         "/assets/*\n  Cache-Control: public, max-age=86400\n/*.html\n  Cache-Control: public, max-age=0, must-revalidate\n")
     subset_fonts(dist)
     bad = leak_check(dist)
+    if bad:
+        for path, rule in bad: print(f"LEAK-CHECK FAIL: {path} [{rule}]")
+        sys.exit(2)
     lt = long_text_check(dist)
     for b in lt: print("LONG-TEXT WARN:", b)
     if lt: sys.exit(5)
@@ -1170,10 +1632,7 @@ def main():
     print(f"built {len(site.pages)} pages, {len(venues)} venues ({sum(v['kind_key']=='box' for v in venues)} boxes, {sum(v['kind_key']=='sauna' for v in venues)} saunas), {len(events)} events, {len(vevents)} verified-feed events, {len(creators)} creators -> {dist}  ({total/1024:.0f} KB total)")
     print(f"not published (no verified/partial content): {len(skipped)} venue rows, {len(ev_skipped)} event rows")
     for k, n, c in skipped[:0]: print("  ", k, n, c)
-    if bad:
-        for b in bad: print("LEAK-CHECK FAIL:", b)
-        sys.exit(2)
-    print("leak check OK (no owner credentials / third-party-source names / trackers)")
+    print("leak check OK (contacts, wording, resources, legacy terms and trackers)")
 
 if __name__ == "__main__":
     main()
