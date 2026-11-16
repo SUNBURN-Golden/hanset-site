@@ -2,6 +2,7 @@
 import json
 import re
 import sqlite3
+from collections import deque
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -17,15 +18,16 @@ from hanset_twin.daemon import AlreadyRunning as CollectorBusy
 from hanset_twin.daemon import ProcessLock
 
 from . import CollectError
-from .config import IG_READ_MAX, PAGE_DAY_CAP, PAGE_RUN_CAP, CollectSettings
+from .config import IG_READ_MAX, PAGE_DAY_CAP, PAGE_RUN_CAP, SUBPAGE_MAX, CollectSettings
 from .deepseek import OUTPUT_TOKENS, DeepSeek, credentials_present
 from .ground import INSTRUCTION, SUMMARY_INSTRUCTION, parse_items, payload_items, summary_items
 from .ingest import load_watchlist, parse_batch, security_flag, within_window
 from .state import State
 from .store import connect as claim_connect
-from .store import digest, record
-from .targets import resolve_jobs
-from .web import classify_page
+from .store import (digest, record, prune_web_target_blocks, recent_web_target_block,
+                    remember_web_target_block)
+from .targets import canonical_requested_url, resolve_jobs
+from .web import classify_page, select_subpages
 from .plan import assemble_targets, ensure_daily_plan, load_targets, local_target_order, order_targets
 from .watchlist_proposals import inspect_page, write_proposals
 
@@ -278,7 +280,32 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
         global_gap=0 if testing else 1,
     )
     active = active_connect(active_settings.data_dir / 'active.sqlite3')
+    blocks = None
+    skipped = {}
+    unsafe = 0
+
+    def finish_web(body):
+        # Fetch/extraction results take precedence over cooldown notes in the
+        # bounded public page list; the aggregate retains the full skip count.
+        body['pages'].extend({'url': url, 'disposition': 'recent_block_skipped'} for url in skipped)
+        rejections = dict(body.get('rejections') or {})
+        if skipped:
+            rejections['recent_block_skipped'] = len(skipped)
+        if unsafe:
+            rejections['unsafe_url_skipped'] = unsafe
+        if rejections:
+            body['rejections'] = rejections
+        return _finish(state, body, clock)
+
+    def cooling(url):
+        if recent_web_target_block(blocks, url, clock=clock, testing=testing):
+            skipped[url] = True
+            return True
+        return False
+
     try:
+        blocks = claim_connect(settings.data_dir)
+        prune_web_target_blocks(blocks, clock=clock)
         needs_search = any(item['tavily'] and not item['urls'] for item in targets)
         jobs, notes = resolve_jobs(
             targets,
@@ -288,27 +315,57 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
             testing=testing,
         )
         notes.extend({'url': '', 'disposition': note['code']} for note in planning_notes)
-        pending = [job for job in jobs if job['url'] not in state.data['completed']]
+        completed = set()
+        for url in state.data['completed']:
+            # The checkpoint is shared with same-day Instagram ingestion. Its
+            # denied instagram.com keys (and any other unsafe key) stay inert,
+            # exactly as with raw string membership; they never abort the run.
+            try:
+                completed.add(canonical_requested_url(url, testing=testing))
+            except (ValueError, TypeError):
+                continue
+        pending, queued = deque(), set()
+        for job in jobs:
+            try:
+                url = canonical_requested_url(job['url'], testing=testing)
+            except (ValueError, TypeError):
+                # Search leads are only scheme/domain-checked upstream. An
+                # unsafe identity (credential params, redaction markers,
+                # over-length) skips this job, never the whole run. The raw
+                # URL is not echoed into status notes.
+                unsafe += 1
+                notes.append({'url': '', 'disposition': 'unsafe_url_skipped'})
+                continue
+            if cooling(url) or url in completed or url in queued:
+                continue
+            # Canonical keys deduplicate work; explicit receipt URLs retain
+            # their existing identity (including a trailing slash).
+            pending.append({**job, 'depth': 0})
+            queued.add(url)
+        if not pending and skipped:
+            return finish_web(_base('done', 'recent_block_skipped', success=True, collected=False, mode='web', pages=notes))
+        if not pending and jobs and unsafe == len(jobs):
+            return finish_web(_base('stopped', 'unsafe_url_skipped', success=False, collected=False, mode='web', pages=notes))
         if not pending and jobs:
-            return _finish(state, _base('already_complete', 'already_complete', success=True, collected=False, mode='web', pages=notes), clock)
+            return finish_web(_base('already_complete', 'already_complete', success=True, collected=False, mode='web', pages=notes))
         if not pending:
             reason = notes[0]['disposition'] if notes else 'no_urls'
-            return _finish(state, _base('stopped', reason, success=False, collected=False, mode='web', pages=notes), clock)
+            return finish_web(_base('stopped', reason, success=False, collected=False, mode='web', pages=notes))
         if state.data['counts']['pages'] >= PAGE_DAY_CAP:
-            return _finish(state, _base('stopped', 'daily_cap', success=False, collected=False, mode='web', pages=notes), clock)
+            return finish_web(_base('stopped', 'daily_cap', success=False, collected=False, mode='web', pages=notes))
         if not credentials_present():
-            return _finish(state, _base('error', 'missing_credentials', success=False, collected=False, mode='web', pages=notes), clock)
+            return finish_web(_base('error', 'missing_credentials', success=False, collected=False, mode='web', pages=notes))
         if not state.can_model(1, OUTPUT_TOKENS):
-            return _finish(state, _base('stopped', 'model_budget_exhausted', success=False, collected=False, mode='web', pages=notes), clock)
+            return finish_web(_base('stopped', 'model_budget_exhausted', success=False, collected=False, mode='web', pages=notes))
         try:
             proxy = web_proxy.configured()
         except ValueError:
-            return _finish(state, _base('stopped', 'proxy_invalid', success=False, collected=False, mode='web', pages=notes), clock)
+            return finish_web(_base('stopped', 'proxy_invalid', success=False, collected=False, mode='web', pages=notes))
         if proxy:
             blocked, state.proxy_heal = web_proxy.preflight_with_retry(proxy, clock=clock)
             if blocked:
                 # Fail closed: skip every web fetch; never use the box IP.
-                return _finish(state, _base('stopped', blocked, success=False, collected=False, mode='web', pages=notes), clock)
+                return finish_web(_base('stopped', blocked, success=False, collected=False, mode='web', pages=notes))
         ready, pages = [], list(notes)
         proposal_evidence = []
         stop_reason = None
@@ -317,13 +374,20 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 fetcher = Fetcher(active_settings, active, clock, proxy=proxy)
                 try:
                     run_pages = 0
-                    for job in pending:
+                    attempted, children = set(), {}
+                    while pending:
+                        job = pending.popleft()
+                        job_key = canonical_requested_url(job['url'], testing=testing)
+                        queued.discard(job_key)
+                        if cooling(job_key) or job_key in completed or job_key in attempted:
+                            continue
                         if state.data['counts']['pages'] >= PAGE_DAY_CAP:
                             stop_reason = 'daily_cap'
                             break
                         if run_pages >= PAGE_RUN_CAP:
                             stop_reason = 'run_cap'
                             break
+                        attempted.add(job_key)
                         try:
                             fetched = fetcher.fetch(job['url'])
                         except web_proxy.ProxyUnavailable:
@@ -336,6 +400,35 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                         run_pages += 1
                         state.save()
                         disposition, text = classify_page(fetched, job['domains'])
+                        remember_web_target_block(blocks, job['url'], disposition,
+                                                  status=fetched.status, clock=clock, testing=testing)
+                        target_key = (job['venue_id'], job['venue_key'])
+                        if (job['depth'] == 0 and fetched.outcome == 'ok'
+                                and disposition in ('ready', 'empty_body')
+                                and children.get(target_key, 0) < SUBPAGE_MAX):
+                            follow = []
+                            for url in select_subpages(fetched.content, fetched.url or job['url'],
+                                                       job['domains'], testing=testing, limit=None):
+                                if children.get(target_key, 0) >= SUBPAGE_MAX:
+                                    break
+                                if url in completed or url in attempted:
+                                    continue
+                                # Promote an explicit job without losing its exact-URL
+                                # authorization. Discovered URLs inherit no authorization.
+                                if url in queued:
+                                    child = next(item for item in pending if
+                                                 canonical_requested_url(item['url'], testing=testing) == url)
+                                    pending.remove(child)
+                                else:
+                                    # A cooling child is noted as skipped but never
+                                    # consumes one of the target's subpage slots.
+                                    if cooling(url):
+                                        continue
+                                    child = {**job, 'url': url, 'source_authorization': None}
+                                follow.append({**child, 'depth': 1})
+                                queued.add(url)
+                                children[target_key] = children.get(target_key, 0) + 1
+                            pending.extendleft(reversed(follow))
                         if disposition != 'ready':
                             state.complete(job['url'], disposition)
                             pages.append({'url': job['url'], 'disposition': disposition})
@@ -347,7 +440,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 finally:
                     fetcher.close()
         except ActiveBusy:
-            return _finish(state, _base('deferred', 'active_busy', success=False, collected=False, mode='web', pages=pages), clock)
+            return finish_web(_base('deferred', 'active_busy', success=False, collected=False, mode='web', pages=pages))
         if proposal_evidence:
             try:
                 write_proposals(settings, proposal_evidence, day=kst_now(clock).date().isoformat())
@@ -362,14 +455,18 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
             except CollectError as error:
                 pages.extend(extracted)
                 reason = error.reason if error.reason in RETRYABLE else 'runtime_error'
-                return _finish(state, _base('partial', reason, success=False, collected=claims > 0, mode='web', pages=pages), clock)
+                return finish_web(_base('partial', reason, success=False, collected=claims > 0, mode='web', pages=pages))
         pages.extend(extracted)
         if stop_reason == 'run_cap':
-            return _finish(state, _base('done', 'run_cap', success=True, collected=claims > 0, mode='web', pages=pages), clock)
+            return finish_web(_base('done', 'run_cap', success=True, collected=claims > 0, mode='web', pages=pages))
         if stop_reason:
-            return _finish(state, _base('partial', stop_reason, success=False, collected=claims > 0, mode='web', pages=pages), clock)
-        return _finish(state, _base('done', 'ok', success=True, collected=claims > 0, mode='web', pages=pages), clock)
+            return finish_web(_base('partial', stop_reason, success=False, collected=claims > 0, mode='web', pages=pages))
+        return finish_web(_base('done', 'ok', success=True, collected=claims > 0, mode='web', pages=pages))
+    except (sqlite3.Error, ValueError, TypeError):
+        raise CollectError('state_corrupt') from None
     finally:
+        if blocks is not None:
+            blocks.close()
         active.close()
 
 
