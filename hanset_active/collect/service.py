@@ -389,7 +389,8 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                             break
                         attempted.add(job_key)
                         try:
-                            fetched = fetcher.fetch(job['url'])
+                            fetched = (fetcher.fetch(job['url'], subpage=True) if job.get('discovered_subpage')
+                                       else fetcher.fetch(job['url']))
                         except web_proxy.ProxyUnavailable:
                             stop_reason = 'proxy_unavailable'
                             break
@@ -407,26 +408,28 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                                 and disposition in ('ready', 'empty_body')
                                 and children.get(target_key, 0) < SUBPAGE_MAX):
                             follow = []
-                            for url in select_subpages(fetched.content, fetched.url or job['url'],
-                                                       job['domains'], testing=testing, limit=None):
+                            for fetch_url in select_subpages(fetched.content, fetched.url or job['url'],
+                                                             job['domains'], testing=testing, limit=None):
                                 if children.get(target_key, 0) >= SUBPAGE_MAX:
                                     break
-                                if url in completed or url in attempted:
+                                child_key = canonical_requested_url(fetch_url, testing=testing)
+                                if child_key in completed or child_key in attempted:
                                     continue
                                 # Promote an explicit job without losing its exact-URL
                                 # authorization. Discovered URLs inherit no authorization.
-                                if url in queued:
+                                if child_key in queued:
                                     child = next(item for item in pending if
-                                                 canonical_requested_url(item['url'], testing=testing) == url)
+                                                 canonical_requested_url(item['url'], testing=testing) == child_key)
                                     pending.remove(child)
                                 else:
                                     # A cooling child is noted as skipped but never
                                     # consumes one of the target's subpage slots.
-                                    if cooling(url):
+                                    if cooling(child_key):
                                         continue
-                                    child = {**job, 'url': url, 'source_authorization': None}
+                                    child = {**job, 'url': fetch_url, 'source_authorization': None,
+                                             'discovered_subpage': True}
                                 follow.append({**child, 'depth': 1})
-                                queued.add(url)
+                                queued.add(child_key)
                                 children[target_key] = children.get(target_key, 0) + 1
                             pending.extendleft(reversed(follow))
                         if disposition != 'ready':

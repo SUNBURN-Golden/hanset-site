@@ -108,13 +108,18 @@ URLs are not sent either.
 Web runs select up to two information links per venue identity per invocation,
 shared across its initial URLs. Links are read from raw HTML, including navigation,
 only when the fetch outcome is `ok` and classification is `ready` or `empty_body`.
-Price and hours keywords rank ahead of facilities, then general information;
-ties sort by canonical URL. Relative links resolve against the final response URL.
+Keyword scores add together: price/hours and `sauna`, `사우나`, `찜질`, `찜질방`,
+`jjimjilbang` weigh 3; facilities/spa and `이용가이드`, `guide`, `floor-guide`,
+`층별` weigh 2; general information weighs 1. Ties sort by canonical URL.
+Relative links resolve against the final response URL.
 Candidates must be HTTPS (HTTP loopback only in tests), share the parent's
 registrable domain, belong to the target's approved domains, and pass the existing
 portal/exclusion and safe-URL guards. Policy pages, downloads, credential-bearing
 URLs and external links are rejected. Tracking parameters and fragments collapse;
-meaningful query parameters remain distinct.
+meaningful query parameters remain distinct. Canonical identities deduplicate
+slash variants and drive queue, checkpoint, and cooldown comparisons. Each
+identity keeps its maximum score and first validated fetch URL, preserving the
+original encoded path and trailing slash for the actual request.
 
 Selected pages run immediately after their parent, ahead of new roots, through
 the same fetcher, proxy, robots rules, locks and budgets. Children never recurse.
@@ -127,7 +132,14 @@ Every non-`cap_reached` fetch attempt counts toward the existing 10-page run and
 selection precedes extraction and receipt deduplication, so unchanged or
 empty-extraction roots can still yield useful children. Unprocessed children
 remain in memory and must be rediscovered on a later eligible root fetch.
-The fetcher is unchanged: a shell it already returns as `empty_body` without
+Only newly discovered children enable the fetcher's subpage mode: paths stay
+intact through normalization, with at most two HTTPS redirects within the
+initial registrable domain. External redirects and downgrades are rejected
+before destination robots or body requests. Every permitted hop still passes
+URL denial checks and robots evaluation against its preserved path; a robots
+denial never requests the destination body. Automatic redirects stay disabled.
+Root/manual jobs and other callers retain the default fetch behavior.
+A shell the fetcher returns as `empty_body` without
 HTML cannot yield links; the classifier's `empty_body` fallback can when the
 fetcher returned `ok` with HTML.
 
@@ -135,7 +147,8 @@ Discovered children retain the venue identity and approved domains, but inherit
 no `source_authorization`. They can create `source_claim` / `internal_review_only`
 receipts and claims under their own requested URLs, without automatic change
 observations or altered target fingerprints. An already queued explicit URL
-promoted into the child position retains its own exact-URL authorization.
+promoted into the child position retains its original URL, exact-URL
+authorization, and default fetch behavior, even at depth one.
 Ready children also pass through web watchlist inspection and may produce
 watchlist proposals under their own URL and the target's venue identity; this
 does not activate Instagram ingestion or update the live watchlist.

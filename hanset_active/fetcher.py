@@ -241,7 +241,8 @@ class Fetcher:
                     return False,'robots_unavailable'
                 return False,'robots_disallowed'
             return True,''
-    def fetch(self,url: str, *, kind: str = 'body', parent_url: str | None = None, task_id: str | None = None, discovered_via: str | None = None, _browser_shell: bool = False, api_headers: dict | None = None) -> FetchResult:
+    def fetch(self,url: str, *, kind: str = 'body', parent_url: str | None = None, task_id: str | None = None, discovered_via: str | None = None, _browser_shell: bool = False, api_headers: dict | None = None, subpage: bool = False) -> FetchResult:
+        """Discovered subpages retain paths and allow two same-domain HTTPS redirects."""
         if kind not in ('body','robots','sitemap','feed','api','browser_aux'):
             raise ValueError('Unsupported request kind')
         ref=dict(parent_url=strip_pii(parent_url) if parent_url else None,task_id=task_id if task_id and self.db.execute('SELECT 1 FROM tasks WHERE task_id=?',(task_id,)).fetchone() else None,discovered_via=strip_pii(discovered_via) if discovered_via else None)
@@ -254,14 +255,16 @@ class Fetcher:
                         (deterministic_id(safe_url,ref['task_id'],outcome),ref['task_id'],safe_url,registrable_domain(url),outcome,'dead' if outcome in ('blocked','login_wall','robots_disallowed') else 'pending',kst_now(self.clock).isoformat()))
             return FetchResult(safe_url,outcome,reason=reason,fetched_at=kst_now(self.clock).isoformat(),source_ref=ref,**kw)
         try:
-            url=canonicalize(url)
+            url=canonicalize(url,preserve_path=subpage)
         except (ValueError,UnicodeError):
             return result('denied','invalid URL')
         auth_origin=(urlsplit(url).scheme,urlsplit(url).netloc)
+        initial_domain=registrable_domain(url)
+        redirect_limit=2 if subpage else 5
         if api_headers and (kind!='api' or set(api_headers)!={'X-Subscription-Token'}):
             raise ValueError('Only scoped search API authentication is supported')
         https_probed=False
-        for hop in range(6):
+        for hop in range(redirect_limit+1):
             reason=self._reason_denied(url)
             if reason:
                 return result('denied',reason)
@@ -272,7 +275,7 @@ class Fetcher:
                 allowed,reason=self._robots_allowed(url,mark_inaccessible=False)
                 if not allowed and reason=='robots_unavailable' and urlsplit(url).scheme=='http' and not https_probed:
                     https_probed=True
-                    upgraded=canonicalize(urlsplit(url)._replace(scheme='https').geturl())
+                    upgraded=canonicalize(urlsplit(url)._replace(scheme='https').geturl(),preserve_path=subpage)
                     denied=self._reason_denied(upgraded)
                     if denied:
                         return result('denied',denied)
@@ -289,12 +292,15 @@ class Fetcher:
                     return result('cap_reached' if error=='cap_reached' else 'error',error)
                 status=response.status_code
                 if status in (301,302,303,307,308):
-                    if hop==5 or not response.headers.get('Location'):
+                    if hop==redirect_limit or not response.headers.get('Location'):
                         return result('error','redirect limit',status=status)
                     try:
-                        url=canonicalize(urljoin(url,response.headers['Location']))
-                    except ValueError:
+                        redirect=canonicalize(urljoin(url,response.headers['Location']),preserve_path=subpage)
+                    except (ValueError,UnicodeError):
                         return result('denied','invalid redirect')
+                    if subpage and (urlsplit(redirect).scheme!='https' or registrable_domain(redirect)!=initial_domain):
+                        return result('denied','unsafe subpage redirect',status=status)
+                    url=redirect
                     continue
                 ct=response.headers.get('Content-Type','application/octet-stream').lower()
                 outcome=detect_outcome(body,ct,status)

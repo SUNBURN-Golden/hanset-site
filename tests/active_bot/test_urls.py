@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from urllib.parse import unquote
 import pytest
 from hanset_active import __version__
 from hanset_active.config import Settings, REPO_ROOT, load_profile
@@ -12,6 +13,18 @@ def test_url_identity():
     assert registrable_domain('https://www.venue-a.test')=='venue-a.test'
     for url in ('file:///a','https://user:pass'+'@'+'venue-a.test'):
         with pytest.raises(ValueError): canonicalize(url)
+
+@pytest.mark.parametrize('path', ['/facilities/', '/a%2Fb//', '/%EC%82%AC%EC%9A%B0%EB%82%98/', '/'])
+def test_opt_in_fetch_path_preserves_encoding_and_slashes(path):
+    url = 'HTTPS://Venue-A.test:443' + path + '?utm_source=x&b=2&a=1#fragment'
+    assert canonicalize(url, preserve_path=True) == 'https://venue-a.test' + path + '?a=1&b=2'
+    assert canonicalize(url) == 'https://venue-a.test' + unquote(path.rstrip('/')) + '?a=1&b=2'
+    assert canonicalize(path, 'https://venue-a.test/root', preserve_path=True) == 'https://venue-a.test' + path
+
+@pytest.mark.parametrize('suffix', ['?token=fixture', '?%74oken=fixture', '/Bearer%20fixture/'])
+def test_path_preservation_never_repairs_private_urls(suffix):
+    with pytest.raises(ValueError):
+        canonicalize('https://venue-a.test' + suffix, preserve_path=True)
 
 def test_denial_and_exclusion():
     for host in ('naver.com','booking.naver.com','naver.me','a.naver.co.kr','pstatic.net','instagram.com','www.instagram.com'):

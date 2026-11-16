@@ -36,7 +36,7 @@ def setup_run(tmp_path, monkeypatch, urls=None):
 def fake_pages(monkeypatch, documents):
     calls = []
 
-    def fetch(self, url):
+    def fetch(self, url, *, subpage=False):
         calls.append(url)
         return FetchResult(url=url, outcome='ok', status=200, content=documents[url], content_type='text/html')
 
@@ -69,6 +69,30 @@ def test_rank_and_deduplicate_links():
     assert select_subpages(html(links), ROOT, {'other.example'}) == []
 
 
+def test_fetch_paths_deduplicate_by_identity_with_max_score_and_first_url():
+    links = '''<a href="/facilities/?utm_source=nav#first">Details</a>
+      <a href="/facilities#second">Sauna price</a><a href="/sauna/">Sauna</a>
+      <a href="/visit/?day=2&utm_source=nav">Details</a>
+      <a href="/visit?day=2#other">Guide</a><a href="/visit/?day=1">Guide</a>'''
+    assert select_subpages(html(links), ROOT, {'venue.example'}, limit=None) == [
+        ROOT + '/facilities/', ROOT + '/sauna/', ROOT + '/visit/?day=1', ROOT + '/visit/?day=2']
+
+
+def test_sauna_pages_outrank_about_and_location():
+    links = '''<a href="/about">About</a><a href="/location/">Info</a>
+      <a href="/sauna/">Sauna</a><a href="/jjimjilbang/">Jjimjilbang</a>'''
+    assert select_subpages(html(links), ROOT, {'venue.example'}) == [ROOT + '/jjimjilbang/', ROOT + '/sauna/']
+
+
+@pytest.mark.parametrize('label, competitor', [
+    ('사우나', 'Facilities'), ('찜질', 'Facilities'), ('찜질방', 'Facilities'),
+    ('이용가이드', 'About'), ('Guide', 'About'), ('floor-guide', 'Facilities'), ('층별', 'About'),
+])
+def test_sauna_and_guide_keyword_priorities(label, competitor):
+    links = f'<a href="/a">{competitor}</a><a href="/z/">{label}</a>'
+    assert select_subpages(html(links), ROOT, {'venue.example'})[0] == ROOT + '/z/'
+
+
 def test_query_variants_subdomains_and_portals(monkeypatch):
     monkeypatch.setattr('hanset_active.util.followups.portal_domains', lambda profile=None: {'portal.example'})
     assert select_subpages(html('<a href="/price">Price</a>'), 'https://portal.example', {'portal.example'}) == []
@@ -89,25 +113,34 @@ def test_query_variants_subdomains_and_portals(monkeypatch):
 @pytest.mark.parametrize('thin', [False, True])
 def test_follow_before_new_roots_no_recursion_shared_allowance(tmp_path, monkeypatch, thin):
     settings, path = setup_run(tmp_path, monkeypatch, [ROOT, ROOT + '/other'])
-    links = '<a href="/price">Price</a><a href="/about">About</a>'
+    links = '<a href="/price/">Price</a><a href="/about/">About</a>'
     calls = fake_pages(monkeypatch, {
         ROOT: html(links, '' if thin else TEXT),
-        ROOT + '/price': html('<a href="/schedule">Schedule</a>'),
-        ROOT + '/about': html(), ROOT + '/other': html('<a href="/rates">Rates</a>'),
+        ROOT + '/price/': html('<a href="/schedule">Schedule</a>'),
+        ROOT + '/about/': html(), ROOT + '/other': html('<a href="/rates">Rates</a>'),
     })
     rows = capture_extraction(monkeypatch)
     result = service.run_web(settings, targets_path=path, clock=FakeClock(), testing=True)
     assert result['success'] and result['counts']['pages'] == 4
-    assert calls == [ROOT, ROOT + '/price', ROOT + '/about', ROOT + '/other']
-    assert all(row['source_authorization'] is None for row in rows if row['url'].endswith(('/price', '/about')))
+    assert calls == [ROOT, ROOT + '/price/', ROOT + '/about/', ROOT + '/other']
+    assert all(row['source_authorization'] is None for row in rows if row['url'].endswith(('/price/', '/about/')))
 
 
-def test_promoted_explicit_job_keeps_authorization(tmp_path, monkeypatch):
-    settings, path = setup_run(tmp_path, monkeypatch, [ROOT, ROOT + '/other', ROOT + '/price'])
-    calls = fake_pages(monkeypatch, {ROOT: html('<a href="/price">Price</a>'), ROOT + '/price': html(), ROOT + '/other': html()})
+@pytest.mark.parametrize('explicit_path, anchor_path', [('/price/', '/price'), ('/price', '/price/')])
+def test_promoted_explicit_job_keeps_authorization(tmp_path, monkeypatch, explicit_path, anchor_path):
+    settings, path = setup_run(tmp_path, monkeypatch, [ROOT, ROOT + '/other', ROOT + explicit_path])
+    calls, modes = [], []
+
+    def fetch(self, url, *, subpage=False):
+        calls.append(url)
+        modes.append(subpage)
+        return FetchResult(url, 'ok', status=200, content=html(f'<a href="{anchor_path}">Price</a>'), content_type='text/html')
+
+    monkeypatch.setattr(service.Fetcher, 'fetch', fetch)
     rows = capture_extraction(monkeypatch)
     assert service.run_web(settings, targets_path=path, clock=FakeClock(), testing=True)['success']
-    assert calls == [ROOT, ROOT + '/price', ROOT + '/other']
+    assert calls == [ROOT, ROOT + explicit_path, ROOT + '/other']
+    assert modes == [False, False, False]
     assert rows[1]['source_authorization']['source_identity'] == ROOT + '/price'
 
 
@@ -168,7 +201,7 @@ def test_children_respect_caps(tmp_path, monkeypatch, limit):
         state.data['counts']['pages'] = 19
         state.save()
     else:
-        def capped(self, url):
+        def capped(self, url, *, subpage=False):
             calls.append(url)
             return FetchResult(url, 'ok', status=200, content=html('<a href="/price">Price</a>'), content_type='text/html') if url == ROOT else FetchResult(url, 'cap_reached')
         monkeypatch.setattr(service.Fetcher, 'fetch', capped)
@@ -176,6 +209,70 @@ def test_children_respect_caps(tmp_path, monkeypatch, limit):
     assert result['reason'] == {'run': 'run_cap', 'day': 'daily_cap', 'active': 'active_body_cap'}[limit]
     assert len(calls) == (1 if limit == 'day' else 2)
     assert result['counts']['pages'] == {'run': 2, 'day': 20, 'active': 1}[limit]
+
+
+@pytest.mark.parametrize('completed_path', ['/facilities', '/facilities/'])
+def test_slash_children_use_canonical_checkpoint_and_attempted_keys(tmp_path, monkeypatch, completed_path):
+    settings, path = setup_run(tmp_path, monkeypatch, [ROOT, ROOT + '/other'])
+    clock = FakeClock()
+    state = State(settings.data_dir, clock)
+    state.complete(ROOT + completed_path, 'empty_extraction')
+    calls = fake_pages(monkeypatch, {
+        ROOT: html('<a href="/facilities/">Facilities</a><a href="/sauna/">Sauna</a>'),
+        ROOT + '/sauna/': html(),
+        ROOT + '/other': html('<a href="/facilities">Facilities</a><a href="/sauna">Sauna</a>'),
+    })
+    capture_extraction(monkeypatch)
+    result = service.run_web(settings, targets_path=path, clock=clock, testing=True)
+    assert result['success'] and result['counts']['pages'] == 3
+    assert calls == [ROOT, ROOT + '/sauna/', ROOT + '/other']
+
+
+def test_fake_http_slash_children_produce_grounded_sauna_claim(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from tests.active_bot.test_collect_deepseek import HOURS, KEY, Session, _envelope, _hours_value
+
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    settings, path = setup_run(tmp_path, monkeypatch)
+    calls = []
+    routes = {
+        ROOT + '/robots.txt': (200, b'User-agent: *\nAllow: /'),
+        ROOT: (200, html('<a href="/facilities/">Facilities</a><a href="/sauna/">Sauna</a>')),
+        ROOT + '/facilities': (307, b''),
+        ROOT + '/facilities/': (200, html()),
+        ROOT + '/sauna/': (200, html(text=HOURS + ' ' + TEXT)),
+    }
+
+    def get(self, url, **kwargs):
+        calls.append(url)
+        assert kwargs['allow_redirects'] is False
+        status, body = routes[url]
+        headers = {'Content-Type': 'text/html; charset=utf-8'}
+        if status == 307:
+            headers['Location'] = '/facilities/'
+        return SimpleNamespace(status_code=status, headers=headers,
+                               iter_content=lambda size: iter([body]), close=lambda: None)
+
+    monkeypatch.setattr('requests.sessions.Session.get', get)
+    session = Session(_envelope({'items': [
+        {'index': 0, 'claims': []},
+        {'index': 1, 'claims': [{'field': 'hours', 'value': _hours_value(), 'quote': HOURS}]},
+        {'index': 2, 'claims': []},
+    ]}))
+    clock = FakeClock()
+    first = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
+    assert first['success'] and first['collected'] and first['counts']['pages'] == 3
+    assert calls == [ROOT + '/robots.txt', ROOT, ROOT + '/sauna/', ROOT + '/facilities/']
+    with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
+        assert db.execute('SELECT source_url,status,rights,evidence_origin FROM claims').fetchone() == (
+            ROOT + '/sauna/', 'source_claim', 'internal_review_only', 'web_verbatim')
+    again = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
+    assert again['reason'] == 'already_complete' and len(calls) == 4
+    clock.sleep(86400)
+    tomorrow = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
+    assert tomorrow['success'] and tomorrow['counts']['pages'] == 3
+    assert sum(page['disposition'] == 'duplicate' for page in tomorrow['pages']) == 3
+    assert len(session.calls) == 1
 
 
 def test_real_fetcher_loopback_children_claims_and_duplicate(server, tmp_path, monkeypatch):

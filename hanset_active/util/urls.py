@@ -1,12 +1,13 @@
 """Deterministic URL identity without DNS resolution or network access."""
 import ipaddress
 import re
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, unquote
 from .pii import strip_pii
 
 DENIED = ('naver.com', 'naver.me', 'pstatic.net', 'naver.net', 'instagram.com', 'instagr.am', 'cdninstagram.com')
 
-def canonicalize(url: str, base: str | None = None) -> str:
+def canonicalize(url: str, base: str | None = None, *, preserve_path: bool = False) -> str:
+    """Normalize identity by default; opt in to retaining a fetch path verbatim."""
     from urllib.parse import urljoin
     p = urlsplit(urljoin(base, url) if base else url)
     if p.scheme.lower() not in ('http', 'https') or not p.hostname or p.username or p.password:
@@ -18,7 +19,16 @@ def canonicalize(url: str, base: str | None = None) -> str:
         authority += ':' + str(port)
     query = [(k,v) for k,v in parse_qsl(p.query, keep_blank_values=True)
              if not k.lower().startswith('utm_') and k.lower() not in ('fbclid','gclid')]
-    return strip_pii(urlunsplit((p.scheme.lower(), authority, p.path.rstrip('/') or '', urlencode(sorted(query)), '')))
+    path = p.path if preserve_path else p.path.rstrip('/')
+    normalized = urlunsplit((p.scheme.lower(), authority, path, urlencode(sorted(query)), ''))
+    if preserve_path:
+        # strip_pii decodes escapes. Validate without using that decoded form
+        # as the request path, and never repair a sensitive fetch URL.
+        decoded = unquote(normalized)
+        if strip_pii(decoded) != decoded:
+            raise ValueError('Unsafe fetch URL')
+        return normalized
+    return strip_pii(normalized)
 
 def registrable_domain(url: str) -> str:
     host = (urlsplit(url).hostname if '://' in url else url).lower().rstrip('.')
