@@ -1,34 +1,55 @@
 """Memory-only HTTP extraction; no full-body disk cache."""
 from html.parser import HTMLParser
+import re
 from .config import Rejected, policy_for
 from .network_gate import NetworkGate
 from .privacy_filter import text
 
 
 class MinimalHTML(HTMLParser):
-    BLOCKED = {'script', 'style', 'input', 'textarea', 'iframe', 'form', 'nav', 'footer', 'header', 'noscript', 'svg', 'template'}
+    """First semantic candidate only; HTTP visibility checks are HTML/inline-only."""
+    BLOCKED = {'script', 'style', 'title', 'input', 'textarea', 'iframe', 'form', 'nav', 'footer', 'header', 'noscript', 'svg', 'template'}
     VOID = {'input', 'meta', 'link', 'img', 'br', 'hr', 'source', 'area', 'wbr', 'embed', 'param', 'col', 'base'}
-
-    REGION_DIVS = ('container', 'content', 'contents', 'wrapper', 'wrap', 'detail', 'root', 'sub_con', 'facility')
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
-        self.stack, self.parts, self.title_parts, self.meta_parts = [], [], [], []
+        self.stack, self.parts, self.title_parts = [], [], []
         self.links = []
         self.locator = None
+        self.candidate_seen = False
+        self.region_eligible = False
+        self.region_depth = None
+        self.region_closed = False
+
+    @staticmethod
+    def hidden_style(style):
+        # HTTP cannot resolve stylesheets or layout. Fail closed for inline hiding,
+        # including duplicate declarations, regardless of their cascade order.
+        style = re.sub(r'/\*.*?\*/', '', style, flags=re.S)
+        for declaration in style.split(';'):
+            key, _, value = declaration.partition(':')
+            key = key.strip().lower()
+            value = re.sub(r'\s+', '', value).lower().removesuffix('!important')
+            if (key == 'display' and value == 'none' or
+                    key == 'visibility' and value in ('hidden', 'collapse')):
+                return True
+        return False
 
     def handle_starttag(self, tag, attrs):
-        a = dict(attrs)
-        if tag == 'meta' and (a.get('name', '').lower() in ('description', 'og:description') or a.get('property', '').lower() in ('og:description', 'og:title')) and a.get('content'):
-            self.meta_parts.append(a['content'])
+        a = {key: value or '' for key, value in attrs}
         cls_id = (a.get('class', '') + ' ' + a.get('id', '')).lower()
-        blocked = tag in self.BLOCKED or 'hidden' in a or 'contenteditable' in a or a.get('aria-hidden') == 'true' or 'display:none' in a.get('style', '').replace(' ', '').lower()
+        blocked = (tag in self.BLOCKED or 'hidden' in a or 'contenteditable' in a
+                   or a.get('aria-hidden', '').strip().lower() == 'true'
+                   or self.hidden_style(a.get('style', '')))
         blocked |= any(x in cls_id for x in ('private', 'profile', 'message', 'comment', 'chat'))
         inherited = self.stack[-1][1] if self.stack else False
-        is_region = tag in ('main', 'article') or (not (inherited or blocked) and (tag == 'section' or (tag == 'div' and any(k in cls_id for k in self.REGION_DIVS))))
-        selected = (self.stack[-1][2] if self.stack else False) or is_region
-        if is_region and not self.locator:
-            self.locator = tag
+        if tag in ('main', 'article') and not self.candidate_seen:
+            self.candidate_seen = True
+            self.region_eligible = not (inherited or blocked)
+            if self.region_eligible:
+                self.locator = tag
+                self.region_depth = len(self.stack)
+        selected = self.region_depth is not None and not self.region_closed
         if selected and not (inherited or blocked) and tag == 'a' and a.get('href'):
             self.links.append(a['href'])
         if tag not in self.VOID:
@@ -37,21 +58,27 @@ class MinimalHTML(HTMLParser):
     def handle_endtag(self, tag):
         for i in range(len(self.stack) - 1, -1, -1):
             if self.stack[i][0] == tag:
+                if self.stack[i][2] and not self.stack[i][1] and tag in ('p', 'div', 'li', 'section', 'article', 'main', 'tr'):
+                    self.parts.append('\n')
+                if self.region_depth is not None and i <= self.region_depth:
+                    self.region_closed = True
+                    self.region_depth = None
                 del self.stack[i:]
                 break
-        if tag in ('p', 'div', 'li', 'section', 'article', 'main', 'tr'):
-            self.parts.append('\n')
 
     def handle_data(self, data):
-        if self.stack and self.stack[-1][0] == 'title':
+        if (self.stack and self.stack[-1][0] == 'title'
+                and not any(frame[1] for frame in self.stack[:-1])):
             self.title_parts.append(data)
         if self.stack and self.stack[-1][2] and not self.stack[-1][1]:
             self.parts.append(data)
 
     def result(self, contacts=()):
-        if not self.locator:
+        if not self.candidate_seen:
             raise Rejected('missing_minimal_region')
-        raw_text = ''.join(self.parts).strip() or ' '.join(self.meta_parts + self.title_parts).strip()
+        if not self.region_eligible:
+            raise Rejected('private_region')
+        raw_text = ''.join(self.parts).strip()
         excerpt = text(raw_text, contacts)[:2000]
         if not excerpt:
             raise Rejected('empty_region')
@@ -82,6 +109,7 @@ def collect(worker, reservation):
         else:
             parser = MinimalHTML()
             parser.feed(raw)
+            parser.close()
             data = parser.result(worker.cfg['public_contacts'])
             if policy.get('archive_enabled') and response['url'] in policy.get('full_text_permissions', {}):
                 archive = text(''.join(parser.parts), worker.cfg['public_contacts'])

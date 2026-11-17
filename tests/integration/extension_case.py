@@ -21,6 +21,8 @@ from crawler.store import Store
 
 def run(config_path, temp):
     cfg = load(config_path)
+    cases = [case for case in json.loads((REPO / 'tests/fixtures/minimal_regions.json').read_text())
+             if not case.get('http_only')]
     state = Path(temp) / 'extension.sqlite3'
     control = {'drop_result': False, 'drop_begin': False, 'stop': False}
     ready = threading.Event()
@@ -143,6 +145,46 @@ def run(config_path, temp):
         assert not run_once(), 'terminated permission responder must prevent browser start'
         assert stats() == (3, 2), 'offline consent must not reserve a body slot'
         popup.evaluate("chrome.runtime.sendMessage({action:'resume'})")
+        for index, case in enumerate(cases):
+            page.goto('https://pubmed.ncbi.nlm.nih.gov/minimal/' + str(index))
+            page.bring_to_front()
+            before = stats()
+            result = popup.evaluate("chrome.runtime.sendMessage({action:'clip'})")
+            jobs = popup.evaluate("chrome.storage.local.get('jobs').then(o=>o.jobs)")
+            job = next(j for j in jobs.values() if j['url'] == page.url)
+            assert result['ok'], case['name']
+            assert 'reservation' in job, ('extraction must follow reservation/begin', case['name'])
+            assert 'data' not in job, ('no retained raw or rejected body', case['name'])
+            accepted = 'reason' not in case
+            assert job['state'] == ('acked' if accepted else 'uncertain'), case['name']
+            assert stats() == (before[0] + 1, before[1] + int(accepted)), case['name']
+            store = Store(state, readonly=True)
+            try:
+                saved = store.db.execute('SELECT data FROM observations WHERE reservation_id=?',
+                                         (job['reservation']['id'],)).fetchone()
+                reservation = store.db.execute('SELECT state FROM reservations WHERE id=?',
+                                               (job['reservation']['id'],)).fetchone()
+                assert reservation[0] == ('drained' if accepted else 'running'), case['name']
+                if accepted:
+                    data = json.loads(saved[0])
+                    assert data['title'] == case['title'], case['name']
+                    evidence = data['evidence_locator'][0]
+                    assert evidence['locator'] == case['locator'], case['name']
+                    assert ' '.join(evidence['quote'].split()) == case['excerpt'], case['name']
+                    assert [f['value'] for f in data['extracted_facts']] == (['30000'] if case['name'] == 'valid-main' else []), case['name']
+                else:
+                    assert saved is None, case['name']
+                    record = json.loads(store.db.execute('SELECT data FROM records WHERE id=?',
+                                                        (job['reservation']['record_id'],)).fetchone()[0])
+                    assert record['extracted_facts'] == record['evidence_locator'] == [], case['name']
+                assert store.db.execute('SELECT count(*) FROM archives').fetchone()[0] == 0
+            finally:
+                store.close()
+            # Extraction failures are ambiguous jobs until explicit resumption revokes
+            # them. Drain before trying the next document on this same origin.
+            if not accepted:
+                popup.evaluate("chrome.runtime.sendMessage({action:'resume'})")
+        print('shared real clipper fixtures after reservation/begin: acceptance, sanitized evidence and rejection OK')
         assert popup.evaluate("chrome.permissions.remove({origins:['https://pubmed.ncbi.nlm.nih.gov/*']})")
         popup.wait_for_timeout(500)
         assert not popup.evaluate("chrome.permissions.contains({origins:['https://pubmed.ncbi.nlm.nih.gov/*']})")
