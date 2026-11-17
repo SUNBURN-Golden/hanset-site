@@ -775,11 +775,17 @@ def build(site, venues, events, today, vevents=(), creators=()):
     # ---- home: search records stay hidden until a nonblank query.
     records = "".join(f'<li data-search="{E(search_text(v))}" hidden><a href="/finder/{v["slug"]}/">{E(v["title"])}</a>'
                       f'<span>{E(v["city"])} · {E(v["kind"])}</span></li>' for v in venues)
+    illustrations = "".join(f'<li><a class="home-ill-link" href="/guide/#{k}">'
+                            f'<img src="/assets/img/guide/{f}-thumb.png" width="252" height="315" loading="lazy" decoding="async" alt="{E(d)}">'
+                            f'<span><b>{E(t)}</b><em>Open guide ›</em></span></a></li>' for k, f, t, d in ILLUSTRATIONS)
     body = f'''<div class="home-search"><h1>HANSET, Sweat on Korea</h1>
 <form class="search-form" action="/finder/" role="search"><label class="vh" for="home-q">Where do you want to sweat in Korea?</label>
 <input id="home-q" name="q" type="search" placeholder="Where do you want to sweat in Korea?" autocomplete="off" aria-controls="search-results"></form>
 <div class="home-switch" role="group" aria-label="Browse"><a class="selected" href="/sauna/">Sweat</a><a href="/magazine/">Magazine</a></div>
-<div id="search-results" hidden><p id="search-count" role="status" aria-live="polite"></p><ul class="search-records">{records}</ul></div></div>'''
+<div id="search-results" hidden><p id="search-count" role="status" aria-live="polite"></p><ul class="search-records">{records}</ul></div></div>
+<section class="home-illustrations" aria-labelledby="home-pictures"><h2 id="home-pictures">In pictures</h2>
+<p>Hand-drawn guides for first-timers. Tap to open.</p><ul class="home-ill-list">{illustrations}</ul>
+<p class="safety">{SAFETY}</p></section>'''
     site.add("/", "HANSET, Sweat on Korea", "Find saunas, CrossFit, HYROX and gyms in Korea.", body, "home", ("search.js",))
 
     # ---- category lists: shared classification, scoped URL-searchable cards.

@@ -15,6 +15,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'site'))
 import build_site as B
 
 ROOT = Path(__file__).resolve().parents[1]
+HOME_GUIDES = [
+    ('box', 'crossfit-box-plan', 'Inside a CrossFit box'),
+    ('dropin', 'dropin-steps', 'How a drop-in works'),
+    ('sauna', 'sauna-guide', 'How to sauna'),
+]
+HOME_THUMBNAILS = {f'/assets/img/guide/{filename}-thumb.png' for _, filename, _ in HOME_GUIDES}
 
 
 class Tags(HTMLParser):
@@ -40,7 +46,7 @@ def cards(page):
     return [attrs for tag, attrs in Tags(page).tags if tag == 'article' and 'data-slug' in attrs]
 
 
-def test_home_has_only_brand_search_switch_and_contact_at_rest(inventory):
+def test_home_search_switch_illustrations_and_contact(inventory):
     _, _, site = inventory
     page = site.pages['/']
     tags = Tags(page).tags
@@ -51,10 +57,47 @@ def test_home_has_only_brand_search_switch_and_contact_at_rest(inventory):
     assert inputs[0]['name'] == 'q'
     assert 'action="/finder/"' in page
     assert '<header' not in page and '<nav' not in page
-    assert '<article' not in page and '<img' not in page and '<svg' not in page
+    assert '<article' not in page and '<svg' not in page
+    images = [attrs for tag, attrs in tags if tag == 'img']
+    assert len(images) == 3 and {attrs['src'] for attrs in images} == HOME_THUMBNAILS
+    for attrs in images:
+        assert attrs['alt'].strip() and attrs['loading'] == 'lazy'
+        assert attrs['decoding'] == 'async'
+        thumbnail = ROOT / 'site/static' / attrs['src'].removeprefix('/assets/')
+        assert thumbnail.is_file()
+        header = thumbnail.read_bytes()[:24]
+        assert header[:8] == b'\x89PNG\r\n\x1a\n'
+        assert (int(attrs['width']), int(attrs['height'])) == (
+            int.from_bytes(header[16:20], 'big'), int.from_bytes(header[20:24], 'big'))
     assert 'category-grid' not in page and 'filters' not in page
     assert 'id="search-results" hidden' in page
-    assert all('hidden' in attrs for tag, attrs in tags if tag == 'li')
+    records = re.search(r'<ul class="search-records">.*?</ul>', page, re.S)[0]
+    assert all('hidden' in attrs for tag, attrs in Tags(records).tags if tag == 'li')
+    section = re.search(r'<section class="home-illustrations".*?</section>', page, re.S)[0]
+    main = re.search(r'<main\b[^>]*>(.*?)</main>', page, re.S)[1]
+    assert main.rstrip().endswith(section)
+    assert '</main><footer class="home-footer">' in page
+    positions = [page.index(token) for token in (
+        'class="home-search"', 'id="search-results"', section, '<footer class="home-footer">')]
+    assert positions == sorted(positions)
+    section_tags = Tags(section).tags
+    assert next(attrs for tag, attrs in section_tags if tag == 'section')['aria-labelledby'] == 'home-pictures'
+    assert '<h2 id="home-pictures">In pictures</h2>' in section
+    items = [attrs for tag, attrs in section_tags if tag == 'li']
+    assert len(items) == 3 and all('hidden' not in attrs for attrs in items)
+    links = re.findall(r'<a\b([^>]*)>(.*?)</a>', section, re.S)
+    assert len(links) == 3
+    guide = site.pages['/guide/']
+    for (attrs, content), (key, filename, title) in zip(links, HOME_GUIDES):
+        assert Tags(f'<a{attrs}>').tags[0][1]['href'] == f'/guide/#{key}'
+        assert f'<b>{title}</b>' in content
+        figure = re.search(rf'<figure class="fig" id="{key}">.*?</figure>', guide, re.S)[0]
+        enlarge_links = [a for tag, a in Tags(figure).tags if tag == 'a']
+        assert len(enlarge_links) == 2 and enlarge_links[0]['class'] == 'figlink'
+        for link in enlarge_links:
+            assert link['href'] == f'/assets/img/guide/{filename}.svg'
+            assert (ROOT / 'site/static' / link['href'].removeprefix('/assets/')).is_file()
+    assert B.SAFETY in section
     footer = page.split('<footer', 1)[1].split('</footer>', 1)[0]
     assert footer.count('<a ') == 1
     assert 'mailto:hanset@soulbound.co.kr' in footer
@@ -154,7 +197,7 @@ def test_search_index_is_deduplicated_multilingual_and_escaped(inventory):
     safe = B.Site(site.today, True)
     B.build(safe, malicious, events, site.today)
     parsed = Tags(safe.pages['/']).tags
-    assert not any(tag == 'img' for tag, _ in parsed)
+    assert all(attrs['src'] in HOME_THUMBNAILS for tag, attrs in parsed if tag == 'img')
     assert any('<img src=x' in attrs.get('data-search', '') for _, attrs in parsed)
     assert 'onerror="attack()"' not in safe.pages['/']
 
