@@ -1,0 +1,269 @@
+[
+  {
+    "name": "body-only",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body>Outside</body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "section-only",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><section>Outside</section></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "role-main",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div role=\"main\">Outside</div></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "metadata-only",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "generic-container",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div class=\"container\" id=\"container\">Outside</div></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "generic-content",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div class=\"content\" id=\"content\">Outside</div></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "generic-contents",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div class=\"contents\" id=\"contents\">Outside</div></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "generic-wrapper",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div class=\"wrapper\" id=\"wrapper\">Outside</div></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "generic-wrap",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div class=\"wrap\" id=\"wrap\">Outside</div></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "generic-detail",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div class=\"detail\" id=\"detail\">Outside</div></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "generic-root",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div class=\"root\" id=\"root\">Outside</div></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "generic-sub_con",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div class=\"sub_con\" id=\"sub_con\">Outside</div></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "generic-facility",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div class=\"facility\" id=\"facility\">Outside</div></body></html>",
+    "reason": "missing_minimal_region"
+  },
+  {
+    "name": "hidden-first",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main hidden>Excluded</main><article>Later</article></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "display-first",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main style=\" display : NONE ! important \">Excluded</main><article>Later</article></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "visibility-first",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main style=\" VISIBILITY : hidden !important \">Excluded</main><article>Later</article></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "editable-first",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main contenteditable>Excluded</main><article>Later</article></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "aria-first",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main aria-hidden=\"true\">Excluded</main><article>Later</article></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "private-first",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main class=\"private-area\">Excluded</main><article>Later</article></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "hidden-ancestor",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div hidden><article>Excluded</article></div><main>Later</main></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "display-ancestor",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div style=\"display: none !important\"><article>Excluded</article></div><main>Later</main></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "visibility-ancestor",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div style=\"visibility: hidden\"><article>Excluded</article></div><main>Later</main></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "form-ancestor",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><form><article>Excluded</article></form><main>Later</main></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "private-ancestor",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div class=\"private-area\"><article>Excluded</article></div><main>Later</main></body></html>",
+    "reason": "private_region"
+  },
+  {
+    "name": "empty-first",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main></main><article>Later</article></body></html>",
+    "reason": "empty_region"
+  },
+  {
+    "name": "whitespace-first",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main> \n\t </main><article>Later</article></body></html>",
+    "reason": "empty_region"
+  },
+  {
+    "name": "excluded-first",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main><form>Excluded <a href=\"/excluded\">link</a></form><span hidden>Hidden</span><script type=\"application/json\">\"Excluded\"</script></main><article>Later</article></body></html>",
+    "reason": "empty_region"
+  },
+  {
+    "name": "valid-main",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body>Outside <main>Admission 30000 KRW <a href=\"/selected\">Selected</a></main> Outside</body></html>",
+    "excerpt": "Admission 30000 KRW Selected",
+    "locator": "main",
+    "title": "Admission 99000 KRW",
+    "links": [
+      "/selected"
+    ]
+  },
+  {
+    "name": "valid-article",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><article>Public article</article></body></html>",
+    "excerpt": "Public article",
+    "locator": "article",
+    "title": "Admission 99000 KRW",
+    "links": []
+  },
+  {
+    "name": "generic-wrapper",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div id=\"root\">Outside <section>Outside <main>Semantic body</main> Outside</section></div></body></html>",
+    "excerpt": "Semantic body",
+    "locator": "main",
+    "title": "Admission 99000 KRW",
+    "links": []
+  },
+  {
+    "name": "sibling-regions",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><article>First <a href=\"/selected\">Selected</a></article><main>Later <a href=\"/later\">Later link</a></main></body></html>",
+    "excerpt": "First Selected",
+    "locator": "article",
+    "title": "Admission 99000 KRW",
+    "links": [
+      "/selected"
+    ]
+  },
+  {
+    "name": "nested-regions",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main>Outer <article>Nested <a href=\"/nested\">Link</a></article> Tail</main><article>Later</article></body></html>",
+    "excerpt": "Outer Nested Link Tail",
+    "locator": "main",
+    "title": "Admission 99000 KRW",
+    "links": [
+      "/nested"
+    ]
+  },
+  {
+    "name": "filtered-descendants",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><a href=\"/outside\">Outside</a><main>Public <form>Excluded <a href=\"/form\">link</a></form><span contenteditable>Excluded <a href=\"/editable\">link</a></span><span class=\"private-area\">Excluded <a href=\"/private\">link</a></span><script type=\"application/json\">\"Excluded\"</script><span style=\"visibility: HIDDEN ! important\">Excluded <a href=\"/hidden\">link</a></span><span style=\"display: none\">Excluded</span><span hidden>Excluded</span><input value=\"Excluded\"><br><span>body</span> <a href=\"/selected\">Selected</a></main><a href=\"/outside-after\">Outside</a></body></html>",
+    "excerpt": "Public body Selected",
+    "locator": "main",
+    "title": "Admission 99000 KRW",
+    "links": [
+      "/selected"
+    ]
+  },
+  {
+    "name": "membership",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main>투숙객·회원 전용 / members only</main></body></html>",
+    "excerpt": "투숙객·회원 전용 / members only",
+    "locator": "main",
+    "title": "Admission 99000 KRW",
+    "links": []
+  },
+  {
+    "name": "private-context",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main>Members only conversation</main></body></html>",
+    "reason": "private_context"
+  },
+  {
+    "name": "collapse",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main style=\"visibility:collapse!important\">Excluded</main></body></html>",
+    "reason": "private_region",
+    "http_only": true
+  },
+  {
+    "name": "private-id",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main id=\"private-area\">Excluded</main></body></html>",
+    "reason": "private_region",
+    "http_only": true
+  },
+  {
+    "name": "aria-case",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main aria-hidden=\" TRUE \">Excluded</main></body></html>",
+    "reason": "private_region",
+    "http_only": true
+  },
+  {
+    "name": "valueless-attributes",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main class id style aria-hidden>Public <span class id style>body</span><a href>empty link</a></main></body></html>",
+    "excerpt": "Public bodyempty link",
+    "locator": "main",
+    "title": "Admission 99000 KRW",
+    "links": [],
+    "http_only": true
+  },
+  {
+    "name": "title-in-region",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main><title>Excluded title</title>Body</main></body></html>",
+    "excerpt": "Body",
+    "locator": "main",
+    "title": "Admission 99000 KRWExcluded title",
+    "links": [],
+    "http_only": true
+  },
+  {
+    "name": "unmatched-close",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main>First</section> body</main><main>Later</main></body></html>",
+    "excerpt": "First body",
+    "locator": "main",
+    "title": "Admission 99000 KRW",
+    "links": [],
+    "http_only": true
+  },
+  {
+    "name": "ancestor-closure",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><div><main>First</div>Outside <article>Later</article></body></html>",
+    "excerpt": "First",
+    "locator": "main",
+    "title": "Admission 99000 KRW",
+    "links": [],
+    "http_only": true
+  },
+  {
+    "name": "void-elements",
+    "html": "<!doctype html><html><head><title>Admission 99000 KRW</title><meta name=\"description\" content=\"Admission 99000 KRW\"><meta property=\"og:title\" content=\"Admission 99000 KRW\"><meta property=\"og:description\" content=\"Admission 99000 KRW\"></head><body><main>Public<input><img><meta><link><hr><source><area><wbr><embed><param><col><base><br> body</main>Outside</body></html>",
+    "excerpt": "Public body",
+    "locator": "main",
+    "title": "Admission 99000 KRW",
+    "links": [],
+    "http_only": true
+  }
+]

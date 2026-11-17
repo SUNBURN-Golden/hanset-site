@@ -150,8 +150,32 @@ their source, representative ID and facts, including conflicting translations.
 
 ## Privacy and browser boundary
 
-HTTP original bytes remain bounded in memory. Extraction requires `main` or
-`article`; there is no whole-body fallback. Forms, editable/hidden areas, private
+HTTP original bytes remain bounded in memory. HTTP, browser and clipper extraction
+select the first literal `main` or `article` in document order. No generic root,
+`section`, class/ID container or `role="main"` establishes a region. A blocked or
+hidden first candidate is rejected rather than replaced by a later one. An
+eligible candidate contributes only its own unblocked subtree, including nested
+semantic elements; sibling regions and outside links/text never contribute.
+The locator is the selected element's `main` or `article` tag. HTTP text separators,
+discovered links and explicitly approved archives follow this same scope.
+
+No candidate yields `missing_minimal_region`; a hidden/blocked candidate or
+ancestor yields `private_region`; an eligible region without remaining text
+yields `empty_region`. Metadata never supplies body evidence, facts or archives.
+The sanitized document title remains a separate field and is never appended to
+the excerpt; title elements do not contribute HTTP body text.
+
+HTTP checks inherited HTML hiding attributes and inline `display:none` and
+`visibility:hidden` (including whitespace/case variations and `!important`), and
+conservatively excludes `visibility:collapse`. It cannot evaluate stylesheet
+visibility or browser layout. Browser and clipper retain additional computed-style
+and layout checks. Shared HTML/inline-style fixtures verify the same semantic
+boundary and acceptance/evidence outcomes, rather than identical browser IPC
+error strings or parity for CSS/layout and HTML parser repair differences.
+Fixtures marked `http_only` cover HTTP-specific conservative filtering and parser
+bookkeeping separately.
+
+Forms, editable/hidden areas, private
 conversations, frames, scripts and media are excluded. Text, titles, URLs, nested
 fields and quotes are filtered again before DB acceptance and AI export.
 Public restrictions such as `투숙객·회원 전용` or `members only` are facility facts;

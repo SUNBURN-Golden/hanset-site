@@ -27,6 +27,10 @@ from crawler.network_gate import NetworkGate
 from crawler.browser_runner import BrowserRunner
 from urllib.parse import quote
 
+REGIONS = json.loads((Path(__file__).resolve().parents[1] / 'fixtures/minimal_regions.json').read_text())
+SHARED_REGIONS = [case for case in REGIONS if not case.get('http_only')]
+REGION_HOSTS = ['minimal-' + str(index) + '.test' for index in range(len(SHARED_REGIONS))]
+
 PUBLIC = '93.184.216.34'
 FORBIDDEN = '93.184.216.35'
 BENCHMARK = ('198.18.0.0', '198.18.0.1', '198.19.255.255')
@@ -123,7 +127,10 @@ class Content(http.server.BaseHTTPRequestHandler):
             target = self.path.removeprefix('/dns-redirect/')
             assert target in DNS_FIXTURES
             self.send_response(302); self.send_header('Location', 'https://' + target + '/forbidden'); self.end_headers(); return
-        if self.path.startswith('/dns-navigation/'):
+        if self.path.startswith('/minimal/'):
+            index = int(self.path.removeprefix('/minimal/'))
+            body = SHARED_REGIONS[index]['html']
+        elif self.path.startswith('/dns-navigation/'):
             target = self.path.removeprefix('/dns-navigation/')
             assert target in DNS_FIXTURES
             body = '<main>Public guide</main><script>location.href=' + json.dumps('https://' + target + '/forbidden') + ';</script>'
@@ -199,7 +206,9 @@ def main():
     command('ip', 'addr', 'add', FORBIDDEN + '/32', 'dev', 'lo')
     for address in BENCHMARK:
         command('ip', 'addr', 'add', address + '/32', 'dev', 'lo')
-    with tempfile.TemporaryDirectory() as t:
+    # Keep state outside repositories even when the caller's default temp root
+    # contains a checkout marker. This suite already requires a Linux host.
+    with tempfile.TemporaryDirectory(dir='/var/tmp') as t:
         tmp = Path(t)
         resolv = tmp / 'resolv.conf'
         resolv.write_text('nameserver 127.0.0.53\noptions timeout:1 attempts:1\n')
@@ -208,7 +217,7 @@ def main():
         command('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', str(key),
                 '-out', str(cert), '-days', '1', '-subj', '/CN=approved.test',
                 '-addext', 'subjectAltName=' + ','.join('DNS:' + host for host in
-                    ['approved.test', 'rebind.test', 'pubmed.ncbi.nlm.nih.gov', '사우나.test'.encode('idna').decode(), *ENTRY_HOSTS]))
+                    ['approved.test', 'rebind.test', 'pubmed.ncbi.nlm.nih.gov', '사우나.test'.encode('idna').decode(), *ENTRY_HOSTS, *REGION_HOSTS]))
         os.environ['SSL_CERT_FILE'] = str(cert)
         dns = socketserver.ThreadingUDPServer(('127.0.0.53', 53), DNS)
         servers = [dns]
@@ -229,11 +238,14 @@ def main():
         # Unique public entry origins avoid pacing unrelated scenarios on one domain.
         cfg['policies'].extend({'origin': 'https://' + host, 'paths': ['/'], 'public': True,
                                'browser': True, 'robots_reviewed_at': today}
-                              for host in [*DNS_FIXTURES, *ENTRY_HOSTS])
+                              for host in [*DNS_FIXTURES, *ENTRY_HOSTS, *REGION_HOSTS])
+        for policy in cfg['policies']:
+            policy['field_rules'] = [{'field': 'rates', 'pattern': r'Admission (?P<value>[0-9]+) KRW',
+                                     'scope': {'currency': 'KRW', 'unit': 'visit'}}]
         store = Store(tmp / 'state.sqlite3')
         worker = Worker(store, cfg)
         try:
-            def run(url, success=True):
+            def run(url, success=True, case=None):
                 res = worker.reserve(uid(), url, uid(), 'browser_extract')
                 worker.begin(res)
                 gate = ObservedGate(worker, res)
@@ -242,7 +254,16 @@ def main():
                     if url.endswith('/공지사항'):
                         assert data['excerpt'] == '투숙객·회원 전용 / members only', 'Korean response charset lost'
                     assert success, 'denied navigation unexpectedly accepted'
+                    if case:
+                        assert ' '.join(data['excerpt'].split()) == case['excerpt'], case['name']
+                        assert data['locator'] == case['locator'], case['name']
+                        assert data['title'] == case['title'], case['name']
                     ack = worker.accept(res, data)
+                    if case:
+                        saved = json.loads(store.db.execute('SELECT data FROM observations WHERE reservation_id=?', (res['id'],)).fetchone()[0])
+                        assert saved['evidence_locator'][0]['locator'] == case['locator'], case['name']
+                        assert ' '.join(saved['evidence_locator'][0]['quote'].split()) == case['excerpt'], case['name']
+                        assert [f['value'] for f in saved['extracted_facts']] == (['30000'] if case['name'] == 'valid-main' else []), case['name']
                     assert 'never-store' not in json.dumps(data)
                     return ack
                 except Rejected:
@@ -412,11 +433,30 @@ for family,addr in [(socket.AF_INET,('127.0.0.1',443)),(socket.AF_INET6,('::1',4
             assert counts['forbidden_connections'] == 0, counts
             assert counts['forbidden_packets'] == 0, counts
             assert store.db.execute('SELECT count(*) FROM observations').fetchone()[0] == 6
+            from crawler.fetcher import MinimalHTML
+            for index, case in enumerate(SHARED_REGIONS):
+                # The same HTML and expectations drive HTTP, real browser IPC and
+                # extension intake. Whitespace differs between HTMLParser and DOM.
+                parser = MinimalHTML()
+                parser.feed(case['html']); parser.close()
+                if 'reason' in case:
+                    try:
+                        parser.result()
+                        raise AssertionError('HTTP fixture unexpectedly accepted: ' + case['name'])
+                    except Rejected as exc:
+                        assert str(exc) == case['reason'], case['name']
+                else:
+                    assert ' '.join(parser.result()['excerpt'].split()) == case['excerpt'], case['name']
+                before = store.db.execute('SELECT count(*) FROM observations').fetchone()[0]
+                run('https://' + REGION_HOSTS[index] + '/minimal/' + str(index),
+                    success='reason' not in case, case=case)
+                assert store.db.execute('SELECT count(*) FROM observations').fetchone()[0] == before + int('reason' not in case), case['name']
+            print('shared HTTP/browser minimal-region acceptance, locators, evidence and metadata separation: OK')
             print('real Chromium + pinned TLS + DNS rebinding + namespace failure + dead gate + expired socket drain: OK')
             config_file = tmp / 'test-config.json'
             config_file.write_text(json.dumps(cfg))
             subprocess.run(['xvfb-run', '-a', sys.executable, str(Path(__file__).with_name('extension_case.py')),
-                            str(config_file), str(tmp)], check=True, timeout=60)
+                            str(config_file), str(tmp)], check=True, timeout=120)
             assert counts['forbidden_connections'] == 0 and counts['forbidden_packets'] == 0, counts
             print('forbidden_connections=0 forbidden_packets=0')
         finally:

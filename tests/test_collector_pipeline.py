@@ -594,6 +594,60 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(report(self.store, self.cfg, self.now)['stage_counts'][STAGES[0]], 1)
         self.assertEqual(before, {p: hashlib.sha256(p.read_bytes()).digest() for p in protected})
 
+    def test_http_shared_regions_gate_observations_facts_archives_and_discovery(self):
+        from crawler.fetcher import collect
+        from urllib.parse import urljoin
+        cases = json.loads((REPO / 'tests/fixtures/minimal_regions.json').read_text())
+        policy = self.cfg['policies'][0]
+        policy.update(follow_links=True, archive_enabled=True, full_text_permissions={},
+                      field_rules=[{'field': 'rates', 'pattern': r'Admission (?P<value>[0-9]+) KRW',
+                                    'scope': {'currency': 'KRW', 'unit': 'visit'}}])
+        for index, case in enumerate(cases):
+            with self.subTest(case=case['name']):
+                self.now += 5
+                res = self.start('https://source.test/minimal/' + str(index), 'auto_discovery')
+                policy['full_text_permissions'][res['url']] = 'synthetic_test_permission'
+                before_urls = {r[0] for r in self.store.db.execute('SELECT url FROM records')}
+                before_obs = self.store.db.execute('SELECT count(*) FROM observations').fetchone()[0]
+                response = {'url': res['url'], 'redirects': [], 'body': case['html'].encode()}
+                with patch('crawler.fetcher.NetworkGate') as gate:
+                    gate.return_value.fetch.return_value = response
+                    if 'reason' in case:
+                        with self.assertRaisesRegex(Rejected, '^' + case['reason'] + '$'):
+                            collect(self.w, res)
+                    else:
+                        ack = collect(self.w, res)
+                        self.assertEqual(ack['record_id'], res['record_id'])
+                    gate.return_value.cancel.assert_called_once_with()
+                record = self.record(res['record_id'])
+                archive = self.store.db.execute('SELECT content FROM archives WHERE reservation_id=?', (res['id'],)).fetchone()
+                after_urls = {r[0] for r in self.store.db.execute('SELECT url FROM records')}
+                after_obs = self.store.db.execute('SELECT count(*) FROM observations').fetchone()[0]
+                if 'reason' in case:
+                    self.assertEqual(after_obs, before_obs)
+                    self.assertEqual(after_urls, before_urls)
+                    self.assertEqual(record['pipeline_stage'], STAGES[0])
+                    self.assertEqual(record['extracted_facts'], [])
+                    self.assertEqual(record['evidence_locator'], [])
+                    self.assertIsNone(archive)
+                    self.assertIsNone(self.store.db.execute('SELECT ack FROM reservations WHERE id=?', (res['id'],)).fetchone()[0])
+                else:
+                    self.assertEqual(after_obs, before_obs + 1)
+                    self.assertEqual(after_urls - before_urls,
+                                     {urljoin(res['url'], link) for link in case['links']} - before_urls)
+                    self.assertEqual(record['title'], case['title'])
+                    evidence = record['evidence_locator'][0]
+                    self.assertEqual(evidence['locator'], case['locator'])
+                    self.assertEqual(' '.join(evidence['quote'].split()), case['excerpt'])
+                    self.assertEqual(' '.join(archive[0].split()), case['excerpt'])
+                    self.assertNotIn('99000', archive[0])
+                    expected_rates = ['30000'] if case['name'] == 'valid-main' else []
+                    self.assertEqual([f['value'] for f in record['extracted_facts']], expected_rates)
+                    for fact in record['extracted_facts']:
+                        self.assertEqual(fact['locator'], case['locator'])
+                        self.assertIn(fact['quote'], evidence['quote'])
+                self.assertIsNone(self.store.db.execute('SELECT owner FROM domains WHERE host=?', (res['domain'],)).fetchone()[0])
+
     def test_subresource_domain_is_held_until_generation_drains(self):
         r = self.start(channel='browser_extract')
         gate = NetworkGate(self.w, r)
