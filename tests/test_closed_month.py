@@ -16,13 +16,9 @@ _BUILT = {}
 def build_for(today):
     """Render the site in-process for a build date (what main() does with --today); cached per date."""
     if today not in _BUILT:
-        was, B.CLOSED = B.CLOSED, B.active_closed(today)  # main() rebinds the global from the build date
-        try:
-            venues, events, *_ = B.load(today, None)
-            site = B.Site(today, True)
-            B.build(site, venues, events, today)
-        finally:
-            B.CLOSED = was
+        venues, events, *_ = B.load(today, None)
+        site = B.Site(today, True)
+        B.build(site, venues, events, today)
         _BUILT[today] = (site.pages['/guides/closed-days-korea/'], {v['slug']: v for v in venues})
     return _BUILT[today]
 
@@ -76,3 +72,40 @@ class ClosedMonthSummary(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_build_dates_do_not_leak_active_closure_state(monkeypatch):
+    """Build later/earlier/later with the same evidence and no global rebinding."""
+    today = dt.date(2032, 1, 5)
+    venues, events, *_ = B.load(today, None)
+    v = venues[0]
+    checked = today - dt.timedelta(days=91)
+    monkeypatch.setattr(B, 'CLOSED_ALL', {v['slug']: dict(
+        closed='Temporary maintenance', checked=checked.isoformat(), source='Official notice',
+        url='https://example.org/closure', until=today.isoformat())})
+    monkeypatch.setattr(B, 'CLOSED_MONTH', dict(month='2032-01', title='January closed days', items=[
+        dict(date=today.isoformat(), slugs=[v['slug']]),
+        dict(date='2032-01-12', slugs=[v['slug']])]))
+    for build_date in (today + dt.timedelta(days=1), today, dt.date(2032, 2, 1), today):
+        site = B.Site(build_date, True)
+        B.build(site, venues, events, build_date)
+        detail = site.pages[f'/finder/{v["slug"]}/']
+        closed = detail.split('<th>Closed on</th>', 1)[1].split('</tr>', 1)[0]
+        guide = site.pages['/guides/closed-days-korea/']
+        table = guide.split('<tbody>', 1)[1].split('</tbody>', 1)[0]
+        active = build_date <= today
+        assert ('Official notice' in closed) == active
+        assert ('Official notice' in table) == active
+        assert ('Check before you go' in closed) != active
+        if active:
+            assert B.dot(checked) in closed and B.OUTDATED in closed
+        if build_date.month == 1:
+            block = block_of(guide)
+            # Monthly summaries retain their own occurrence/month visibility rules,
+            # even after a date-bound detail/table record has expired.
+            assert ('Jan 5 (Mon)' in block) == active
+            assert 'Jan 12 (Mon)' in block
+            assert B.dot(checked) in block and 'Official notice' in block
+            assert B.OUTDATED in block
+        else:
+            assert 'closed-month' not in guide

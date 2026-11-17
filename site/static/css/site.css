@@ -320,6 +320,9 @@ table.t th{background:var(--surface-2);font-size:.82rem}
 .fact-line strong{font-weight:700}
 .fact-source{display:block;font-size:.7rem;color:var(--muted);font-weight:400}
 .fact-source a{color:inherit}
+.card-evidence{margin:8px 0 0}
+.card-evidence,.fact-source,.vmeta,.off{white-space:normal;overflow-wrap:anywhere}
+.fact-source .badge-old,.vmeta .badge-old{white-space:normal}
 .fact-extra{margin-top:4px}
 .fact-extra>summary{cursor:pointer;min-height:44px;align-content:center;color:var(--muted)}
 .card-details{font-size:.85rem;font-weight:700;display:inline-flex;align-items:center;min-height:44px;align-self:start}
