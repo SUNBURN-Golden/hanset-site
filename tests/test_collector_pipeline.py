@@ -29,6 +29,20 @@ from crawler.legacy import report as legacy_report
 NOW = dt.datetime(2026, 10, 23, 3, tzinfo=dt.timezone.utc).timestamp()
 
 
+def dns_answers(addresses):
+    return [(socket.AF_INET6 if ':' in address else socket.AF_INET, socket.SOCK_STREAM,
+             socket.IPPROTO_TCP, '', (address, 443)) for address in addresses]
+
+
+BENCHMARK_ADDRESSES = ('198.18.0.0', '198.18.0.1', '198.18.255.254',
+                       '198.19.0.1', '198.19.255.255')
+MAPPED_BENCHMARK_ADDRESSES = tuple('::ffff:' + address for address in BENCHMARK_ADDRESSES)
+NONPUBLIC_ANSWERS = tuple((address,) for address in BENCHMARK_ADDRESSES + MAPPED_BENCHMARK_ADDRESSES) + tuple(
+    answers for public in ('93.184.216.34', '2606:4700:4700::1111')
+    for forbidden in ('198.18.0.1', '::ffff:198.19.255.255', '10.0.0.1')
+    for answers in ((public, forbidden), (forbidden, public)))
+
+
 def config():
     cfg = load()
     today = dt.datetime.fromtimestamp(NOW, dt.timezone.utc).date().isoformat()
@@ -107,6 +121,55 @@ class Pipeline(unittest.TestCase):
                     dns.assert_called_once_with(host)
                 self.w.revoke(res)
                 self.now += 5
+
+    def test_nonpublic_dns_rejected_before_http_or_browser_connection(self):
+        for browser in (False, True):
+            for addresses in NONPUBLIC_ANSWERS:
+                with self.subTest(browser=browser, addresses=addresses):
+                    res = self.start(channel='browser_extract' if browser else 'auto_discovery')
+                    gate = NetworkGate(self.w, res)
+                    # The real classifier's resolver is bound at definition time.
+                    def classify(host):
+                        self.assertEqual(host, 'source.test')
+                        return public_addresses(host, lambda *a, **kw: dns_answers(addresses))
+                    with patch('crawler.network_gate.public_addresses', side_effect=classify) as dns, \
+                            patch('crawler.network_gate.PinnedTLS') as tls, \
+                            patch('crawler.network_gate.socket.create_connection') as connect:
+                        with self.assertRaisesRegex(Rejected, '^non_public_destination$'):
+                            gate.request(res['url'], browser=browser)
+                        dns.assert_called_once_with('source.test')
+                        tls.assert_not_called()
+                        connect.assert_not_called()
+                    self.assertEqual(self.store.db.execute('SELECT count(*) FROM requests').fetchone()[0], 0)
+                    self.w.revoke(res)
+
+    def test_redirect_dns_rejected_before_target_connection(self):
+        self.cfg['policies'].append({**self.cfg['policies'][0], 'origin': 'https://redirect.test'})
+        for browser in (False, True):
+            for addresses in NONPUBLIC_ANSWERS:
+                with self.subTest(browser=browser, addresses=addresses):
+                    res = self.start(channel='browser_extract' if browser else 'auto_discovery')
+                    gate = NetworkGate(self.w, res)
+                    def classify(host):
+                        values = ('93.184.216.34',) if host == 'source.test' else addresses
+                        return public_addresses(host, lambda *a, **kw: dns_answers(values))
+                    response = MemoryResponse(status=302)
+                    response.getheader = lambda key, default=None: 'https://redirect.test/target' if key == 'Location' else default
+                    with patch('crawler.network_gate.public_addresses', side_effect=classify) as dns, \
+                            patch('crawler.network_gate.PinnedTLS') as tls, \
+                            patch('crawler.network_gate.socket.create_connection') as connect:
+                        tls.return_value.getresponse.return_value = response
+                        with self.assertRaisesRegex(Rejected, '^non_public_destination$'):
+                            if browser:
+                                gate.request(res['url'], browser=True)
+                            else:
+                                gate.fetch(res['url'])
+                        self.assertEqual([call.args[0] for call in dns.call_args_list], ['source.test', 'redirect.test'])
+                        tls.assert_called_once_with('source.test', '93.184.216.34', 15)
+                        tls.return_value.request.assert_called_once()
+                        connect.assert_not_called()
+                    self.w.revoke(res)
+                    self.now += 5
 
     def test_excluded_discovered_link_does_not_revoke_fetched_page(self):
         from crawler.fetcher import collect
@@ -714,8 +777,22 @@ class Safety(unittest.TestCase):
                     'file:///tmp/a', 'https://source.test/calendar/a', 'https://source.test/?page=200',
                     'https://source.test/%252e%252e/private'):
             with self.assertRaises(Rejected, msg=url): safe_url(url)
-        for address in ('127.0.0.1', '::1', '10.0.0.1', '169.254.1.1', '::ffff:127.0.0.1', '64:ff9b::7f00:1', '2002:7f00:1::'):
-            with self.assertRaises(Rejected): public_addresses('target', lambda *a, **kw: [(0, 0, 0, '', (address, 443))])
+        for address in ('127.0.0.1', '::1', '10.0.0.1', 'fc00::1', '169.254.1.1', 'fe80::1',
+                        '224.0.0.1', 'ff02::1', '240.0.0.1', '2001:db8::1', '::ffff:127.0.0.1',
+                        '64:ff9b::7f00:1', '2002:7f00:1::', '2001::1'):
+            with self.subTest(address=address), self.assertRaisesRegex(Rejected, '^non_public_destination$'):
+                public_addresses('target', lambda *a, **kw: dns_answers([address]))
+
+    def test_benchmark_and_mixed_dns_answers_fail_closed(self):
+        for addresses in NONPUBLIC_ANSWERS:
+            with self.subTest(addresses=addresses), self.assertRaisesRegex(Rejected, '^non_public_destination$'):
+                public_addresses('target', lambda *a, **kw: dns_answers(addresses))
+
+    def test_public_dns_answers_sorted_deduplicated_and_empty_rejected(self):
+        addresses = ['93.184.216.34', '2606:4700:4700::1111', '::ffff:93.184.216.34', '93.184.216.34']
+        self.assertEqual(public_addresses('target', lambda *a, **kw: dns_answers(addresses)), sorted(set(addresses)))
+        with self.assertRaisesRegex(Rejected, '^dns_empty$'):
+            public_addresses('target', lambda *a, **kw: [])
 
     def test_extracts_only_minimal_region_and_excludes_inputs(self):
         p = MinimalHTML()

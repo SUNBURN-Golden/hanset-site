@@ -23,15 +23,37 @@ import time
 from crawler.config import load, Rejected
 from crawler.local_worker import Worker, uid
 from crawler.store import Store
-from crawler.network_gate import NetworkGate, public_addresses
+from crawler.network_gate import NetworkGate
 from crawler.browser_runner import BrowserRunner
 from urllib.parse import quote
 
 PUBLIC = '93.184.216.34'
 FORBIDDEN = '93.184.216.35'
+BENCHMARK = ('198.18.0.0', '198.18.0.1', '198.19.255.255')
+DNS_FIXTURES = {
+    'benchmark-start.test': [BENCHMARK[0]],
+    'benchmark.test': [BENCHMARK[1]],
+    'benchmark-end.test': [BENCHMARK[2]],
+    'mapped-benchmark.test': ['::ffff:' + BENCHMARK[1]],
+    'mixed-benchmark.test': [PUBLIC, BENCHMARK[1]],
+    'mixed-mapped.test': [PUBLIC, '::ffff:' + BENCHMARK[2]],
+    'mixed-private.test': [PUBLIC, '::1'],
+}
+ENTRY_HOSTS = [kind + '-' + host for host in DNS_FIXTURES for kind in ('http', 'redirect', 'navigation')]
+ENTRY_HOSTS.append('subresources.test')
 counts = collections.Counter()
 slow_ready = threading.Event()
 slow_closed = threading.Event()
+
+
+class ObservedGate(NetworkGate):
+    """Record real gate decisions without changing classification or transport."""
+    def request(self, url, method='GET', resource_type='document', browser=False):
+        try:
+            return super().request(url, method, resource_type, browser)
+        except Rejected as exc:
+            counts[('rejected', url, resource_type, browser, str(exc))] += 1
+            raise
 
 
 def command(*args):
@@ -49,14 +71,19 @@ class DNS(socketserver.BaseRequestHandler):
         qtype = struct.unpack('!H', data[index:index + 2])[0]
         question = data[12:index + 4]
         name = '.'.join(labels)
-        answer = b''
+        counts['dns-query:' + name + ':' + str(qtype)] += 1
+        addresses = DNS_FIXTURES.get(name, [PUBLIC if name != 'bad.test' else FORBIDDEN])
         if qtype == 1:
             counts['dns:' + name] += 1
-            address = PUBLIC if name != 'bad.test' else FORBIDDEN
             if name == 'rebind.test' and counts['dns:' + name] > 1:
-                address = '127.0.0.1'
-            answer = b'\xc0\x0c' + struct.pack('!HHIH', 1, 1, 0, 4) + socket.inet_aton(address)
-        response = data[:2] + b'\x81\x80' + struct.pack('!HHHH', 1, int(bool(answer)), 0, 0) + question + answer
+                addresses = ['127.0.0.1']
+        answers = []
+        for address in addresses:
+            ip = ipaddress.ip_address(address)
+            if (qtype == 1 and ip.version == 4) or (qtype == 28 and ip.version == 6):
+                answers.append(b'\xc0\x0c' + struct.pack('!HHIH', qtype, 1, 0, len(ip.packed)) + ip.packed)
+                counts['dns-answer:' + name + ':' + str(qtype)] += 1
+        response = data[:2] + b'\x81\x80' + struct.pack('!HHHH', 1, len(answers), 0, 0) + question + b''.join(answers)
         sock.sendto(response, self.client_address)
 
 
@@ -92,7 +119,20 @@ class Content(http.server.BaseHTTPRequestHandler):
             return
         if self.path == '/redirect':
             self.send_response(302); self.send_header('Location', 'https://bad.test/forbidden'); self.end_headers(); return
-        if self.path == '/js':
+        if self.path.startswith('/dns-redirect/'):
+            target = self.path.removeprefix('/dns-redirect/')
+            assert target in DNS_FIXTURES
+            self.send_response(302); self.send_header('Location', 'https://' + target + '/forbidden'); self.end_headers(); return
+        if self.path.startswith('/dns-navigation/'):
+            target = self.path.removeprefix('/dns-navigation/')
+            assert target in DNS_FIXTURES
+            body = '<main>Public guide</main><script>location.href=' + json.dumps('https://' + target + '/forbidden') + ';</script>'
+        elif self.path == '/dns-subresources':
+            body = '<main>Public guide</main><script>for (const host of ' + json.dumps(list(DNS_FIXTURES)) + ''') {
+ fetch('https://' + host + '/fetch').catch(()=>{});
+ const s=document.createElement('script');s.src='https://' + host + '/script';document.head.append(s);
+}</script>'''
+        elif self.path == '/js':
             body = '<main>Public guide</main><script>location.href="https://bad.test/forbidden";</script>'
         elif self.path == '/rebind':
             body = '<main>Public guide</main><script>fetch("https://rebind.test/again").catch(()=>{});</script>'
@@ -140,7 +180,13 @@ class PacketMonitor:
                 offset = 14 + (data[14] & 15) * 4
             elif proto == b'\x86\xdd' and len(data) >= 58:
                 destination = socket.inet_ntop(socket.AF_INET6, data[38:54]); offset = 54
-            if destination in (FORBIDDEN, '127.0.0.1', '::1', '::ffff:127.0.0.1') and len(data) >= offset + 4:
+            effective = ipaddress.ip_address(destination) if destination else None
+            if isinstance(effective, ipaddress.IPv6Address) and effective.ipv4_mapped:
+                effective = effective.ipv4_mapped
+            forbidden = effective is not None and (
+                str(effective) in (FORBIDDEN, '127.0.0.1', '::1') or
+                (effective.version == 4 and effective in ipaddress.ip_network('198.18.0.0/15')))
+            if forbidden and len(data) >= offset + 4:
                 port = struct.unpack('!H', data[offset + 2:offset + 4])[0]
                 if port == 443: counts['forbidden_packets'] += 1
     def close(self):
@@ -151,6 +197,8 @@ def main():
     command('ip', 'link', 'set', 'lo', 'up')
     command('ip', 'addr', 'add', PUBLIC + '/32', 'dev', 'lo')
     command('ip', 'addr', 'add', FORBIDDEN + '/32', 'dev', 'lo')
+    for address in BENCHMARK:
+        command('ip', 'addr', 'add', address + '/32', 'dev', 'lo')
     with tempfile.TemporaryDirectory() as t:
         tmp = Path(t)
         resolv = tmp / 'resolv.conf'
@@ -159,11 +207,13 @@ def main():
         cert, key = tmp / 'cert.pem', tmp / 'key.pem'
         command('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', str(key),
                 '-out', str(cert), '-days', '1', '-subj', '/CN=approved.test',
-                '-addext', 'subjectAltName=DNS:approved.test,DNS:rebind.test,DNS:pubmed.ncbi.nlm.nih.gov,DNS:' + '사우나.test'.encode('idna').decode())
+                '-addext', 'subjectAltName=' + ','.join('DNS:' + host for host in
+                    ['approved.test', 'rebind.test', 'pubmed.ncbi.nlm.nih.gov', '사우나.test'.encode('idna').decode(), *ENTRY_HOSTS]))
         os.environ['SSL_CERT_FILE'] = str(cert)
         dns = socketserver.ThreadingUDPServer(('127.0.0.53', 53), DNS)
         servers = [dns]
-        for address, family in ((FORBIDDEN, socket.AF_INET), ('127.0.0.1', socket.AF_INET), ('::1', socket.AF_INET6)):
+        for address, family in ([(FORBIDDEN, socket.AF_INET), ('127.0.0.1', socket.AF_INET), ('::1', socket.AF_INET6)] +
+                                [(address, socket.AF_INET) for address in BENCHMARK]):
             cls = type('Sink', (socketserver.ThreadingTCPServer,), {'address_family': family, 'allow_reuse_address': True, 'daemon_threads': True})
             servers.append(cls((address, 443), Forbidden))
         server = Server((PUBLIC, 443), Content)
@@ -176,13 +226,17 @@ def main():
         today = dt.datetime.now(dt.timezone.utc).date().isoformat()
         cfg['policies'] = [{'origin': 'https://' + h, 'paths': ['/'], 'public': True,
                             'browser': True, 'robots_reviewed_at': today} for h in ('approved.test', 'rebind.test', '127.0.0.1', '[::1]', '[::ffff:7f00:1]', 'pubmed.ncbi.nlm.nih.gov', '사우나.test')]
+        # Unique public entry origins avoid pacing unrelated scenarios on one domain.
+        cfg['policies'].extend({'origin': 'https://' + host, 'paths': ['/'], 'public': True,
+                               'browser': True, 'robots_reviewed_at': today}
+                              for host in [*DNS_FIXTURES, *ENTRY_HOSTS])
         store = Store(tmp / 'state.sqlite3')
         worker = Worker(store, cfg)
         try:
             def run(url, success=True):
                 res = worker.reserve(uid(), url, uid(), 'browser_extract')
                 worker.begin(res)
-                gate = NetworkGate(worker, res)
+                gate = ObservedGate(worker, res)
                 try:
                     data = BrowserRunner(worker, res, gate).run()
                     if url.endswith('/공지사항'):
@@ -198,6 +252,64 @@ def main():
                     worker.revoke(res)
                 finally:
                     gate.cancel()
+
+            def dns_snapshot(hosts):
+                return {('dns-answer:' + host + ':' + str(qtype)): counts['dns-answer:' + host + ':' + str(qtype)]
+                        for host in hosts for qtype in (1, 28)
+                        if any(ipaddress.ip_address(address).version == (4 if qtype == 1 else 6)
+                               for address in DNS_FIXTURES[host])}
+
+            def check_browser(url, targets, rejected, success=False):
+                before_dns = dns_snapshot(targets)
+                keys = [('rejected', target_url, resource, True, 'non_public_destination')
+                        for target_url, resource in rejected]
+                before_rejections = {key: counts[key] for key in keys}
+                before_audit = store.db.execute("SELECT count(*) FROM audit WHERE operation='browser_request' AND reason='non_public_destination'").fetchone()[0]
+                run(url, success=success)
+                for key, before in before_dns.items():
+                    assert counts[key] > before, ('DNS fixture not answered', key)
+                for key, before in before_rejections.items():
+                    assert counts[key] > before, ('expected gate rejection missing', key)
+                after_audit = store.db.execute("SELECT count(*) FROM audit WHERE operation='browser_request' AND reason='non_public_destination'").fetchone()[0]
+                assert after_audit >= before_audit + len(keys), 'browser rejection was not audited'
+
+            def check_http(url, target):
+                before_dns = dns_snapshot([target])
+                before_connections = counts['allowed_connections']
+                res = worker.reserve(uid(), url, uid(), 'auto_discovery')
+                worker.begin(res)
+                gate = ObservedGate(worker, res)
+                key = ('rejected', url, 'document', False, 'non_public_destination')
+                before_rejections = counts[key]
+                try:
+                    try:
+                        gate.fetch(url)
+                        raise AssertionError('nonpublic HTTP destination accepted')
+                    except Rejected as exc:
+                        assert str(exc) == 'non_public_destination', str(exc)
+                    assert counts[key] == before_rejections + 1
+                    for key, before in before_dns.items():
+                        assert counts[key] > before, ('DNS fixture not answered', key)
+                    # A redirect may connect only to the original public origin.
+                    assert counts['allowed_connections'] == before_connections + int('/dns-redirect/' in url)
+                finally:
+                    worker.revoke(res)
+                    gate.cancel()
+
+            for host in DNS_FIXTURES:
+                check_http('https://' + host + '/forbidden', host)
+                check_http('https://http-' + host + '/dns-redirect/' + host, host)
+                direct = 'https://' + host + '/forbidden'
+                check_browser(direct, [host], [(direct, 'document')])
+                redirect = 'https://redirect-' + host + '/dns-redirect/' + host
+                check_browser(redirect, [host], [(redirect, 'document')])
+                navigation = 'https://navigation-' + host + '/dns-navigation/' + host
+                check_browser(navigation, [host], [(direct, 'document')])
+            check_browser('https://subresources.test/dns-subresources', list(DNS_FIXTURES),
+                          [('https://' + host + '/' + resource, resource)
+                           for host in DNS_FIXTURES for resource in ('fetch', 'script')], success=True)
+            assert counts['forbidden_connections'] == counts['forbidden_packets'] == 0, counts
+            print('benchmark A + mapped AAAA + mixed answers: HTTP/browser/redirect/navigation/fetch/script rejected before connection: OK')
             run('https://approved.test/normal')
             run('https://사우나.test/공지사항')
             assert counts['request:' + quote('/공지사항')] == 1
@@ -299,7 +411,7 @@ for family,addr in [(socket.AF_INET,('127.0.0.1',443)),(socket.AF_INET6,('::1',4
             time.sleep(.2)
             assert counts['forbidden_connections'] == 0, counts
             assert counts['forbidden_packets'] == 0, counts
-            assert store.db.execute('SELECT count(*) FROM observations').fetchone()[0] == 5
+            assert store.db.execute('SELECT count(*) FROM observations').fetchone()[0] == 6
             print('real Chromium + pinned TLS + DNS rebinding + namespace failure + dead gate + expired socket drain: OK')
             config_file = tmp / 'test-config.json'
             config_file.write_text(json.dumps(cfg))
