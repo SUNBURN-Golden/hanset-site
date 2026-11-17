@@ -147,7 +147,7 @@ def test_hyrox_requires_literal_published_flag_and_gym_requires_explicit_kind(in
 
 def test_empty_gym_and_magazine_remain_reachable(inventory):
     venues, events, _ = inventory
-    body = B.category_body('gym', 'Gym', [])
+    body = B.category_body('gym', 'Gym', [], dt.date(2026, 11, 3))
     assert 'Coming soon' in body and '0 places' in body
     assert not cards(body) and 'No matching places' not in body
     site = B.Site(dt.date(2026, 11, 3), True)
@@ -208,20 +208,20 @@ def test_venue_name_is_loaded_and_title_is_a_safe_fallback(inventory):
     v = deepcopy(venues[0])
     del v['name']
     assert v['title'].lower() in B.search_text(v)
-    assert B.E(v['title']) in B.venue_card(v)
+    assert B.E(v['title']) in B.venue_card(v, dt.date(2026, 11, 3))
 
 
 def test_missing_images_are_plain_placeholders_and_cards_stay_minimal(inventory, tmp_path):
     venues, _, _ = inventory
     with patch.object(B, 'VENUE_SKETCH', tmp_path):
-        markup_by_slug = {v['slug']: B.venue_card(v) for v in venues}
+        markup_by_slug = {v['slug']: B.venue_card(v, dt.date(2026, 11, 3)) for v in venues}
     for v in venues:
         markup = markup_by_slug[v['slug']]
         assert markup.count('card-placeholder') == 1
         assert '<img' not in markup and '<svg' not in markup and '<picture' not in markup
         assert B.E(v['title']) in markup and B.E(v['kind']) in markup
         assert 'card-facts' not in markup and '<table' not in markup
-        assert 'fact-source' not in markup and 'Official reference' not in markup
+        assert 'card-evidence' in markup and 'Checked ' in markup
         assert markup.count('class="badge ') <= 3
         if v['price']:
             assert B.E(v['price_label']) in markup and B.E(v['price']) in markup
@@ -300,15 +300,15 @@ def test_image_job_assets_prefer_webp_then_png_and_detail_uses_same_asset(invent
         assert 'card-placeholder' in B.venue_media(venue)
         png.write_bytes(b'fixture png')
         assert B.venue_image_path(venue) == png
-        assert f'/assets/venue-sketch/{png.name}' in B.venue_card(venue)
-        assert 'card-placeholder' not in B.venue_card(venue)
+        assert f'/assets/venue-sketch/{png.name}' in B.venue_card(venue, dt.date(2026, 11, 3))
+        assert 'card-placeholder' not in B.venue_card(venue, dt.date(2026, 11, 3))
         webp.write_bytes(b'fixture webp')
         assert B.venue_image_path(venue) == webp
         site = B.Site(dt.date(2026, 11, 3), True)
         B.build(site, venues, events, site.today)
         detail = site.pages[f'/finder/{venue["slug"]}/']
         assert f'/assets/venue-sketch/{webp.name}' in detail
-        assert f'/assets/venue-sketch/{webp.name}' in B.venue_card(venue)
+        assert f'/assets/venue-sketch/{webp.name}' in B.venue_card(venue, dt.date(2026, 11, 3))
         assert png.name not in B.venue_media(venue)
         assert 'width="800" height="600"' in B.venue_media(venue)
         assert 'card-placeholder' in B.venue_media(venues[1])

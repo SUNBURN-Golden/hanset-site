@@ -108,11 +108,11 @@ class Explorer(unittest.TestCase):
         for v in self.venues:
             for key, value in v['facts']:
                 if key.startswith(('Price', 'Drop-in')) and value.strip():
-                    self.assertIn(B.E(B.display_value(v, key, value)), B.price_html(v), v['slug'])
+                    self.assertIn(B.E(B.display_value(v, key, value)), B.price_html(v, self.today), v['slug'])
             if v['price']:
-                self.assertIn(B.E(v['price']), B.price_html(v))
+                self.assertIn(B.E(v['price']), B.price_html(v, self.today))
                 if v['price_caveat']:
-                    self.assertIn(B.E(v['price_caveat']), B.price_html(v))
+                    self.assertIn(B.E(v['price_caveat']), B.price_html(v, self.today))
         repo = self.by_slug['solo-sauna-repo-noryangjin']
         terms = next(value for key, value in repo['facts'] if key == 'Price')
         page = self.site.pages['/finder/solo-sauna-repo-noryangjin/']
@@ -120,7 +120,7 @@ class Explorer(unittest.TestCase):
         self.assertIn('60 min from ₩45,000', page)
         self.assertIn('Family room, 2 people', page)
         # List cards are headline-only (PR #62): full terms live on the venue page.
-        for output in (B.venue_card(repo), B.venue_contents(repo)):
+        for output in (B.venue_card(repo, self.today), B.venue_contents(repo, self.today)):
             self.assertIn(B.price_short(repo), output)
             self.assertNotIn(B.E(terms), output)
 
@@ -140,8 +140,8 @@ class Explorer(unittest.TestCase):
         sisu = self.by_slug['sisu-house']
         for key, value in sisu['facts']:
             if 'reply' in value:
-                self.assertIn(B.E(value), B.price_html(sisu) + B.venue_facts(sisu))
-        note = B.fact_provenance(sisu, B.FOREIGNER[sisu['slug']]['full_price'])
+                self.assertIn(B.E(value), B.price_html(sisu, self.today) + B.venue_facts(sisu, self.today))
+        note = B.fact_provenance(sisu, B.FOREIGNER[sisu['slug']]['full_price'], self.today)
         self.assertIn('Venue reply', note)
         self.assertIn('2026-10-18', note)
         self.assertNotIn('href=', note)
@@ -157,7 +157,7 @@ class Explorer(unittest.TestCase):
         for v, value, phrase, confirmed in cases:
             with self.subTest(venue=v['slug']):
                 self.assertIn(phrase, value)
-                note = B.fact_provenance(v, value)
+                note = B.fact_provenance(v, value, self.today)
                 self.assertNotIn('Venue reply', note)
                 self.assertIn(f'Checked {B.dot(v["last_verified"])}', note)
                 if confirmed:
@@ -173,7 +173,7 @@ class Explorer(unittest.TestCase):
         v = self.by_slug['paradise-hotel-busan']
         value = next(value for key, value in v['facts'] if key == 'Closed')
         self.assertIn('October: 10/28 (official page and hotel reply)', value)
-        note = B.fact_provenance(v, value)
+        note = B.fact_provenance(v, value, self.today)
         self.assertNotIn('Venue reply', note)
         self.assertNotIn('10/28', note)
         self.assertIn(f'Checked {B.dot(v["last_verified"])}', note)
@@ -191,7 +191,7 @@ class Explorer(unittest.TestCase):
             for key, value in facts:
                 with self.subTest(venue=slug, fact=key):
                     self.assertIn(f'— venue reply, {checked}', value)
-                    note = B.fact_provenance(v, value)
+                    note = B.fact_provenance(v, value, self.today)
                     self.assertIn(f'Venue reply · {checked} ·', note)
                     self.assertNotIn('Official source', note)
                     self.assertNotIn('href=', note)
@@ -216,7 +216,7 @@ class Explorer(unittest.TestCase):
         )
         for value, checked in cases:
             with self.subTest(value=value):
-                note = B.fact_provenance(v, value)
+                note = B.fact_provenance(v, value, self.today)
                 self.assertIn(f'Venue reply · {checked}', note)
                 self.assertNotIn('10/28', note)
                 self.assertNotIn('10/20', note)
@@ -225,7 +225,7 @@ class Explorer(unittest.TestCase):
         for value in ('Closed 10/28 (awaiting official hotel reply)',
                       'Drop-in (after an email reply from staff)'):
             with self.subTest(value=value):
-                note = B.fact_provenance(v, value)
+                note = B.fact_provenance(v, value, self.today)
                 self.assertNotIn('Venue reply', note)
                 self.assertIn(f'href="{B.E(v["source"])}"', note)
 
@@ -237,8 +237,8 @@ class Explorer(unittest.TestCase):
         for key, value in v['facts']:
             if key in ('Who can use', 'Non-guests'):
                 self.assertIn((key, value), rows)
-                self.assertIn(B.E(value), B.venue_facts(v))
-        self.assertNotIn('No. Hotel guests only.', B.venue_contents(v))
+                self.assertIn(B.E(value), B.venue_facts(v, self.today))
+        self.assertNotIn('No. Hotel guests only.', B.venue_contents(v, self.today))
 
     def test_sauna_package_fields_reach_glance(self):
         packages = [v for v in self.venues if v['kind_key'] == 'sauna' and 'public_access' in B.FOREIGNER.get(v['slug'], {})]
@@ -257,7 +257,7 @@ class Explorer(unittest.TestCase):
                     for output in outputs:
                         self.assertIn(f'<strong>{B.E(label)}:</strong> {B.E(value)}', output)
                         if B._is_confirmed(B.FOREIGNER[v['slug']][key]):
-                            self.assertIn(B.fact_provenance(v, value), output)
+                            self.assertIn(B.fact_provenance(v, value, self.today), output)
 
     def test_closed_days_expire(self):
         import datetime as _dt
@@ -271,9 +271,9 @@ class Explorer(unittest.TestCase):
 
     def test_closed_on_field_and_guide(self):
         slugs = {v['slug'] for v in self.venues}
-        self.assertTrue(set(B.CLOSED) <= slugs)
+        self.assertTrue(set(B.active_closed(self.today)) <= slugs)
         self.assertIn('grand-josun-busan', B.CLOSED_ALL)
-        for c in B.CLOSED.values():
+        for c in B.active_closed(self.today).values():
             self.assertTrue(c['closed'] and c['url'].startswith('http') and c['source'])
             B.ymd(c['checked'])
             self.assertNotIn('naver', c['url'])
@@ -283,9 +283,9 @@ class Explorer(unittest.TestCase):
         for v in self.venues:
             page = self.site.pages[f"/finder/{v['slug']}/"]
             self.assertIn('<th>Closed on</th>', page)
-            self.assertEqual(f'href="/finder/{v["slug"]}/"' in table, v['slug'] in B.CLOSED, v['slug'])
-            if v['slug'] in B.CLOSED:
-                self.assertIn(B.dot(B.ymd(B.CLOSED[v['slug']]['checked'])), page)
+            self.assertEqual(f'href="/finder/{v["slug"]}/"' in table, v['slug'] in B.active_closed(self.today), v['slug'])
+            if v['slug'] in B.active_closed(self.today):
+                self.assertIn(B.dot(B.ymd(B.active_closed(self.today)[v['slug']]['checked'])), page)
             else:
                 self.assertIn('Check before you go', page)
 
@@ -293,11 +293,11 @@ class Explorer(unittest.TestCase):
         for v in self.venues:
             values = B.FOREIGNER.get(v['slug'], {})
             keys = B.SAUNA_PKG_KEYS if v['kind_key'] == 'sauna' and 'public_access' in values else B.FCHK_KEYS
-            checklist = B.fchk(v)
+            checklist = B.fchk(v, self.today)
             self.assertIn('Foreigner &amp; visitor access checklist', checklist)
             self.assertEqual(checklist.count('<tr>'), len(keys))
             for key, label in keys:
-                cell = f'<td>{B.E(values[key])}{B.fact_provenance(v, values[key])}</td>' if B._is_confirmed(values.get(key, '')) else '<td class="unk">Not confirmed</td>'
+                cell = f'<td>{B.E(values[key])}{B.fact_provenance(v, values[key], self.today)}</td>' if B._is_confirmed(values.get(key, '')) else '<td class="unk">Not confirmed</td>'
                 self.assertIn(f'<tr><th>{label}</th>{cell}</tr>', checklist)
         for slug, kind, key in (
                 ('tattoo-friendly-saunas-korea', 'sauna', 'tattoo'),
@@ -314,13 +314,13 @@ class Explorer(unittest.TestCase):
 
     def test_cards_use_three_groups_and_details_keep_actions_and_safety(self):
         for v in self.venues:
-            card = B.venue_card(v)
+            card = B.venue_card(v, self.today)
             self.assertEqual(card.count('<dt>'), 0)  # headline-only list cards (PR #62)
             self.assertIn(B.price_short(v), card)
             self.assertNotIn('<table', card)
             self.assertIn(f'href="/finder/{v["slug"]}/"', card)
-            self.assertNotIn('fact-source', card)
-            self.assertNotIn('Checked ', card)
+            self.assertIn('fact-source', card)
+            self.assertIn('Checked ', card)
             self.assertIn('card-placeholder' if B.venue_image_path(v) is None else f'/assets/venue-sketch/{v["slug"]}.', card)
             page = self.site.pages[f'/finder/{v["slug"]}/']
             self.assertIn(B.E(B.map_url(v)), page)
@@ -328,8 +328,8 @@ class Explorer(unittest.TestCase):
             self.assertLess(page.index('detail-glance'), page.index('<table class="facts">'))
             if v['kind_key'] == 'sauna':
                 self.assertIn(B.SAFETY, page)
-        v = {**self.venues[0], 'stale': True}
-        self.assertIn('Outdated', B.v_badges(v))
+        v = {**self.venues[0], 'last_verified': self.today - dt.timedelta(days=91)}
+        self.assertIn('Outdated', B.v_badges(v, self.today))
 
     @unittest.skipUnless(shutil.which('node'), 'Node is needed for browser-free interaction checks')
     def test_url_filters_list_sorting_reset_and_empty_results_without_map(self):
