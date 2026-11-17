@@ -187,6 +187,10 @@ aborts; there is no direct-network fallback. Only bounded stdin/stdout IPC is
 exposed. Browser environment variables are restricted and no proxy/cookie/token
 headers are relayed. A host-side gate pins public DNS-resolved IPs while keeping
 TLS hostname verification, and validates each redirect/resource before connecting.
+DNS answers must all be public: benchmark addresses (`198.18.0.0/15`), their
+IPv4-mapped IPv6 equivalents, and mixed public/nonpublic answers are rejected
+before constructing a connection. A public address in the same answer never
+permits connecting past a forbidden address.
 Service workers, frames, popups, WebSockets, downloads, media and authentication
 are blocked. Route fulfillment never calls `continue_()` or Playwright fetch.
 
@@ -231,8 +235,14 @@ than skips if prerequisites are absent. In addition to Chromium it needs iproute
 OpenSSL, Xvfb and xdotool. It uses a disposable outer namespace with synthetic DNS,
 TLS servers and destination packet/connection monitoring. It exercises real
 redirects, JS navigation, frames, popup/fetch requests, service workers, rebinding,
-IPv4/IPv6, interception absence, gate failure and missing isolation. The extension
-test drives an actual optional-permission prompt, offline intake, lost begin/ACK,
-service-worker termination and permission withdrawal. No production source is
+IPv4/IPv6, interception absence, gate failure and missing isolation. Coverage
+includes approved-host benchmark A records, mapped benchmark AAAA records,
+and mixed public/nonpublic DNS answers through HTTP and browser requests,
+redirects, JS navigation, fetch and script subresources. Reachable benchmark
+sinks and packet monitoring verify rejection before connection; fixture DNS
+answers and gate rejection reasons are also checked. Synthetic addresses, DNS,
+certificates and listeners exist only inside the disposable test namespace.
+The extension test drives an actual optional-permission prompt, offline intake,
+lost begin/ACK, service-worker termination and permission withdrawal. No production source is
 contacted. A passing boundary test prints
 `forbidden_connections=0 forbidden_packets=0`.
