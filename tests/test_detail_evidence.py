@@ -363,6 +363,221 @@ def test_price_can_use_the_venue_check_date(venues):
     assert 'data-price="1"' in B.venue_card(v, today)
 
 
+SUNDAY_TODAY = dt.date(2026, 11, 19)
+VENUE_URL = 'https://example.org/venue'
+SUNDAY_URL = 'https://example.org/sunday'
+SHIM_URL = 'https://example.org/closures'
+WEEKDAY_HOURS = 'Mon–Fri 06:30–23:55 · Sat 13:00–17:30'
+REPLY_HOURS = 'Classes at 09:00 · 10:00 · 11:00 · Closed the 4th Sunday of each month (venue reply 10/17)'
+
+
+def sunday_evidence(status, age):
+    return dict(status=status, source_kind='official_page', source_url=SUNDAY_URL,
+                checked_on=(SUNDAY_TODAY - dt.timedelta(days=age)).isoformat())
+
+
+def sunday_closure(**fields):
+    return dict(closed='Sundays and public holidays', source='Official page',
+                url=SHIM_URL, checked='2026-10-18') | fields
+
+
+def sunday_fixture_cases():
+    return {
+        'fixture-sunday-open': dict(partial=True, evidence=sunday_evidence('yes', 91), legacy='no',
+                                    facts=[('Hours', 'Weekdays 07:00–20:00')]),
+        'fixture-sunday-closed': dict(sauna=True, venue_age=120, evidence=sunday_evidence('no', 90),
+                                      legacy='yes', facts=[('Closed', 'Closed Sunday')]),
+        'fixture-compound': dict(legacy='yes', facts=[('Hours (main box)', WEEKDAY_HOURS + ' · Closed Sunday')]),
+        'fixture-branch': dict(csv_flag='no', facts=[("Citizens' Forest branch", 'Closed Sat and Sun')]),
+        'fixture-reply': dict(csv_flag='yes', facts=[('Sunday', REPLY_HOURS)],
+                              translations=[('일요일 운영', '일요일 운영')]),
+        'fixture-shim': dict(partial=True, closure=sunday_closure(), facts=[('Closed', 'Sundays and public holidays')]),
+        'fixture-temporary': dict(closure=sunday_closure(until='2026-11-20')),
+        'fixture-reply-closure': dict(closure=sunday_closure(source='Venue reply')),
+        'fixture-conflict': dict(evidence=sunday_evidence('no', 2), facts=[('Sunday', 'Open Sunday')]),
+        'fixture-korean': dict(facts=[('Closed', 'Weekly closure')],
+                               translations=[('휴무', '일요일 및 공휴일')]),
+    }
+
+
+def sunday_fixture_pages(tmp_path, monkeypatch, cases):
+    """Load synthetic operations records through the same path as the release build."""
+    content = tmp_path / 'content'
+    content.mkdir()
+    ko, en, closures = {}, {}, {}
+    csv_rows = {'boxes.csv': [], 'saunas.csv': [], 'events.csv': []}
+    for slug, case in cases.items():
+        sauna = case.get('sauna', False)
+        kind, csv_key = ('호텔 사우나', 'saunas') if sauna else ('크로스핏 박스', 'boxes')
+        status = 'partial' if case.get('partial') else 'verified'
+        facts = case.get('facts', [])
+        ko[slug] = dict(slug=slug, csv=csv_key, kind=kind, title=slug, location='Seoul',
+                        status=status, facts=case.get('translations', facts))
+        en[slug] = dict(title=slug, location='Seoul', summary='', facts=facts)
+        if 'evidence' in case:
+            ko[slug]['sunday_evidence'] = case['evidence']
+        if 'legacy' in case:
+            ko[slug]['sunday'] = case['legacy']
+        if 'closure' in case:
+            closures[slug] = case['closure']
+        checked = SUNDAY_TODAY - dt.timedelta(days=case.get('venue_age', 3))
+        csv_rows[csv_key + '.csv'].append(dict(
+            name=slug, city='Seoul', confidence='high (official page read)' if sauna else status,
+            last_verified=checked.isoformat(), website=VENUE_URL, source_url=VENUE_URL, price_krw='',
+            price_source_url=VENUE_URL, cf_listing_url='', address='', sunday_open=case.get('csv_flag', ''),
+            drop_in_price_krw='', booking_url='',
+        ))
+    for filename, data in (('venues.json', ko), ('venues_en.json', en),
+                           ('events.json', {}), ('events_en.json', {}), ('ads.json', {})):
+        (content / filename).write_text(json.dumps(data), encoding='utf-8')
+    with monkeypatch.context() as patch:
+        patch.setattr(B, 'CLOSED_ALL', closures)
+        patch.setattr(B, 'CLOSED_MONTH', {})
+        patch.setattr(B, 'FOREIGNER', {})
+        with patch.context() as load_patch:
+            load_patch.setattr(B, 'ROOT', tmp_path)
+            load_patch.setattr(B, 'read_csv', csv_rows.__getitem__)
+            venues, events, *_ = B.load(SUNDAY_TODAY)
+        site = B.Site(SUNDAY_TODAY, True)
+        B.build(site, venues, events, SUNDAY_TODAY)
+    return site.pages
+
+
+def sunday_markup(pages, slug, label='Sunday'):
+    card = next(card for card in pages['/finder/'].split('</article>') if f'data-slug="{slug}"' in card)
+    badge = card.split('<div class="chips card-sunday">', 1)[1].split('</div>', 1)[0]
+    page = pages[f'/finder/{slug}/']
+    glance, notes = page.split('<h2>Source notes</h2>', 1)
+    start = f'<strong>{label}:</strong> <span class="sunday-status">'
+    assert glance.count(start) == 1
+    assert notes.count(f'<th>{label}</th><td><span class="sunday-status">') == 1
+    glance_row = glance.split(start, 1)[1].split('</div>', 1)[0]
+    notes_row = notes.split(f'<th>{label}</th><td>', 1)[1].split('</td>', 1)[0]
+    return card, badge, (glance_row, notes_row)
+
+
+@pytest.mark.parametrize('status,age', [('yes', 90), ('yes', 91), ('no', 90), ('no', 91)])
+def test_sunday_evidence_has_its_own_freshness(tmp_path, monkeypatch, status, age):
+    slug = 'fixture-age'
+    venue_age = 3 if age == 91 else 120
+    cases = {slug: dict(partial=status == 'yes', sauna=status == 'no', venue_age=venue_age,
+                        evidence=sunday_evidence(status, age))}
+    pages = sunday_fixture_pages(tmp_path, monkeypatch, cases)
+    checked = SUNDAY_TODAY - dt.timedelta(days=age)
+    venue_checked = SUNDAY_TODAY - dt.timedelta(days=venue_age)
+    card, badge, rows = sunday_markup(pages, slug)
+    assert f'data-sunday="{status}"' in card
+    assert B.SUN_TXT[status] in badge and (B.OUTDATED in badge) == (age == 91)
+    assert f'Checked {B.dot(venue_checked)}' in card and B.dot(checked) not in card
+    assert SUNDAY_URL not in card and '<dt>' not in card and '<table' not in card
+    for row in rows:
+        assert B.SUN_TXT[status] in row
+        assert f'href="{SUNDAY_URL}"' in row and f'Checked {B.dot(checked)}' in row
+        assert VENUE_URL not in row and B.dot(venue_checked) not in row
+        assert (B.OUTDATED in row) == (age == 91)
+
+
+@pytest.mark.parametrize('fields', [
+    None, False, [], 'verified', {},
+    {'status': 'unk'}, {'status': ['yes', 'no']},
+    {'source_kind': 'third_party'}, {'source_kind': 'venue_reply'},
+    {'source_url': ''}, {'source_url': '//example.org/sunday'}, {'source_url': 'ftp://example.org/sunday'},
+    {'source_url': 'https:///sunday'}, {'source_url': 'https://example.org:invalid/sunday'},
+    {'source_url': 'https://user:pass' + chr(64) + 'example.org/sunday'},
+    {'checked_on': None}, {'checked_on': '11/18'}, {'checked_on': '2026.11.18'},
+    {'checked_on': '2026-02-30'}, {'checked_on': '2026-11-18 or 2026-11-19'}, {'checked_on': '2026-11-20'},
+])
+def test_invalid_explicit_sunday_evidence_cannot_fall_back_to_shim(tmp_path, monkeypatch, fields):
+    slug = 'fixture-invalid'
+    if isinstance(fields, dict) and fields:
+        fields = sunday_evidence('yes', 2) | fields
+    pages = sunday_fixture_pages(tmp_path, monkeypatch, {
+        slug: dict(evidence=fields, closure=sunday_closure(), legacy='yes', csv_flag='no'),
+    })
+    card, badge, rows = sunday_markup(pages, slug)
+    assert 'data-sunday="unk"' in card
+    assert B.SUN_TXT['unk'] in badge and B.OUTDATED not in badge
+    for row in rows:
+        assert B.PENDING in row and 'href=' not in row and 'Checked' not in row
+    assert SHIM_URL not in pages[f'/finder/{slug}/']
+
+
+def test_explicit_sunday_evidence_supersedes_valid_shim(tmp_path, monkeypatch):
+    slug = 'fixture-supersedes'
+    pages = sunday_fixture_pages(tmp_path, monkeypatch, {
+        slug: dict(evidence=sunday_evidence('yes', 0), closure=sunday_closure()),
+    })
+    card, _, rows = sunday_markup(pages, slug)
+    assert 'data-sunday="yes"' in card
+    for row in rows:
+        assert SUNDAY_URL in row and B.dot(SUNDAY_TODAY) in row and SHIM_URL not in row
+    assert SHIM_URL not in pages[f'/finder/{slug}/']
+
+
+@pytest.mark.parametrize('fields', [
+    {'checked': ''}, {'checked': '10/18'}, {'checked': '2026-11-20'}, {'url': '/closures'},
+    {'source': 'Official Instagram'}, {'closed': 'Closed Sunday this week'},
+])
+def test_closure_shim_requires_the_exact_dated_official_record(tmp_path, monkeypatch, fields):
+    slug = 'fixture-shim-pending'
+    pages = sunday_fixture_pages(tmp_path, monkeypatch, {slug: dict(closure=sunday_closure(**fields))})
+    card, badge, rows = sunday_markup(pages, slug)
+    assert 'data-sunday="unk"' in card and B.SUN_TXT['unk'] in badge
+    for row in rows:
+        assert B.PENDING in row and 'href=' not in row and 'Checked' not in row
+
+
+def test_sunday_legacy_copy_and_closure_provenance(tmp_path, monkeypatch):
+    pages = sunday_fixture_pages(tmp_path, monkeypatch, sunday_fixture_cases())
+    for slug, label, claim in (
+            ('fixture-compound', 'Sunday', 'Closed Sunday'),
+            ('fixture-branch', 'Sunday', 'Closed Sat and Sun'),
+            ('fixture-korean', 'Sunday', 'Weekly closure'),
+            ('fixture-conflict', 'Sunday status', 'Sunday sources disagree'),
+            ('fixture-temporary', 'Sunday', ''),
+            ('fixture-reply-closure', 'Sunday', '')):
+        card, badge, rows = sunday_markup(pages, slug, label)
+        assert 'data-sunday="unk"' in card and B.SUN_TXT['unk'] in badge
+        for row in rows:
+            assert B.PENDING in row and claim in row
+            assert 'href=' not in row and 'Checked' not in row
+    compound = pages['/finder/fixture-compound/']
+    assert compound.count(WEEKDAY_HOURS + '<small class="fact-source">Checked 2026.11.16') == 2
+    assert WEEKDAY_HOURS + ' · Closed Sunday' not in compound
+    _, _, branch_rows = sunday_markup(pages, 'fixture-branch')
+    for row in branch_rows:
+        assert f'<strong>{B.E("Citizens' Forest branch")}:</strong> Closed Sat and Sun' in row
+    for slug, label in (('fixture-reply', 'Sunday status'), ('fixture-conflict', 'Sunday status')):
+        page = pages[f'/finder/{slug}/']
+        assert page.count('<strong>Sunday:</strong>') == page.count('<th>Sunday</th>') == 1
+        _, _, rows = sunday_markup(pages, slug, label)
+        assert all(B.PENDING in row for row in rows)
+    reply = pages['/finder/fixture-reply/']
+    reply_note = REPLY_HOURS + '<small class="fact-source">Venue reply · 10/17 (date not confirmed)'
+    assert reply.count(reply_note) == 2 and 'Open Sunday (verified)' not in reply
+    conflict = pages['/finder/fixture-conflict/']
+    assert conflict.count('Open Sunday<small class="fact-source">Not confirmed') == 2
+    assert conflict.count('Closed Sunday<small class="fact-source">Sunday sources disagree') == 2
+    assert SUNDAY_URL not in conflict
+    card, _, rows = sunday_markup(pages, 'fixture-shim')
+    assert 'data-sunday="no"' in card and SHIM_URL not in card
+    for row in rows:
+        citation = f'Checked 2026.10.18 · <a href="{SHIM_URL}"'
+        assert B.SUN_TXT['no'] in row and row.count(citation) == 2
+        assert '2026.11.16' not in row and VENUE_URL not in row
+
+
+def test_opposing_compound_sunday_claims_keep_status_pending(tmp_path, monkeypatch):
+    slug = 'fixture-contradictory'
+    claim = 'Open Sunday · Closed Sunday'
+    pages = sunday_fixture_pages(tmp_path, monkeypatch, {
+        slug: dict(evidence=sunday_evidence('no', 2), facts=[('Hours', claim)]),
+    })
+    card, _, rows = sunday_markup(pages, slug)
+    assert 'data-sunday="unk"' in card
+    assert all(claim in row and 'href=' not in row and 'Checked' not in row for row in rows)
+
+
 @pytest.mark.parametrize('age', [90, 91, 0, -1])
 def test_reply_price_terms_keep_source_and_age_boundary(venues, age):
     # The price fact's dated evidence lives on the terms; the outdated label tracks
