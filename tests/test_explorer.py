@@ -9,8 +9,11 @@ import subprocess
 import sys
 import unittest
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'site'))
 import build_site as B
+from test_detail_evidence import sunday_fixture_cases, sunday_fixture_pages
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -162,9 +165,21 @@ class Explorer(unittest.TestCase):
                      'Time allowed', 'Entry', 'Non-guests', 'Open-air bath rules', 'Types · length'}
         for v in self.venues:
             rows = [row for _, values in B.fact_groups(v) for row in values]
+            _, sunday_claims = B.route_sunday_facts(v['facts'], v['facts_ko'])
             for key, value in v['facts']:
                 if value.strip() and (key.startswith('Hours') or key in mandatory):
-                    self.assertIn((key, value), rows, v['slug'])
+                    remainder, _, clause = value.rpartition(' · ')
+                    if (key, clause) in sunday_claims and (key, value) not in sunday_claims:
+                        self.assertIn((key, remainder), rows, v['slug'])
+                    else:
+                        self.assertIn((key, value), rows + sunday_claims, v['slug'])
+            for claim in [row for row in rows if isinstance(row, B.SundayClaim)] + sunday_claims:
+                rendered = B.fact_value_html(claim, v, self.today)
+                evidence = v['sunday_evidence']
+                if not evidence or evidence.source_url != v['source']:
+                    self.assertNotIn(f'href="{B.E(v["source"])}"', rendered)
+                if not evidence or evidence.checked_on != v['last_verified']:
+                    self.assertNotIn(f'Checked {B.dot(v["last_verified"])}', rendered)
             self.assertTrue(any(key == 'Tattoos' for key, _ in rows))
             if not B.FOREIGNER.get(v['slug'], {}).get('tattoo') and not any('tattoo' in val.lower() for _, val in v['facts'] + [('Tip', tip) for tip in v['tips']]):
                 self.assertIn(('Tattoos', B.UNKNOWN), rows)
@@ -178,6 +193,23 @@ class Explorer(unittest.TestCase):
         self.assertIn('Venue reply', note)
         self.assertIn('2026-10-18', note)
         self.assertNotIn('href=', note)
+
+    def test_zest_split_and_hannam_reply_stay_verbatim_with_scoped_provenance(self):
+        zest = self.by_slug['crossfit-zest']
+        page = self.site.pages['/finder/crossfit-zest/']
+        main_hours = next(value for key, value in zest['facts'] if key == 'Hours (main box)')
+        remainder, clause = main_hours.rsplit(' · ', 1)
+        self.assertNotIn(B.E(main_hours), page)
+        official = B.fact_provenance(zest, remainder, self.today)
+        self.assertIn(f'href="{B.E(zest["source"])}"', official)
+        self.assertEqual(page.count(B.E(remainder) + official), 2)
+        self.assertEqual(page.count(B.E(clause) + '<small class="fact-source">Not confirmed</small>'), 2)
+        hannam = self.by_slug['crossfit-hannam']
+        reply = next(value for key, value in hannam['facts'] if key == 'Sunday')
+        note = B.fact_provenance(hannam, reply, self.today)
+        self.assertIn('Venue reply', note)
+        self.assertNotIn('href=', note)
+        self.assertEqual(self.site.pages['/finder/crossfit-hannam/'].count(B.E(reply) + note), 2)
 
     def test_pending_reply_is_unlinked_and_confirmed_booking_keeps_official_provenance(self):
         grand = self.by_slug['grand-hyatt-seoul']
@@ -377,7 +409,7 @@ class Explorer(unittest.TestCase):
         self.assertIn('interaction checks OK', run.stdout)
 
 
-JS_CHECKS = r'''
+FINDER_HARNESS = r'''
 const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const input = JSON.parse(require('node:fs').readFileSync(0, 'utf8'));
@@ -431,6 +463,9 @@ function boot(search = '', missing = []) {
   const reset = () => resets[0].fire('click');
   return {ids, cards, buttons, visible, click, change, reset, location, window, form};
 }
+'''
+
+JS_CHECKS = FINDER_HARNESS + r'''
 const s = boot();
 assert.ok(s.cards.length > 0);
 assert.equal(s.visible().length, s.cards.length);
@@ -497,6 +532,41 @@ assert.equal(minimal.visible().length, minimal.cards.filter(c => c.dataset.city 
 minimal.reset(); assert.equal(minimal.visible().length, minimal.cards.length);
 console.log('interaction checks OK');
 '''
+
+
+SUNDAY_CHECKS = FINDER_HARNESS + r'''
+function check(state, status, slugs) {
+  assert.equal(state.ids['f-sunday'].value, status);
+  assert.deepEqual(state.visible().map(card => card.dataset.slug).sort(), slugs);
+  assert.equal(state.ids['f-count'].textContent, slugs.length + (slugs.length === 1 ? ' place' : ' places'));
+}
+const yes = ['fixture-sunday-open'];
+const no = ['fixture-shim', 'fixture-sunday-closed'];
+const unknown = ['fixture-branch', 'fixture-compound', 'fixture-conflict', 'fixture-korean',
+  'fixture-reply', 'fixture-reply-closure', 'fixture-temporary'];
+for (const [status, slugs] of Object.entries({yes, no, unk: unknown})) {
+  check(boot('?sunday=' + status), status, slugs);
+}
+const combined = boot('?type=box&sunday=no');
+check(combined, 'no', ['fixture-shim']);
+assert.equal(combined.buttons.find(b => b.group.dataset.seg === 'type' && b.dataset.v === 'box').attrs['aria-pressed'], 'true');
+combined.location.search = '?sunday=unk'; combined.window.fire('popstate');
+check(combined, 'unk', unknown);
+combined.reset();
+check(combined, '', [...yes, ...no, ...unknown].sort());
+assert.equal(combined.location.search, '');
+'''
+
+
+@pytest.mark.skipif(not shutil.which('node'), reason='Node is needed for browser-free interaction checks')
+def test_sunday_deep_links_with_dated_evidence(tmp_path, monkeypatch):
+    pages = sunday_fixture_pages(tmp_path, monkeypatch, sunday_fixture_cases())
+    payload = {'script': (ROOT / 'site/static/js/finder.js').read_text(),
+               'elements': Elements(pages['/finder/']).elements}
+    run = subprocess.run(['node', '-e', SUNDAY_CHECKS], input=json.dumps(payload), text=True,
+                         capture_output=True, timeout=20)
+    assert run.returncode == 0, run.stdout + run.stderr
+
 
 if __name__ == '__main__':
     unittest.main()

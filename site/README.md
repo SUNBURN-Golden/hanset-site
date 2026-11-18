@@ -17,6 +17,35 @@ Restart the http.server after a rebuild (dist/ is recreated).
 - `content/pages/*.html`: about / privacy / corrections text.
 - The build validates all emitted text with the leak checker described below.
 
+### Sunday evidence for Finder
+
+Operations may supply `sunday_evidence` on a published record in
+`content/venues.json`. The object requires all four fields.
+
+| Field | Accepted value |
+| --- | --- |
+| `status` | `yes` for regularly open on Sunday, or `no` for regularly closed |
+| `source_kind` | `official_page` |
+| `source_url` | Absolute public HTTP(S) URL without embedded credentials |
+| `checked_on` | Real `YYYY-MM-DD` date on or before the build's Seoul date |
+
+Operations confirms that the official page explicitly supports the regular
+Sunday schedule for the listed location and service. Finder uses the Sunday
+source and date independently of the venue's overall verification. Evidence
+over 90 days old keeps its filter status and displays 오래됨 (Outdated).
+
+Operations-supplied `sunday_evidence` supersedes the closure-record shim once
+present, including when the supplied evidence fails validation. When the field
+is absent, the shim accepts only a `closed_days.json` record with the exact
+text `Sundays and public holidays`, source label `Official page`, a qualifying
+public URL and check date, and no `until`.
+
+Legacy flags, class listings, and narrative hours carry no filter eligibility.
+Recognized legacy Sunday statements retain their wording and any explicit
+reply provenance. Missing, invalid, or conflicting evidence appears as pending
+in Finder. Migrate Sunday information embedded in other schedule wording to
+the structured field once operations can confirm it.
+
 ## Pages
 / (magazine home) · /finder/ (pinned menu; filters city/type/Sunday/price-known/search, URL-deep-linkable) · /finder/<slug>/ (18 venues, 마지막 확인일 + source) · /hyrox-seoul/ · /events/ + /events.ics · /about/ · /privacy/ · /corrections/ · /join/ (Google sign-up; /join/welcome/ is noindex, sitemap lists /join/ only) · 404.
 
