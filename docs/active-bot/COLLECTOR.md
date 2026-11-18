@@ -121,12 +121,12 @@ slash variants and drive queue, checkpoint, and cooldown comparisons. Each
 identity keeps its maximum score and first validated fetch URL, preserving the
 original encoded path and trailing slash for the actual request.
 
-Selected pages run immediately after their parent, ahead of new roots, through
-the same fetcher, proxy, robots rules, locks and budgets. Children never recurse.
-A selected child under cooldown is noted as skipped without consuming one of the
-two subpage slots. A redirect landing URL that fails the safe-URL check (the
-fetcher only canonicalizes redirects, e.g. a `?sid=` homepage) is still classified
-and extracted, but supplies no subpage links.
+Fresh children run immediately after their parent, ahead of new roots. All
+children use the same fetcher, proxy, robots rules, locks and budgets. Children
+never recurse. A child under a block hold is noted as skipped without consuming
+one of the two subpage slots. A redirect landing URL that fails the safe-URL
+check, such as a homepage with `?sid=`, remains eligible for classification
+and extraction. It supplies no subpage links.
 Every non-`cap_reached` fetch attempt counts toward the existing 10-page run and
 20-page daily caps, including robots refusals and collateral domain stops. Link
 selection precedes extraction and receipt deduplication, so unchanged or
@@ -184,12 +184,9 @@ echoed into status. Other jobs in the same run proceed normally. If every job is
 unsafe, the run stops with reason `unsafe_url_skipped` before credential checks
 or proxy preflight.
 
-Cooldowns start with new genuine evaluations; historical timestamps are not
-invented. The existing fetcher folds robots-unavailable (including transport
-failures and 5xx responses) into `robots_disallowed`, so these conservatively
-receive the same 14-day hold. No anti-bot workaround or domain-wide cross-day
-suppression is introduced. Discovery, providers, Instagram, the Linux
-collector/clipper, and the static site remain separate and unchanged.
+Block holds start with new genuine evaluations. The existing fetcher folds
+robots-unavailable (including transport failures and 5xx responses) into
+`robots_disallowed`, so these receive the same 14-day hold.
 
 Tavily is optional. A target with no URL and a `tavily` venue/field pair may
 call the existing `discover_known_venue` hook, which already caps basic search
@@ -197,6 +194,43 @@ at 30 requests per KST day. Only a lead whose domain is in that target's
 `official_domains` can be fetched, and at most one. Other leads are counted
 and discarded. A missing Tavily key skips that target. The key file remains
 `/workspace/.secrets/tavily_key` and is not read by this wrapper.
+
+### Seven-day soft deferral of unchanged pages
+
+After URL safety, block holds, and same-day completion checks, web execution
+uses observations from the past seven days to defer canonical requested URLs
+with `duplicate`, `empty_extraction`, or `applied` with a hash matching an
+applied web receipt for that URL. At seven days the URL returns to normal
+priority. Initial jobs keep their planner order within each queue. The normal
+queue drains first and deferred jobs fetch with spare capacity under the same
+caps and guards.
+
+Fresh link candidates get first choice of each venue's two subpage slots.
+Within each group the original link ranking applies. Fresh children follow
+their parent immediately, and deferred children wait behind all normal jobs,
+including manual and gap-derived targets. A promoted explicit child retains its
+request URL, authorization, and default fetch behavior. An explicit child
+already in the deferred queue keeps its place there.
+
+The external SQLite table `web_target_observations` stores the latest fetch
+timestamp, disposition, and available content hash under the SHA-256 digest of
+the safely canonicalized requested URL. A ready page records
+`pending_extraction` at fetch time. A completed extraction records `applied`,
+`duplicate`, or `empty_extraction` with the same timestamp. Both duplicate
+paths and discovered children update this history. A failed fetch or unfinished
+extraction gives the URL normal priority when it is eligible to retry.
+
+Until a URL has scheduling history, the collector uses its latest safe web
+receipt or change observation. A change observation can extend the timestamp
+when its canonical URL and hash match a receipt. Receipt creation time is all
+that is available for historical repeats without a recorded observation.
+Scheduling entries stay available after the seven-day window, and existing
+evidence rows retain their original timestamps and labels.
+
+`rejections.recent_unchanged_deferred` reports the number of distinct canonical
+URLs admitted to the deferred queue, including jobs fetched with spare capacity.
+The key appears in the run result and `collect status` for positive counts.
+Queue admission spends no budget and writes no completion or fetch timestamp.
 
 ## Layout
 
@@ -471,6 +505,13 @@ The operations host already runs web collection daily at 04:15 KST. Do not
 register another cron for this change. Instagram ingest is still only
 `scripts/run_collect_cron.sh ingest` during hour 13, and only after a
 desktop summary batch is written. This repository does not install that line.
+
+Before the first 04:15 KST run using this scheduling change, capture the
+available run history for the prior seven days. Compare the new run's fetched
+canonical requested URLs with that snapshot. The target is at most two
+`duplicate` dispositions and at least three fetched URLs absent from the
+seven-day history. Report the new-URL count as unverified if historical
+coverage is incomplete.
 
 ## Checks
 
