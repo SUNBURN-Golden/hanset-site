@@ -195,22 +195,15 @@ have both `archive_enabled: true` and a `full_text_permissions` approval before
 sanitized full text can enter the external archives table. Photos, HAR, video,
 browser profiles and screenshots are not collector outputs.
 
-Browser dependencies are deliberately separate:
-
-```bash
-python3 -m pip install -r crawler/requirements-browser.txt
-python3 -m playwright install chromium
-```
-
-The Linux browser runner requires util-linux `unshare`/`mount`, enabled user,
-network, mount and PID namespaces, procfs, and tmpfs mounting within the user
-namespace. It starts the driver and Chromium in a fresh network namespace with
-loopback down, no routes and no external interfaces, and checks this before
-launch. Profiles and temporary files live on private tmpfs. Isolation failure
-aborts; there is no direct-network fallback. Only bounded stdin/stdout IPC is
-exposed. Browser environment variables are restricted and no proxy/cookie/token
-headers are relayed. A host-side gate pins public DNS-resolved IPs while keeping
-TLS hostname verification, and validates each redirect/resource before connecting.
+See [Mandatory browser integration](#mandatory-browser-integration) for the
+separate browser installation and Linux prerequisites. The Linux browser runner
+starts the driver and Chromium in a fresh network namespace with loopback down,
+no routes and no external interfaces, and checks this before launch. Profiles
+and temporary files live on private tmpfs. The runner aborts on isolation failure
+and exposes only bounded stdin/stdout IPC. Browser environment variables are
+restricted and no proxy/cookie/token headers are relayed. A host-side gate pins
+public DNS-resolved IPs, keeps TLS hostname verification enabled and validates
+each redirect and resource before connecting.
 DNS answers must all be public: benchmark addresses (`198.18.0.0/15`), their
 IPv4-mapped IPv6 equivalents, and mixed public/nonpublic answers are rejected
 before constructing a connection. A public address in the same answer never
@@ -247,17 +240,78 @@ scheduled candidates appear in `access_holds`; a hold is audited only when its
 reason changes, and is reconsidered when local policy changes. Robots-review
 age checks use the same injected worker clock as quotas and evidence.
 
+Run each suite from the repository root. Use a Python 3.11+ test virtual
+environment with `pytest` for the Python suites. Keep test and browser
+dependencies separate from the static site's build environment.
+
+### Linux crawler unit tests
+
+Use Linux with Python 3.11+, SQLite and writable temporary storage.
+
 ```bash
-python3 -m unittest discover -s tests -p 'test_*.py'
-node --test tools/chrome-clipper/tests/*.test.mjs
-python3 -m unittest discover -s tests/integration -p 'test_*.py'
-python3 site/build_site.py --release
+python3 -m pytest -q tests/test_collector_pipeline.py tests/test_minimal_html.py \
+  tests/test_store_lock.py tests/test_url_include.py
 ```
 
-The separate integration suite is mandatory for browser changes and fails rather
-than skips if prerequisites are absent. In addition to Chromium it needs iproute2,
-OpenSSL, Xvfb and xdotool. It uses a disposable outer namespace with synthetic DNS,
-TLS servers and destination packet/connection monitoring. It exercises real
+### Node clipper tests
+
+Use Node.js with its built-in test runner.
+
+```bash
+node --test tools/chrome-clipper/tests/*.test.mjs
+```
+
+### Active collector tests
+
+Install the Python dependencies with
+`python3 -m pip install 'requests[socks]' beautifulsoup4 lxml Pillow`. The SOCKS
+extra is required for the proxy tests. Use Linux with Bash and `flock` for the
+cron tests. Install `pdftotext` and Tesseract with English and Korean language
+data to exercise PDF and OCR coverage.
+
+```bash
+python3 -m pytest -q -rs tests/active_bot
+```
+
+### Twin and explicit evidence tests
+
+Use the active collector test environment.
+
+```bash
+python3 -m pytest -q tests/twin
+```
+
+### Data foundation tests
+
+Install the data foundation requirements in the test environment.
+
+```bash
+python3 -m pip install -r data_foundation/requirements.txt
+python3 -m pytest -q tests/data_foundation
+```
+
+### Mandatory browser integration
+
+Provision a Linux host with Chromium's OS libraries, util-linux `unshare` and
+`mount`, enabled user, network, mount and PID namespaces, procfs, and support
+for mounting tmpfs in the user namespace. Install iproute2, OpenSSL, Xvfb with
+`xvfb-run` and `xauth`, and `xdotool`. Install the browser requirements and
+Chromium from the Python test environment. Place the virtual environment and
+Chromium installation outside `/tmp` because the browser runner mounts a
+private tmpfs there.
+
+```bash
+python3 -m pip install -r crawler/requirements-browser.txt
+python3 -m playwright install chromium
+```
+
+```bash
+python3 -m pytest -q tests/integration
+```
+
+Run this suite for every browser or clipper change. Missing prerequisites fail
+the run. The suite uses a disposable outer namespace with synthetic DNS, TLS
+servers and destination packet/connection monitoring. It exercises real
 redirects, JS navigation, frames, popup/fetch requests, service workers, rebinding,
 IPv4/IPv6, interception absence, gate failure and missing isolation. Coverage
 includes approved-host benchmark A records, mapped benchmark AAAA records,
@@ -267,6 +321,8 @@ sinks and packet monitoring verify rejection before connection; fixture DNS
 answers and gate rejection reasons are also checked. Synthetic addresses, DNS,
 certificates and listeners exist only inside the disposable test namespace.
 The extension test drives an actual optional-permission prompt, offline intake,
-lost begin/ACK, service-worker termination and permission withdrawal. No production source is
-contacted. A passing boundary test prints
+lost begin/ACK, service-worker termination and permission withdrawal. The test
+asserts that the browser case exits successfully and reports
 `forbidden_connections=0 forbidden_packets=0`.
+
+For the static site, see [Release build verification](../README.md#release-build-verification).
