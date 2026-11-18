@@ -412,6 +412,7 @@ class Site:
         self.pages = {}  # path -> html
         self.noindex = set()  # pages kept out of canonical/sitemap even in release (e.g. /join/welcome/)
         self.creators = False
+        self.feature = None
 
     def head(self, title, desc, path, noindex=False):
         full = title if title.startswith(BRAND_EN) else f"{title} · {BRAND_EN}"
@@ -439,8 +440,9 @@ class Site:
                 '</div></header>')
 
     def foot(self, active):
+        feature_link = '<a href="/hyrox-seoul/">Event guide</a>' if self.feature else ""
         return (f'<footer class="site-footer"><div class="wrap"><strong class="site-title">{BRAND_EN}</strong> · Train. Sweat. One set.'
-                f'<div class="flinks"><a href="/finder/">Finder</a><a href="/join/">Join</a><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a>{CREATORS_LINK if self.creators else ""}<a href="/hyrox-seoul/">HYROX Seoul</a><a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
+                f'<div class="flinks"><a href="/finder/">Finder</a><a href="/join/">Join</a><a href="/about/">About</a><a href="/guide/">Guide</a><a href="/archive/">Venue Sketches</a><a href="/events/">Events</a>{CREATORS_LINK if self.creators else ""}{feature_link}<a href="/faq/">FAQ</a><a href="/corrections/">Corrections</a>'
                 f'<a href="/privacy/">Privacy</a></div>'
                 f'<p class="fsocial"><a class="ig ig-f" {IG_ATTRS}>{IG_SVG}<span>@hanset.mag</span></a></p>'
                 f'<p>Prices and closing days change. Every entry shows its check date and source. Confirm with the venue before you go.</p>'
@@ -742,13 +744,22 @@ def venue_card(v, today):
 def mini_card(v, today):
     return f'<article class="card venue-card">{venue_contents(v, today)}</article>'
 
+def event_lifecycle(e, today):
+    """Calendar dates supplied by the builder are in Asia/Seoul; end is inclusive."""
+    if today > e["end"]: return "ended", "Ended"
+    if today < e["start"]: return "upcoming", f'D-{(e["start"] - today).days}'
+    return "ongoing", "D-DAY" if today == e["start"] else "Live now"
+
+def event_attrs(e, today):
+    state, _ = event_lifecycle(e, today)
+    return f'data-event-lifecycle="{state}" data-start="{e["start"].isoformat()}" data-end="{e["end"].isoformat()}"'
+
 def event_card(e, today, detail_link=True):
-    d = (e["start"] - today).days
-    badge_txt = "Live now" if e["start"] <= today <= e["end"] else ("This week" if 0 <= d <= 7 else "")
+    _, status = event_lifecycle(e, today)
     rows = "".join(f'<tr><th>{E(k)}</th><td>{E(val)}</td></tr>' for k, val in e["facts"])
-    link = f'<a href="/hyrox-seoul/">Race week guide →</a> · ' if e["feature"] and detail_link else ""
-    return (f'<article class="card" id="{e["slug"]}" data-end="{e["end"].isoformat()}"><div class="chips">{badge(e["kind"])}{badge(badge_txt, "badge-part") if badge_txt else ""}</div>'
-            f'<h3>{E(e["title"])}</h3><div class="when" data-dday="{e["start"].isoformat()}">{span(e["start"], e["end"], today.year)}{(" · <b>" + ("D-DAY" if d == 0 else f"D-{d}") + "</b>") if d >= 0 else ""}</div>'
+    link = '<a href="/hyrox-seoul/">Event guide →</a> · ' if e.get("feature") and detail_link else ""
+    return (f'<article class="card" id="{e["slug"]}" data-event-card {event_attrs(e, today)}><div class="chips">{badge(e["kind"])}</div>'
+            f'<h3>{E(e["title"])}</h3><div class="when">{span(e["start"], e["end"], today.year)} · <b data-event-status>{status}</b></div>'
             f'<table class="facts"><tbody>{rows}</tbody></table>' + (f'<p class="muted">{E(e["note"])}</p>' if e["note"] else "") +
             f'<div class="meta">{link}<a href="{E(e["url"])}" rel="noopener noreferrer">{E(e["source_label"])}</a> · Checked {dot(e["last_verified"])} {freshness(e["last_verified"], today)}</div></article>')
 
@@ -756,6 +767,43 @@ def event_card(e, today, detail_link=True):
 HYROX_STATIONS = [("SkiErg", "1,000m"), ("Sled Push", "50m"), ("Sled Pull", "50m"),
                   ("Burpee Broad Jump", "80m"), ("Rowing", "1,000m"), ("Farmers Carry", "200m"),
                   ("Sandbag Lunges", "100m"), ("Wall Balls", "100 reps")]
+
+def feature_metadata(e, ended):
+    dates = span(e["start"], e["end"], None)  # Always include years, including on cached pages.
+    title = f'{e["title"]} · {"Past event" if ended else "Event guide"} ({dates}, {e["venue"]})'
+    desc = f'{"Historical reference" if ended else "Event guide"}: {e["title"]}, {dates}, {e["venue"]}. Official dates, facts and sources.'
+    return title, desc
+
+def feature_body(feat, venues, today):
+    ended = event_lifecycle(feat, today)[0] == "ended"
+    _, status = event_lifecycle(feat, today)
+    def copy(tag, active, past, attrs=""):
+        return (f'<{tag} {attrs} data-event-active-text="{E(active)}" data-event-ended-text="{E(past)}">'
+                f'{E(past if ended else active)}</{tag}>')
+    metadata = " ".join(f'data-{state}-{key}="{E(value)}"'
+                        for state, past in (("active", False), ("ended", True))
+                        for key, value in zip(("title", "description"), feature_metadata(feat, past)))
+    trs = "".join(f"<tr><td>{i}</td><td>1km</td><td>{E(en)}</td><td>{E(d)}</td></tr>" for i, (en, d) in enumerate(HYROX_STATIONS, 1))
+    hv = "".join(mini_card(v, today) for v in venues)
+    return f'''<section class="hero" data-event-page {event_attrs(feat, today)} {metadata}>
+{copy("span", "EVENT GUIDE", "PAST EVENT", 'class="eyebrow"')}
+{copy("h1", feat["title"], "Past event: " + feat["title"])}
+<div class="dday"><b data-event-status>{status}</b>{span(feat["start"], feat["end"], None)} · {E(feat["venue"])}</div>
+<p data-event-ended-only{'' if ended else ' hidden'}><strong>Past event</strong> · These scheduled dates have ended. This page is a historical reference; it does not confirm event outcomes.</p>
+<p>Dates and event information from the official page.</p>
+<div class="btnrow"><a class="btn btn-a" href="{E(feat["url"])}" rel="noopener noreferrer">Official event page</a></div></section>
+<div class="page"><h2>At a glance</h2>
+<table class="facts"><tbody>{"".join(f"<tr><th>{E(k)}</th><td>{E(val)}</td></tr>" for k, val in feat["facts"])}</tbody></table>
+<h2>Race format reference</h2>
+<p>1km run, one functional station. One set. Eight times. Order and distances below.</p>
+<table class="t"><thead><tr><th>#</th><th>Run</th><th>Station</th><th>Distance · reps</th></tr></thead><tbody>{trs}</tbody></table>
+<h2>Divisions</h2>
+<ul><li>Open / Pro (solo)</li><li>Doubles / Doubles Pro (pairs)</li><li>Relay: teams of 4, each runs 2×1km and one station</li></ul>
+<div class="note">Weights by division and gender are on the official page. Standards can change by season; see the <a href="https://hyrox.com/the-fitness-race/" rel="noopener noreferrer">official HYROX guide</a>. Registration status and fees weren’t in the official page text, so they're not listed.</div>
+<h2>HYROX training reference</h2><p>Places with HYROX classes or drop-ins confirmed on their official pages. Prices only when verified.</p></div>
+<div class="grid g3">{hv}</div>
+<div class="page"><p class="muted">Find verified saunas and boxes in the <a href="/finder/">Finder</a>.</p>
+<p class="muted">{SAFETY}</p><p class="muted">Checked {dot(feat["last_verified"])} {freshness(feat["last_verified"], today)} · Source <a href="{E(feat["url"])}" rel="noopener noreferrer">{E(feat["source_label"])}</a> · <a href="https://hyrox.com/the-fitness-race/" rel="noopener noreferrer">HYROX official</a></p></div>'''
 
 
 # ------------------------------------------------------------------ magazine (articles)
@@ -818,7 +866,8 @@ def article_html(a):
 
 def build(site, venues, events, today, vevents=(), creators=()):
     by_slug = {v["slug"]: v for v in venues}
-    feat = next(e for e in events if e["feature"])
+    feat = next((e for e in events if e.get("feature")), None)
+    site.feature = feat  # Set before any page/footer is rendered.
     upcoming = [e for e in events if e["end"] >= today]
     ordered = sorted(venues, key=lambda v: (not v["ad"], not bool(v["price"]), v["status"] != "verified", -len(v["facts"]), v["order"]))
     cnt_box = sum(v["kind_key"] == "box" for v in venues); cnt_sauna = len(venues) - cnt_box
@@ -939,13 +988,14 @@ def build(site, venues, events, today, vevents=(), creators=()):
                  next((key for key in ("sauna", "crossfit", "gym", "hyrox") if key in venue_categories(v)), ""))
 
     # ---- events
-    cards = "".join(event_card(e, today) for e in upcoming)
-    if not upcoming: cards = '<div class="empty"><p>No officially confirmed races right now.</p><p class="muted">We add them as they’re confirmed.</p></div>'
+    cards = "".join(event_card(e, today, detail_link=e is feat) for e in upcoming)
+    cards += ('<div class="empty" data-events-empty' + (' hidden' if upcoming else '')
+              + '><p>No officially confirmed races right now.</p><p class="muted">We add them as they’re confirmed.</p></div>')
     ebody = f'''<div class="page"><h1>Event Calendar</h1></div>
 <div class="ev">{cards}</div>
 {vevents_section(vevents, today)}
 <div class="note">Races listed only on aggregator sites wait until the organizer confirms. Fees appear only when read on the official page. <a href="/events.ics">Download all dates (.ics)</a></div>'''
-    site.add("/events/", "Event Calendar", "HYROX Seoul, Urban Wave, the CrossFit Open and more. Race dates confirmed on official pages.", ebody, "events", ("dday.js",))
+    site.add("/events/", "Event Calendar", "Race dates confirmed on official pages.", ebody, "events", ("dday.js",))
 
     # ---- creators (verified feed; page only when there is data)
     if creators:
@@ -954,27 +1004,10 @@ def build(site, venues, events, today, vevents=(), creators=()):
                  f'<p class="muted">Public profiles · dated</p></section>')
         site.add("/creators/", "Creators", "CrossFit, HYROX, running and sauna creators in Korea. Public profiles, checked by date.", cbody, "creators")
 
-    # ---- HYROX feature
-    trs = "".join(f"<tr><td>{i}</td><td>1km</td><td>{E(en)}</td><td>{E(d)}</td></tr>" for i, (en, d) in enumerate(HYROX_STATIONS, 1))
-    hv = "".join(mini_card(v, today) for v in hyrox_v)
-    hbody = f'''<section class="hero"><span class="eyebrow">RACE WEEK GUIDE</span><h1>{E(feat["title"])}</h1>
-<div class="dday" data-dday="{feat["start"].isoformat()}"><b>D-{max((feat["start"] - today).days, 0)}</b>{span(feat["start"], feat["end"], today.year)} · KINTEX</div>
-<p>First race? Start here. Dates from the official page.</p>
-<div class="btnrow"><a class="btn btn-a" href="{E(feat["url"])}" rel="noopener noreferrer">Registration and fees: official page</a></div></section>
-<div class="page"><h2>At a glance</h2>
-<table class="facts"><tbody>{"".join(f"<tr><th>{E(k)}</th><td>{E(val)}</td></tr>" for k, val in feat["facts"])}</tbody></table>
-<h2>The race</h2>
-<p>1km run, one functional station. One set. Eight times. Order and distances below.</p>
-<table class="t"><thead><tr><th>#</th><th>Run</th><th>Station</th><th>Distance · reps</th></tr></thead><tbody>{trs}</tbody></table>
-<h2>Pick your division</h2>
-<ul><li>Open / Pro (solo)</li><li>Doubles / Doubles Pro (pairs)</li><li>Relay: teams of 4, each runs 2×1km and one station</li></ul>
-<div class="note">Weights by division and gender are on the official page. Standards can change by season, so recheck the <a href="https://hyrox.com/the-fitness-race/" rel="noopener noreferrer">official HYROX guide</a> before you race. Registration status and fees weren’t in the official page text, so they're not listed.</div>
-<h2>Before race day, train here.</h2><p>Places with HYROX classes or drop-ins confirmed on their official pages. Prices only when verified.</p></div>
-<div class="grid g3">{hv}</div>
-<div class="page"><p class="muted">Saunas and boxes around Goyang and Ilsan go into the <a href="/finder/?city=gyeonggi">Finder</a> as we verify them.</p>
-<p class="muted">{SAFETY}</p><p class="muted">Checked {dot(feat["last_verified"])} {freshness(feat["last_verified"], today)} · Source <a href="{E(feat["url"])}" rel="noopener noreferrer">HYROX Korea</a> · <a href="https://hyrox.com/the-fitness-race/" rel="noopener noreferrer">HYROX official</a></p></div>'''
-    site.add("/hyrox-seoul/", "HYROX Seoul Race Week Guide (11/13–15, KINTEX)", "AirAsia HYROX Seoul dates, the 8 stations, and drop-in spots to train first.", hbody, "", ("dday.js",))
-
+    # ---- optional feature (the historical route remains available after its end)
+    if feat:
+        title, desc = feature_metadata(feat, event_lifecycle(feat, today)[0] == "ended")
+        site.add("/hyrox-seoul/", title, desc, feature_body(feat, hyrox_v, today), "", ("dday.js",))
 
     # ---- magazine
     arts = [parse_article(m) for m in ARTICLES]
@@ -1016,6 +1049,8 @@ def build(site, venues, events, today, vevents=(), creators=()):
                                        ("corrections", "Corrections", "See something wrong? Tell us.", "about")]:
         frag = (ROOT / f"content/pages/{slug}.html").read_text(encoding="utf-8")
         if slug == "guide":
+            feature_link = (f'<li><a href="/hyrox-seoul/">Event guide: {E(feat["title"])}</a>: dates and official event reference.</li>' if feat else "")
+            frag = frag.replace("<!--FEATURE_LINK-->", feature_link)
             figs = "".join(f'<figure class="fig" id="{k}"><a class="figlink" href="/assets/img/guide/{f}.svg" target="_blank" rel="noopener" aria-label="{E(t)}: view larger (new tab)"><img src="/assets/img/guide/{f}.svg" width="1080" height="1350" loading="lazy" decoding="async" alt="{E(d)}"></a><figcaption><strong>{E(t)}</strong><br><a href="/assets/img/guide/{f}.svg" target="_blank" rel="noopener">View larger ↗</a></figcaption></figure>' for k, f, t, d in ILLUSTRATIONS)
             frag = frag.replace("<!--ILLUSTRATIONS-->", f'<h2 id="pictures">In pictures</h2><p>Hand-drawn guides for first-timers. Tap to enlarge.</p><div class="figs">{figs}</div>')
         site.add(f"/{slug}/", title, desc, f'<div class="page">{frag}</div>', active)
