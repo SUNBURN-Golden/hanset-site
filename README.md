@@ -28,9 +28,41 @@ python3 -m http.server 8765 --directory dist --bind 127.0.0.1          # http://
 ```
 - The preview build (no `--release`) adds `noindex` — local look only, never deploy.
 - Without fonttools the builder still builds (falls back to system fonts) but fonts will differ.
-- The build ends with a leak check (phones, forbidden terms, third-party source names, trackers) and fails if it trips. A clean run prints e.g. `built 44 pages, 31 venues (10 boxes, 21 saunas), 6 events` and `leak check OK`.
-- Automated checks: `python3 -m unittest discover -s tests -p 'test_*.py'`. Site verification also requires the release build + leak check + opening affected pages (mobile + desktop widths) + internal link check.
 - Illustrations: `cd illustrations && python3 make_all.py && ./render_png.sh` (needs Chrome headless for PNG; fonts in `_fonts/`, SIL OFL). Copy updated SVGs into `site/static/img/{guide,archive}/`.
+
+## Site tests
+
+From the repository root, use a Python 3.11+ test virtual environment with
+`pytest` installed and Node.js on `PATH` for the JavaScript assertions. Keep
+test and browser dependencies in test environments, separate from the site
+build environment.
+
+```bash
+python3 -m pytest -q \
+  tests/test_closed_month.py tests/test_detail_evidence.py \
+  tests/test_drawing_disclaimer.py tests/test_drawing_hangul.py \
+  tests/test_explorer.py tests/test_featured_events.py \
+  tests/test_freshness.py tests/test_leak_check.py \
+  tests/test_redesign.py tests/test_verified.py tests/test_view_words.py
+```
+
+For the collector, clipper, twin, data foundation and browser suites, see
+[Reports and tests](crawler/README.md#reports-and-tests).
+
+### Release build verification
+
+From the repository root, activate the site build virtual environment
+(`source site/.venv/bin/activate`) so the builder can use FontTools and Brotli
+for font subsetting. Build into a temporary directory.
+
+```bash
+release_dir=$(mktemp -d) &&
+  python3 site/build_site.py --release --out "$release_dir"
+```
+
+Require a successful exit, the `built … pages` summary and `leak check OK`.
+Serve the generated output locally, open affected pages at mobile and desktop
+widths, and check their internal links.
 
 ## Deploy
 Only the HANSET operations bot deploys (Cloudflare Pages direct upload). PRs must be merge-ready: release build clean, no secrets. Workers have no tokens.
