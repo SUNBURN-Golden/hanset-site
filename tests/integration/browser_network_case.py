@@ -127,8 +127,8 @@ class Content(http.server.BaseHTTPRequestHandler):
             target = self.path.removeprefix('/dns-redirect/')
             assert target in DNS_FIXTURES
             self.send_response(302); self.send_header('Location', 'https://' + target + '/forbidden'); self.end_headers(); return
-        if self.path.startswith('/minimal/'):
-            index = int(self.path.removeprefix('/minimal/'))
+        if self.path.startswith(('/minimal/', '/guides/minimal/')):
+            index = int(self.path.rsplit('/', 1)[1])
             body = SHARED_REGIONS[index]['html']
         elif self.path.startswith('/dns-navigation/'):
             target = self.path.removeprefix('/dns-navigation/')
@@ -234,7 +234,9 @@ def main():
         cfg = load()
         today = dt.datetime.now(dt.timezone.utc).date().isoformat()
         cfg['policies'] = [{'origin': 'https://' + h, 'paths': ['/'], 'public': True,
-                            'browser': True, 'robots_reviewed_at': today} for h in ('approved.test', 'rebind.test', '127.0.0.1', '[::1]', '[::ffff:7f00:1]', 'pubmed.ncbi.nlm.nih.gov', '사우나.test')]
+                            'browser': True, 'robots_reviewed_at': today} for h in ('approved.test', 'rebind.test', '127.0.0.1', '[::1]', '[::ffff:7f00:1]', '사우나.test')]
+        cfg['policies'].append({'origin': 'https://pubmed.ncbi.nlm.nih.gov', 'paths': ['/guides/'],
+                                'public': True, 'browser': True, 'robots_reviewed_at': today})
         # Unique public entry origins avoid pacing unrelated scenarios on one domain.
         cfg['policies'].extend({'origin': 'https://' + host, 'paths': ['/'], 'public': True,
                                'browser': True, 'robots_reviewed_at': today}
