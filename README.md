@@ -65,7 +65,7 @@ Serve the generated output locally, open affected pages at mobile and desktop
 widths, and check their internal links.
 
 ## Deploy
-Only the HANSET operations bot deploys (Cloudflare Pages direct upload). PRs must be merge-ready: release build clean, no secrets. Workers have no tokens.
+Only the HANSET operations bot deploys, through its external release entry point on the operations box: `python build_site.py --release` plus Pages Functions bundling for Cloudflare Pages project `hanset` (owner-authorized 2026-10-19, see [AGENTS.md](AGENTS.md)). No deploy script or CI deploy step lives in this repo. PRs must be merge-ready: release build clean, `leak check OK`, no secrets. Frontend workers have no tokens — use the local build, test and loopback preview commands above; never deploy from a worker.
 
 ## Independent local collector
 

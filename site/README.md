@@ -24,7 +24,7 @@ Restart the http.server after a rebuild (dist/ is recreated).
 - `functions/api/auth/google.js` + `functions/api/auth/callback/google.js` — Cloudflare Pages Functions, plain JS ES modules, no npm deps. `/join/` is a plain HTML form (GET `/api/auth/google`); the whole OAuth flow runs server-side, so the browser never talks to Google from our pages (CSP keeps `connect-src 'none'`, `form-action 'self' https://accounts.google.com` (Chrome applies form-action to the redirect)).
 - Pages secrets: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (optional `GOOGLE_REDIRECT_URI`; defaults to `https://hanset.soulbound.co.kr/api/auth/callback/google`). No secrets live in this repo.
 - D1 binding `DB` → database `hanset-members`; table in `schema.sql` (`members`). Repeat logins refresh email/name only — the original newsletter choice is kept.
-- Only the operations bot deploys: it bundles the functions with `npx wrangler pages functions build site/functions --outdir <tmp>` alongside `python build_site.py --release`. Per AGENTS.md there are no deploy scripts or CI in this repo, and frontend workers never hold Cloudflare tokens.
+- Only the HANSET operations bot deploys, through its external release entry point (release build + Pages Functions bundling run on the operations box; see ../README.md#deploy). Per AGENTS.md there are no deploy scripts or CI in this repo, and frontend workers never hold Cloudflare tokens.
 
 ## Placeholders to fill before launch
 Resolved 2026-10-18: contact is hanset@soulbound.co.kr only, effective date 2026-10-18, no operator info shown (owner decision).
