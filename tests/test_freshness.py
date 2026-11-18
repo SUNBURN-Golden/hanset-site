@@ -117,7 +117,7 @@ def test_legacy_feature_verified_event_creator_and_calendar(inventory, age):
     before = deepcopy(inventory)
     pages = render(inventory)
     assert_evidence(article(pages['/events/'], 'id="fixture-race"'), B.dot(checked), age, events[0]['url'])
-    feature = matching(pages['/hyrox-seoul/'], r'<p class="muted">.*?</p>', 'HYROX Korea')
+    feature = matching(pages['/hyrox-seoul/'], r'<p class="muted">.*?</p>', events[0]['source_label'])
     assert_evidence(feature, B.dot(checked), age, events[0]['url'])
     feed_card = article(pages['/events/'], 'id="v-fixture-feed"')
     assert_evidence(feed_card, B.dot(checked), age, feed['source_url'])
