@@ -49,9 +49,9 @@ def read_csv(name):
 def won(s): return "₩{:,}".format(int(s)) if s and s.strip().isdigit() else None
 def host(u): return urlparse(u).netloc.replace("www.", "")
 def ymd(s): return dt.date.fromisoformat(s)
-def dot(d): return d.strftime("%Y.%m.%d")
+def dot(d): return d.strftime("%Y.%m.%d") if d else "date not confirmed"
 def is_outdated(checked_on, today):
-    return (today - checked_on).days > STALE_DAYS
+    return checked_on is not None and (today - checked_on).days > STALE_DAYS
 
 def freshness(checked_on, today):
     return badge(OUTDATED, "badge-old") if checked_on and is_outdated(checked_on, today) else ""
@@ -197,7 +197,7 @@ def load(today):
             extra = [("CrossFit official affiliate list", r["cf_listing_url"])] if r["cf_listing_url"] and r["cf_listing_url"] != src else []
             addr = r["address"]
             kind_key = "box"; sunday = c.get("sunday") or {"yes": "yes", "no": "no"}.get(r["sunday_open"], "unk")
-            price = won(r["drop_in_price_krw"]); site = r["website"] or ""; book = r["booking_url"] or ""
+            csv_amount = won(r["drop_in_price_krw"]); site = r["website"] or ""; book = r["booking_url"] or ""
             chk = r.get("official_check_date", "")
             cf_ok = r.get("cf_official_check") == "yes" and bool(r.get("cf_official_url")); hy_ok = r.get("hyrox_official_check") == "yes" and bool(r.get("hyrox_official_url"))
             off = dict(date=chk, cf=r.get("cf_official_url", "") if cf_ok else "", hyrox=r.get("hyrox_official_url", "") if hy_ok else "")
@@ -208,23 +208,25 @@ def load(today):
             status = c["status"]
             src = r["source_url"]; extra = []; addr = ""
             kind_key = "sauna"; sunday = c.get("sunday") or "unk"; off = dict(date="", cf="", hyrox="")
-            price = won(r["price_krw"]); site = r["website"] or ""; book = ""
-        ptxt = price or PENDING
-        def fill(s): return s.replace("{price}", ptxt)
+            csv_amount = won(r["price_krw"]); site = r["website"] or ""; book = ""
         x = en.get(c["slug"])
         if x is None: sys.exit(f"ERROR: no English copy for {c['slug']} in venues_en.json")
         if len(x["facts"]) != len(c["facts"]): sys.exit(f"ERROR: English facts mismatch for {c['slug']}")
+        lv = parse_evidence_date(r["last_verified"])
+        evidence = dict(confidence=conf, source=src, last_verified=lv)
+        price, price_term, price_checked = resolve_headline_price(evidence, x["facts"], csv_amount, today)
+        ptxt = price or PENDING
+        def fill(s): return s.replace("{price}", ptxt)
         facts = [[k, en_fact(k, fill(v), en_only(x["location"]))] for k, v in x["facts"]]
         facts_ko = [[k, v] for k, v in c["facts"]]
-        lv = ymd(r["last_verified"])
-        v = dict(c=c, name=name, slug=c["slug"], kind_key=kind_key, kind=KIND_EN[c["kind"]], status=status, confidence=conf, title=en_only(x["title"]), title_ko=c["title"],
+        v = dict(c=c, name=name, slug=c["slug"], kind_key=kind_key, kind=KIND_EN[c["kind"]], status=status, title=en_only(x["title"]), title_ko=c["title"],
                  city=r["city"], city_ko=CITY_EN.get(r["city"], r["city"]), city_key=CITY_KEY.get(r["city"], r["city"].lower()),
                  location=en_only(x["location"]), location_ko=c["location"], area=x.get("area", ""), summary=x["summary"], facts=facts, facts_ko=facts_ko, tips=x.get("tips", []), unverified=[fill(u) for u in x.get("unverified", [])],
-                 tags=x.get("tags", []), price=price, price_label=x.get("price_label", "Price"),
-                 sunday=sunday, last_verified=lv, stale=is_outdated(lv, today), source=src, extra_sources=extra,
+                 tags=x.get("tags", []), price=price, price_term=price_term, price_checked=price_checked, price_label=x.get("price_label", "Price"),
+                 sunday=sunday, stale=is_outdated(lv, today), extra_sources=extra,
                  website=site, booking=book, address=addr, hyrox=c.get("hyrox") is True, pick=bool(c.get("pick")),
                  price_caveat=x.get("price_caveat", ""), sub=("box" if kind_key == "box" else (c.get("sub") or ("hotel" if "호텔" in c["kind"] else "boutique"))),
-                 flags=c.get("flags", {}), order=len(venues), off=off)
+                 flags=c.get("flags", {}), order=len(venues), off=off, **evidence)
         venues.append(v)
     for kind in rows:
         for name, r in rows[kind].items():
@@ -582,6 +584,9 @@ def fact_groups(v):
 
 
 EVIDENCE_DATE = r"\b(?:\d{4}[-.]\d{2}[-.]\d{2}|(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{1,2},?\s+\d{4}|\d{1,2}/\d{1,2}(?!/\d))\b"
+REPLY_CITATION = re.compile(
+    r"\((?:official page and )?(?:venue|hotel) reply\b[^()]*\)"
+    r"|(?:—|--)\s*(?:venue|hotel) reply\b[^\n()]*", re.I)
 
 def parse_evidence_date(value):
     """Yearless, invalid and ambiguous dates never acquire an invented check date."""
@@ -613,13 +618,18 @@ def citation_date(citations, marker):
     if dates and checked is None: text += " (date not confirmed)"
     return text, checked
 
+def fact_check_date(v, value):
+    # An explicit check marker must supply its own date, even if the venue has one.
+    if re.search(r"\bchecked\b", value, re.I):
+        return citation_date([value], r"\bchecked\b")
+    checked = v["last_verified"]
+    return dot(checked), checked
+
 def fact_provenance(v, value, today, *, link_claims=False):
     """A venue reply is not evidence available at the representative website."""
     if not value or value.startswith(UNKNOWN) or value.lower() in ("pending", "not confirmed", "not yet announced"):
         return ""
-    citations = re.findall(
-        r"\((?:official page and )?(?:venue|hotel) reply\b[^()]*\)"
-        r"|(?:—|--)\s*(?:venue|hotel) reply\b[^\n()]*", value, re.I)
+    citations = REPLY_CITATION.findall(value)
     if citations:
         # Dates outside an explicit reply citation may be closures or inquiry dates.
         checked_text, checked = citation_date(citations, r"(?:venue|hotel) reply\b")
@@ -629,14 +639,7 @@ def fact_provenance(v, value, today, *, link_claims=False):
                     f'Public source: {UNKNOWN} {freshness(checked, today)}</small>')
     status = evidence_status(v, value)
     label = {"fact": "Official source", "source_claim": "Source claim", "unverified": "Unconfirmed"}[status]
-    # An explicit "checked" marker claims independent verification, so its date is the
-    # evidence date; a missing/ambiguous one stays unconfirmed rather than inheriting the
-    # venue's age. Prose that merely contains "checked" without a date is treated the same
-    # way — published facts always pair the marker with a date (see the citation tests).
-    if re.search(r"\bchecked\b", value, re.I):
-        checked_text, checked = citation_date([value], r"\bchecked\b")
-    else:
-        checked, checked_text = v["last_verified"], dot(v["last_verified"])
+    checked_text, checked = fact_check_date(v, value)
     source = (f'<a href="{E(v["source"])}" rel="noopener noreferrer">{label} · {E(host(v["source"]))}</a>'
               if status == "fact" or (link_claims and status == "source_claim" and v["source"])
               else f'{label} · {E(host(v["source"]))}')
@@ -649,30 +652,36 @@ def fact_lines(rows, v, today):
                    f'{fact_provenance(v, display_value(v, k, val), today) if v else ""}</span>' for k, val in rows) or f'<span class="unk">Unconfirmed</span>'
 
 
-def price_numeric_provenance(v, context, today):
-    # The numeric is a sortable hint summarizing the price terms, so it inherits the
-    # evidence of the term(s) that actually state the amount — never the venue-wide
-    # badge. A reply / source-claim price must not be upgraded to "Official source"
-    # (rule 7); its dated evidence stays on the terms below. An official amount keeps
-    # its official provenance even when a sibling term (e.g. a reply discount) does not.
-    matched = [val for _, val in context if v["price"] in val]
-    if not matched:
-        return ""
-    rank = {"unverified": 0, "source_claim": 1, "fact": 2}
-    weakest = min(matched, key=lambda val: rank[evidence_status(v, val)])
-    if evidence_status(v, weakest) != "fact":
-        return ""
-    return fact_provenance(v, weakest, today)
+def is_price_context(key):
+    return key.startswith(("Price", "Drop-in")) or key in (
+        "Day pass", "Group session", "Open gym", "Traveler pass", "Trial", "Guest discount rate", "Jjimjil", "Jjimjil wear")
+
+
+def resolve_headline_price(v, raw_facts, csv_amount, today):
+    """Bind the CSV amount to the term designated by operations' price placeholder."""
+    pending = (None, None, None)
+    if not csv_amount:
+        return pending
+    terms = [(key, value) for key, value in raw_facts if "{price}" in value]
+    if len(terms) != 1 or not is_price_context(terms[0][0]):
+        return pending
+    _, raw_term = terms[0]
+    # The separate membership note in Signiel's guest price row describes another rate.
+    term = raw_term.removesuffix(" · Membership rates not listed").replace("{price}", csv_amount)
+    if evidence_status(v, term) != "fact" or REPLY_CITATION.search(term):
+        return pending
+    _, checked = fact_check_date(v, term)
+    if checked is None or checked > today:
+        return pending
+    return csv_amount, term, checked
 
 
 def price_html(v, today):
-    # The numeric CSV value is a sortable hint, not a replacement for the terms.
+    # The confirmed headline summarizes the full terms below.
     context = [(k, val) for k, val in v["facts"] if
-               (k.startswith("Price") or k.startswith("Drop-in") or k in
-                ("Day pass", "Group session", "Open gym", "Traveler pass", "Trial", "Guest discount rate", "Jjimjil", "Jjimjil wear"))
-               and val.strip() and val != PENDING]
+               is_price_context(k) and val.strip() and val != PENDING]
     numeric = (f'<div class="price"><span class="price-label">{E(v["price_label"])}:</span> '
-               f'<strong>{E(v["price"])}</strong></div>{cav(v)}{price_numeric_provenance(v, context, today)}') if v["price"] else ""
+               f'<strong>{E(v["price"])}</strong></div>{cav(v)}{fact_provenance(v, v["price_term"], today)}') if v["price"] else ""
     terms = fact_lines(context, v, today) if context else ("" if numeric else f'<span class="unk">Price: {UNKNOWN}</span>')
     return numeric + '<div class="price price-context">' + terms + '</div>'
 
@@ -748,7 +757,8 @@ def venue_contents(v, today):
             f'<p class="card-evidence">{fact_provenance(v, "Venue information", today, link_claims=True)}</p></div>')
 
 def venue_card(v, today):
-    attrs = (f'data-slug="{v["slug"]}" data-city="{v["city_key"]}" data-type="{v["kind_key"]}" data-sunday="{v["sunday"]}" data-price="{1 if v["price"] else 0}" data-cf="{1 if v["off"]["cf"] else 0}" data-hyrox="{1 if v["off"]["hyrox"] else 0}" data-sub="{v["sub"]}" data-order="{v["order"]}" data-date="{v["last_verified"].isoformat()}" data-title="{E(v["title"])}" '
+    checked = v["last_verified"].isoformat() if v["last_verified"] else ""
+    attrs = (f'data-slug="{v["slug"]}" data-city="{v["city_key"]}" data-type="{v["kind_key"]}" data-sunday="{v["sunday"]}" data-price="{1 if v["price"] else 0}" data-cf="{1 if v["off"]["cf"] else 0}" data-hyrox="{1 if v["off"]["hyrox"] else 0}" data-sub="{v["sub"]}" data-order="{v["order"]}" data-date="{checked}" data-title="{E(v["title"])}" '
              f'data-name="{E((v["title"] + " " + (v.get("name") or v["title"]) + " " + v["location"] + " " + v["area"] + " " + v["kind"] + " " + v["title_ko"] + " " + v["location_ko"]).lower())}"')
     return f'<article class="card venue-card" {attrs}>{venue_contents(v, today)}</article>'
 

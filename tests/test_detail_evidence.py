@@ -1,7 +1,9 @@
 """Evidence boundaries: no venue-level status upgrade, invented facilities or badges."""
 from copy import deepcopy
 import datetime as dt
+import json
 from pathlib import Path
+from shutil import copyfile
 import sys
 
 import pytest
@@ -225,17 +227,14 @@ def numeric_price_part(v, today):
     return B.price_html(v, today).split('<div class="price price-context">')[0]
 
 
-def test_reply_derived_numeric_price_never_claims_official_source(venues):
-    # sisu-house's price is venue-reply-only ("NOT on official page: price"); the
-    # venue-wide "official site" confidence must not upgrade the numeric hint.
+def test_reply_derived_price_stays_pending_on_card_and_headline(venues):
     today = dt.date(2026, 11, 3)
     sisu = venues['sisu-house']
     html = B.price_html(sisu, today)
-    numeric = numeric_price_part(sisu, today)
-    assert '₩79,000' in numeric
-    assert 'Official source' not in numeric
-    assert 'Official source' not in html
-    # The dated reply evidence is retained on the terms, not erased.
+    card = B.venue_card(sisu, today)
+    assert numeric_price_part(sisu, today) == ''
+    assert 'data-price="0"' in card and '₩79,000' not in card
+    assert '₩79,000' in html and 'Official source' not in html
     assert 'Venue reply · 2026-10-18' in html and 'Source claim' in html
 
 
@@ -247,21 +246,121 @@ def test_official_numeric_price_keeps_provenance_beside_a_reply_discount(venues)
     html = B.price_html(paradise, today)
     numeric = numeric_price_part(paradise, today)
     assert '₩55,000' in numeric and 'Official source' in numeric
+    assert 'Checked 2026.10.18' in numeric
+    assert f'href="{B.E(paradise["source"])}"' in numeric
+    card = B.venue_card(paradise, today)
+    assert 'data-price="1"' in card and '₩55,000' in card
     assert 'Venue reply · 2026-10-17' in html
     discount = next(val for key, val in paradise['facts'] if key == 'Guest discount rate')
     assert 'Official source' not in B.fact_provenance(paradise, discount, today)
 
 
-def test_numeric_price_does_not_show_a_conflicting_venue_check_date(venues):
-    # solo-sauna-repo's price is independently dated (checked Oct 22, 2026); the
-    # hint must not pair it with the venue's later last_verified as a second date.
+def test_unmatched_price_stays_pending_and_keeps_its_dated_claim(venues):
     today = dt.date(2026, 11, 3)
     repo = venues['solo-sauna-repo-noryangjin']
     html = B.price_html(repo, today)
-    numeric = numeric_price_part(repo, today)
-    assert '₩45,000' in numeric and 'Official source' not in numeric
-    assert 'Oct 22, 2026' in html
-    assert B.dot(repo['last_verified']) not in numeric
+    card = B.venue_card(repo, today)
+    assert numeric_price_part(repo, today) == ''
+    assert 'data-price="0"' in card and '₩45,000' not in card
+    assert '₩45,000' in html and 'Source claim' in html
+    assert 'Checked Oct 22, 2026' in html and B.dot(repo['last_verified']) not in html
+
+
+def test_signiel_guest_price_has_its_own_provenance(venues):
+    today = dt.date(2026, 11, 3)
+    signiel = venues['signiel-seoul']
+    numeric = numeric_price_part(signiel, today)
+    assert '₩44,000' in numeric and 'Official source' in numeric
+    assert 'Membership rates not listed' in B.price_html(signiel, today)
+
+
+@pytest.fixture
+def load_price_case(tmp_path, monkeypatch, venues):
+    def load(slug, terms, today, **csv_fields):
+        venue = venues[slug]
+        content = tmp_path / 'content'
+        content.mkdir()
+        for filename in ('ads.json', 'venues.json', 'events.json', 'events_en.json'):
+            copyfile(B.ROOT / 'content' / filename, content / filename)
+        english = json.loads((B.ROOT / 'content/venues_en.json').read_text(encoding='utf-8'))
+        english[slug]['facts'][:len(terms)] = terms
+        (content / 'venues_en.json').write_text(json.dumps(english), encoding='utf-8')
+        original_read = B.read_csv
+
+        def read_csv(filename):
+            rows = original_read(filename)
+            if filename == venue['c']['csv'] + '.csv':
+                row = next(row for row in rows if row['name'] == venue['name'])
+                row.update(csv_fields)
+            return rows
+
+        with monkeypatch.context() as patch:
+            patch.setattr(B, 'ROOT', tmp_path)
+            patch.setattr(B, 'read_csv', read_csv)
+            return next(v for v in B.load(today)[0] if v['slug'] == slug)
+
+    return load
+
+
+@pytest.mark.parametrize('age', [90, 91])
+def test_headline_date_and_evidence_are_independent_of_an_equal_reply_rate(load_price_case, age):
+    today = dt.date(2026, 11, 3)
+    checked = today - dt.timedelta(days=age)
+    v = load_price_case('grand-josun-busan', [
+        ('Price', f'Adult {{price}} (tax incl.) — official page, checked {checked}'),
+        ('Guest discount rate', f'₩55,000 — venue reply, {today}'),
+    ], today)
+    numeric = numeric_price_part(v, today)
+    assert v['price_checked'] == checked
+    assert '₩55,000' in numeric and 'Official source' in numeric
+    assert f'Checked {checked}' in numeric and B.dot(v['last_verified']) not in numeric
+    assert (B.OUTDATED in numeric) == (age > 90)
+    assert f'Venue reply · {today} · Source claim' in B.price_html(v, today)
+    assert 'data-price="1"' in B.venue_card(v, today)
+
+
+@pytest.mark.parametrize('terms,csv_fields', [
+    ([('Price', 'Adult ₩55,000')], {}),
+    ([('Price', 'Adult {price}'), ('Day pass', '{price}')], {}),
+    ([('Booking', 'Adult {price}')], {}),
+    ([('Price', 'Adult {price} — venue reply, 2026-10-18'), ('Day pass', '₩55,000')], {}),
+    ([('Price', 'Adult {price} (official page and hotel reply 2026-10-18)')], {}),
+    ([('Price', 'Adult {price} — third-party roundup')], {}),
+    ([('Price', 'Adult {price}')], {'source_url': 'https://blog.example.org/rates'}),
+    ([('Price', 'Adult {price} — official page, checked')], {}),
+    ([('Price', 'Adult {price} — official page, checked 10/18')], {}),
+    ([('Price', 'Adult {price} — official page, checked 2026-10-18 or 2026-10-19')], {}),
+    ([('Price', 'Adult {price} — official page, checked 2026-11-04')], {}),
+    ([('Price', 'Adult {price}')], {'last_verified': '2026-11-04'}),
+    ([('Price', 'Adult {price}')], {'last_verified': ''}),
+])
+def test_unqualified_headline_is_pending_after_load(load_price_case, terms, csv_fields):
+    today = dt.date(2026, 11, 3)
+    v = load_price_case('grand-josun-busan', terms, today, **csv_fields)
+    card = B.venue_card(v, today)
+    assert v['price'] is v['price_term'] is v['price_checked'] is None
+    assert 'data-price="0"' in card and 'price-short' not in card
+    assert numeric_price_part(v, today) == ''
+
+
+def test_partial_box_stays_pending_with_an_official_sounding_term(load_price_case):
+    today = dt.date(2026, 11, 3)
+    v = load_price_case('crossfit-grove-gunja', [
+        ('Drop-in, single', '{price} — official source: venue site, checked 2026-10-18'),
+    ], today)
+    assert v['price'] is None
+    assert 'data-price="0"' in B.venue_card(v, today)
+    assert numeric_price_part(v, today) == ''
+
+
+def test_price_can_use_the_venue_check_date(venues):
+    today = dt.date(2026, 11, 3)
+    v = venues['grand-josun-busan']
+    numeric = numeric_price_part(v, today)
+    assert v['price_checked'] == v['last_verified']
+    assert '₩55,000' in numeric and 'Official source' in numeric
+    assert f'Checked {B.dot(v["last_verified"])}' in numeric
+    assert 'data-price="1"' in B.venue_card(v, today)
 
 
 @pytest.mark.parametrize('age', [90, 91, 0, -1])
