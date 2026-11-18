@@ -140,7 +140,7 @@ class Explorer(unittest.TestCase):
     def test_prices_preserve_all_original_terms_even_with_numeric_price(self):
         for v in self.venues:
             for key, value in v['facts']:
-                if key.startswith(('Price', 'Drop-in')) and value.strip():
+                if B.is_price_context(key) and value.strip() and value != B.PENDING:
                     self.assertIn(B.E(B.display_value(v, key, value)), B.price_html(v, self.today), v['slug'])
             if v['price']:
                 self.assertIn(B.E(v['price']), B.price_html(v, self.today))
@@ -154,7 +154,7 @@ class Explorer(unittest.TestCase):
         self.assertIn('Family room, 2 people', page)
         # List cards are headline-only (PR #62): full terms live on the venue page.
         for output in (B.venue_card(repo, self.today), B.venue_contents(repo, self.today)):
-            self.assertIn(B.price_short(repo), output)
+            self.assertNotIn('class="price-short"', output)
             self.assertNotIn(B.E(terms), output)
 
     def test_access_age_time_tattoo_and_provenance_remain_verbatim(self):
@@ -370,7 +370,8 @@ class Explorer(unittest.TestCase):
         page = self.site.pages['/finder/']
         elements = Elements(page).elements
         payload = {'script': (ROOT / 'site/static/js/finder.js').read_text(),
-                   'elements': elements}
+                   'elements': elements,
+                   'confirmedSlugs': sorted(v['slug'] for v in self.venues if v['price'])}
         run = subprocess.run(['node', '-e', JS_CHECKS], input=json.dumps(payload), text=True, capture_output=True, timeout=20)
         self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
         self.assertIn('interaction checks OK', run.stdout)
@@ -467,6 +468,12 @@ const titles = s.ids['finder-list'].children.map(c => c.dataset.title);
 assert.deepEqual(titles, titles.slice().sort((a,b) => a.localeCompare(b, 'en')));
 s.reset();
 assert.deepEqual(s.ids['finder-list'].children, s.cards);
+const priced = boot('?price=1');
+assert.equal(priced.ids['f-price'].checked, true);
+assert.deepEqual(priced.visible().map(c => c.dataset.slug).sort(), input.confirmedSlugs);
+priced.reset();
+assert.deepEqual(priced.visible(), priced.cards);
+assert.equal(priced.location.search, '');
 const restored = boot('?city=seoul&type=sauna&price=1&sort=date');
 assert.equal(restored.visible().length, restored.cards.filter(c => c.dataset.city === 'seoul' && c.dataset.type === 'sauna' && c.dataset.price === '1').length);
 assert.equal(restored.ids['f-more-count'].textContent, '(2 applied)');

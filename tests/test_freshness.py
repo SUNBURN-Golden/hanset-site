@@ -23,7 +23,8 @@ def inventory(monkeypatch):
              last_verified=TODAY, stale=True, hyrox=True, c={"kind": "호텔 사우나"}, extra_sources=[],
              facts=[('Price', 'Adult ₩24,000'), ('Hours', 'Daily 06:00–22:00'),
                     ('Facilities', 'Dry sauna and cold bath 12°C')],
-             price='₩24,000', price_label='Adult', price_caveat='Check before you go.',
+             price='₩24,000', price_term='Adult ₩24,000', price_checked=TODAY,
+             price_label='Adult', price_caveat='Check before you go.',
              tips=['Bring swimwear.'], unverified=['Future booking not confirmed.'],
              off={'date': '', 'cf': '', 'hyrox': ''})
     box = deepcopy(v)
@@ -76,7 +77,7 @@ def test_venue_cards_detail_groups_checklists_and_guides(inventory, age):
     venues, *_ = inventory
     checked = TODAY - dt.timedelta(days=age)
     for v in venues:
-        v['last_verified'] = checked
+        v['last_verified'] = v['price_checked'] = checked
         v['stale'] = age <= 90  # a cached flag must never control a later render
     before = deepcopy(inventory)
     pages = render(inventory)
