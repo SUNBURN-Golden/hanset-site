@@ -77,22 +77,42 @@ def policy_path(value):
     return quote(unicodedata.normalize('NFKC', unquote(unquote(value))), safe="/:@!$&'()*+,;=-._~")
 
 
+def _origin_key(url):
+    host = (url.hostname or '').lower().rstrip('.').encode('idna').decode('ascii')
+    return url.scheme, host, url.port or 443
+
+
+def _review_is_fresh(policy, now):
+    reviewed = dt.date.fromisoformat(policy['robots_reviewed_at'])
+    # Operators date robots reviews in KST.
+    today = dt.datetime.fromtimestamp(time.time() if now is None else now,
+                                      dt.timezone(dt.timedelta(hours=9))).date()
+    return 0 <= (today - reviewed).days <= 90
+
+
+def browser_policy_for_origin(cfg, origin, now=None):
+    """Check eligibility to register browser consent for a canonical HTTPS origin."""
+    key = _origin_key(urlsplit(origin))
+    reason = 'access_not_approved'
+    for p in cfg['policies']:
+        if _origin_key(urlsplit(p['origin'])) == key and p.get('public') and p.get('browser'):
+            if _review_is_fresh(p, now):
+                return p
+            reason = 'robots_review_stale'
+    raise Rejected(reason)
+
+
 def policy_for(cfg, url, browser=False, now=None, required=True):
     from .privacy_filter import safe_url
-    url = safe_url(url)
-    u = urlsplit(url)
+    u = urlsplit(safe_url(url))
+    key = _origin_key(u)
     for p in cfg['policies']:
-        origin = urlsplit(p['origin'])
-        host = (origin.hostname or '').lower().rstrip('.').encode('idna').decode('ascii')
         paths = [policy_path(x) for x in p['paths']]
-        if (origin.scheme, host, origin.port or 443) == (u.scheme, u.hostname, u.port or 443) and any(
+        if _origin_key(urlsplit(p['origin'])) == key and any(
                 u.path == x or u.path.startswith(x if x.endswith('/') else x + '/') for x in paths):
             if not p.get('public') or (browser and not p.get('browser')):
                 break
-            reviewed = dt.date.fromisoformat(p['robots_reviewed_at'])
-            # Operators date robots reviews in KST; a UTC date rejected same-morning reviews before 09:00 KST.
-            today = dt.datetime.fromtimestamp(time.time() if now is None else now, dt.timezone(dt.timedelta(hours=9))).date()
-            if not 0 <= (today - reviewed).days <= 90:
+            if not _review_is_fresh(p, now):
                 if required:
                     raise Rejected('robots_review_stale')
                 return {}

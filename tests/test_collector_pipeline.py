@@ -2,6 +2,7 @@
 import copy
 import datetime as dt
 import hashlib
+from http.server import HTTPServer
 import json
 import os
 from pathlib import Path
@@ -16,6 +17,7 @@ import threading
 import unittest
 from unittest.mock import patch
 from crawler.config import Rejected, REPO, external_path, load
+from crawler.intake import handler
 from crawler.local_worker import Worker, uid
 from crawler.store import Store
 from crawler.schema import STAGES, FOREIGNER_KEYS
@@ -27,6 +29,10 @@ from crawler.report import report
 from crawler.legacy import report as legacy_report
 
 NOW = dt.datetime(2026, 10, 23, 3, tzinfo=dt.timezone.utc).timestamp()
+SOURCE_ORIGIN = 'https://source.test'
+EXTENSION = 'chrome-extension://approved'
+OTHER_EXTENSION = 'chrome-extension://other'
+DENIED_GUIDE_PATHS = ('/', '/guides-extra/public', '/guides/private/rates')
 
 
 def dns_answers(addresses):
@@ -95,6 +101,230 @@ class Pipeline(unittest.TestCase):
 
     def record(self, rid):
         return json.loads(self.store.db.execute('SELECT data FROM records WHERE id=?', (rid,)).fetchone()[0])
+
+    def post(self, path, data, extension=EXTENSION):
+        with HTTPServer(('127.0.0.1', 0), handler(self.w)) as server:
+            client = http.client.HTTPConnection('127.0.0.1', server.server_port, timeout=2)
+            try:
+                client.request('POST', path, json.dumps(data),
+                               {'Origin': extension, 'Content-Type': 'application/json'})
+                server.handle_request()
+                response = client.getresponse()
+                return response.status, json.loads(response.read())
+            finally:
+                client.close()
+
+    def guide_policy(self):
+        self.cfg['extension_origins'] = [EXTENSION, OTHER_EXTENSION]
+        policy = self.cfg['policies'][0]
+        policy.update(paths=['/guides/'], disallow=['/guides/private/'])
+        return policy
+
+    def test_grant_registers_guides_origin_and_submission_checks_exact_paths(self):
+        self.guide_policy()
+        self.assertEqual(self.post('/grant', {'origin': SOURCE_ORIGIN, 'enabled': False}),
+                         (200, {'enabled': False}))
+        self.assertEqual(self.store.db.execute('SELECT count(*) FROM grants').fetchone()[0], 0)
+        self.assertEqual(self.post('/grant', {'origin': SOURCE_ORIGIN, 'enabled': True}),
+                         (200, {'enabled': True}))
+        for path in DENIED_GUIDE_PATHS:
+            with self.subTest(path=path):
+                self.assertEqual(self.post('/submit', {'url': SOURCE_ORIGIN + path}),
+                                 (409, {'reason': 'access_not_approved'}))
+        self.assertEqual(self.store.db.execute('SELECT count(*) FROM records').fetchone()[0], 0)
+
+        url = SOURCE_ORIGIN + '/guides/public'
+        status, result = self.post('/submit', {'url': url})
+        self.assertEqual(status, 200)
+        record = self.record(result['record_id'])
+        self.assertEqual((record['url'], record['channel'], record['extension_origin']),
+                         (url, 'browser_extract', EXTENSION))
+
+    def test_grant_requires_canonical_origin_and_json_boolean(self):
+        self.guide_policy()
+        self.assertEqual(self.post('/grant', {'origin': SOURCE_ORIGIN, 'enabled': True}),
+                         (200, {'enabled': True}))
+        for origin in (SOURCE_ORIGIN + '/guides/', SOURCE_ORIGIN + '/', SOURCE_ORIGIN + '?',
+                       SOURCE_ORIGIN + '#', SOURCE_ORIGIN + ':443', 'https://SOURCE.test',
+                       SOURCE_ORIGIN.replace('https:', 'http:'), None):
+            with self.subTest(origin=origin):
+                self.assertEqual(self.post('/grant', {'origin': origin, 'enabled': False})[0], 409)
+        for enabled in ('false', 0, 1, None):
+            with self.subTest(enabled=enabled):
+                self.assertEqual(self.post('/grant', {'origin': SOURCE_ORIGIN, 'enabled': enabled}),
+                                 (409, {'reason': 'invalid_grant_enabled'}))
+        self.assertEqual(self.post('/grant', {'origin': SOURCE_ORIGIN})[0], 400)
+        self.assertTrue(self.w.browser_grant_enabled(self.store.db, SOURCE_ORIGIN, EXTENSION))
+
+    def test_guide_grant_keeps_redirects_and_resources_within_exact_path_policy(self):
+        self.guide_policy()
+        url = SOURCE_ORIGIN + '/guides/public'
+        self.assertEqual(self.post('/grant', {'origin': SOURCE_ORIGIN, 'enabled': True})[0], 200)
+        self.assertEqual(self.post('/submit', {'url': url})[0], 200)
+        res = self.w.reserve(uid(), url, uid(), 'browser_extract')
+        self.w.begin(res)
+        gate = NetworkGate(self.w, res)
+        with patch('crawler.consent.require') as consent, \
+                patch('crawler.network_gate.public_addresses', return_value=['93.184.216.34']) as dns, \
+                patch('crawler.network_gate.PinnedTLS') as tls:
+            tls.return_value.getresponse.return_value = MemoryResponse()
+            self.assertEqual(gate.request(url, browser=True)['status'], 200)
+            consent.assert_called_once_with(self.w, res, SOURCE_ORIGIN)
+            dns.assert_called_once_with('source.test')
+            self.assertEqual(tls.return_value.request.call_args.args[:2], ('GET', '/guides/public'))
+            for path in DENIED_GUIDE_PATHS:
+                with self.subTest(path=path):
+                    self.now += 5
+                    for mock in (consent, dns, tls):
+                        mock.reset_mock()
+                    for resource_type in ('script', 'fetch'):
+                        with self.assertRaisesRegex(Rejected, '^access_not_approved$'):
+                            gate.request(SOURCE_ORIGIN + path, resource_type=resource_type, browser=True)
+                    consent.assert_not_called()
+                    dns.assert_not_called()
+                    tls.assert_not_called()
+
+                    response = MemoryResponse(status=302)
+                    response.getheader = lambda key, default=None: path if key == 'Location' else default
+                    tls.return_value.getresponse.return_value = response
+                    with self.assertRaisesRegex(Rejected, '^access_not_approved$'):
+                        gate.request(url, browser=True)
+                    consent.assert_called_once_with(self.w, res, SOURCE_ORIGIN)
+                    dns.assert_called_once_with('source.test')
+                    tls.assert_called_once()
+                    self.assertEqual(tls.return_value.request.call_args.args[:2], ('GET', '/guides/public'))
+        self.w.revoke(res)
+
+    def test_stale_or_removed_approval_still_allows_grant_revocation(self):
+        policy = self.guide_policy()
+        fresh_review = policy['robots_reviewed_at']
+        url = SOURCE_ORIGIN + '/guides/public'
+        for state, reason in (('reserved', 'robots_review_stale'), ('running', 'access_not_approved')):
+            with self.subTest(state=state, reason=reason):
+                self.assertEqual(self.post('/grant', {'origin': SOURCE_ORIGIN, 'enabled': True})[0], 200)
+                self.assertEqual(self.post('/submit', {'url': url})[0], 200)
+                res = self.w.reserve(uid(), url, uid(), 'browser_extract')
+                if state == 'running':
+                    self.w.begin(res)
+                    self.store.db.execute('INSERT INTO requests VALUES (?,?,?,?,?,?)',
+                                          (uid(), res['id'], res['generation'], res['domain'], 'active', self.now))
+                    self.cfg['policies'].remove(policy)
+                else:
+                    policy['robots_reviewed_at'] = (dt.date.fromisoformat(fresh_review) - dt.timedelta(days=91)).isoformat()
+                enable = {'origin': SOURCE_ORIGIN, 'enabled': True}
+                disable = {**enable, 'enabled': False}
+                self.assertEqual(self.post('/grant', enable), (409, {'reason': reason}))
+                self.assertEqual(self.post('/submit', {'url': url}), (409, {'reason': reason}))
+                with patch('crawler.network_gate.public_addresses') as dns, patch('crawler.network_gate.PinnedTLS') as tls:
+                    with self.assertRaisesRegex(Rejected, f'^{reason}$'):
+                        NetworkGate(self.w, res).request(url, browser=True)
+                    dns.assert_not_called()
+                    tls.assert_not_called()
+                self.assertEqual(self.post('/grant', disable, OTHER_EXTENSION), (200, {'enabled': False}))
+                self.assertTrue(self.w.browser_grant_enabled(self.store.db, SOURCE_ORIGIN, EXTENSION))
+                self.assertEqual(self.w.status(res)['state'], state)
+
+                drain = self.w.supervisor.drain
+                def check_drain(job):
+                    self.assertFalse(self.store.db.in_transaction)
+                    self.assertFalse(self.w.browser_grant_enabled(self.store.db, SOURCE_ORIGIN, EXTENSION))
+                    self.assertEqual(self.w.status(job)['state'], 'revoking')
+                    return drain(job)
+                with patch.object(self.w.supervisor, 'drain', side_effect=check_drain) as delegated:
+                    self.assertEqual(self.post('/grant', disable), (200, {'enabled': False}))
+                    self.assertEqual(self.post('/grant', disable), (200, {'enabled': False}))
+                    delegated.assert_called_once()
+                if state == 'running':
+                    self.assertEqual(self.w.status(res)['state'], 'revoking')
+                    self.assertEqual(self.store.db.execute('SELECT owner FROM domains WHERE host=?',
+                                                          (res['domain'],)).fetchone()[0], res['id'])
+                    self.store.db.execute("UPDATE requests SET state='closed' WHERE reservation_id=?", (res['id'],))
+                    self.w.supervisor.expire()
+                    self.cfg['policies'].append(policy)
+                else:
+                    policy['robots_reviewed_at'] = fresh_review
+                self.assertEqual(self.w.status(res)['state'], 'drained')
+                self.assertIsNone(self.store.db.execute('SELECT owner FROM domains WHERE host=?',
+                                                        (res['domain'],)).fetchone()[0])
+                with self.assertRaisesRegex(Rejected, '^permission_not_granted$'):
+                    self.w.reserve(uid(), url, uid(), 'browser_extract')
+                with patch('crawler.consent.require') as consent:
+                    self.assertFalse(self.w.once())
+                    consent.assert_not_called()
+
+    def test_withdrawal_after_live_consent_prevents_new_reservation(self):
+        self.guide_policy()
+        url = SOURCE_ORIGIN + '/guides/public'
+        self.assertEqual(self.post('/grant', {'origin': SOURCE_ORIGIN, 'enabled': True})[0], 200)
+        self.assertEqual(self.post('/submit', {'url': url})[0], 200)
+
+        def withdraw(worker, record, origin):
+            self.assertEqual(self.post('/grant', {'origin': origin, 'enabled': False}),
+                             (200, {'enabled': False}))
+
+        with patch('crawler.consent.require', side_effect=withdraw) as consent:
+            self.assertFalse(self.w.once())
+            consent.assert_called_once()
+        self.assertEqual(self.store.db.execute('SELECT count(*) FROM reservations').fetchone()[0], 0)
+        self.assertEqual(self.store.db.execute('SELECT sum(attempts) FROM counters').fetchone()[0], 0)
+
+    def test_revocation_leaves_other_jobs_and_binds_network_consent_to_reservation(self):
+        policy = self.guide_policy()
+        enable = {'origin': SOURCE_ORIGIN, 'enabled': True}
+        disable = {**enable, 'enabled': False}
+        url = SOURCE_ORIGIN + '/guides/public'
+        other_source = 'https://other.test'
+        other_url = other_source + '/guides/public'
+        self.cfg['policies'].append({**policy, 'origin': other_source})
+        self.assertEqual(self.post('/grant', {**enable, 'origin': other_source})[0], 200)
+        self.assertEqual(self.post('/submit', {'url': other_url})[0], 200)
+        other_job = self.w.reserve(uid(), other_url, uid(), 'browser_extract')
+
+        self.assertEqual(self.post('/grant', enable, OTHER_EXTENSION)[0], 200)
+        self.assertEqual(self.post('/submit', {'url': url}, OTHER_EXTENSION)[0], 200)
+        job = self.w.reserve(uid(), url, uid(), 'browser_extract')
+        self.w.begin(job)
+        self.assertEqual(self.post('/grant', enable)[0], 200)
+        self.assertEqual(self.post('/submit', {'url': url})[0], 200)
+        self.assertEqual(self.record(job['record_id'])['extension_origin'], EXTENSION)
+        with patch('crawler.consent.require') as consent, patch('crawler.network_gate.public_addresses') as dns:
+            with self.assertRaisesRegex(Rejected, '^permission_revoked$'):
+                NetworkGate(self.w, job).request(url, browser=True)
+            consent.assert_not_called()
+            dns.assert_not_called()
+        self.assertEqual(self.post('/grant', disable), (200, {'enabled': False}))
+        self.assertEqual(self.w.status(job)['state'], 'running')
+        self.assertEqual(self.w.status(other_job)['state'], 'reserved')
+        self.w.revoke(job)
+        self.w.revoke(other_job)
+
+        for channel in ('manual_clip', 'auto_discovery', 'browser_extract'):
+            with self.subTest(channel=channel):
+                self.assertEqual(self.post('/grant', enable)[0], 200)
+                # Manual clipping can share the same record as an extension browser job.
+                job = self.start(url if channel == 'manual_clip' else SOURCE_ORIGIN + '/guides/autonomous', channel)
+                self.assertEqual(self.post('/grant', disable), (200, {'enabled': False}))
+                self.assertEqual(self.w.status(job)['state'], 'running')
+                self.w.revoke(job)
+
+    def test_existing_reservations_keep_extension_attribution_after_database_upgrade(self):
+        self.guide_policy()
+        url = SOURCE_ORIGIN + '/guides/public'
+        self.assertEqual(self.post('/grant', {'origin': SOURCE_ORIGIN, 'enabled': True})[0], 200)
+        self.assertEqual(self.post('/submit', {'url': url})[0], 200)
+        res = self.w.reserve(uid(), url, uid(), 'browser_extract')
+        manual = self.start('https://blog.test/a')
+        record = self.record(manual['record_id'])
+        self.w._save(self.store.db, {**record, 'extension_origin': EXTENSION})
+        self.store.db.execute('ALTER TABLE reservations DROP COLUMN extension_origin')
+        upgraded = Store(self.store.path)
+        self.addCleanup(upgraded.close)
+        worker = Worker(upgraded, self.cfg, lambda: self.now)
+        self.assertEqual(worker.status(res)['extension_origin'], EXTENSION)
+        self.assertIsNone(worker.status(manual)['extension_origin'])
+        worker.revoke_browser_grant(SOURCE_ORIGIN, EXTENSION)
+        self.assertEqual(worker.status(res)['state'], 'drained')
+        self.assertEqual(worker.status(manual)['state'], 'running')
 
     def test_unicode_requests_are_ascii_in_http_and_browser_gates(self):
         from urllib.parse import quote
@@ -717,11 +947,12 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(self.store.db.execute('SELECT count(*) FROM consent_checks').fetchone()[0], 0)
 
     def test_unavailable_permission_responder_cannot_open_dns_or_socket(self):
-        r = self.start(channel='browser_extract')
-        record = self.record(r['record_id'])
-        record['extension_origin'] = 'chrome-extension://approved'
-        self.w._save(self.store.db, record)
-        self.store.db.execute('INSERT INTO grants VALUES (?,?,?)', ('https://source.test', record['extension_origin'], 1))
+        self.guide_policy()
+        url = SOURCE_ORIGIN + '/guides/public'
+        self.assertEqual(self.post('/grant', {'origin': SOURCE_ORIGIN, 'enabled': True})[0], 200)
+        self.assertEqual(self.post('/submit', {'url': url})[0], 200)
+        r = self.w.reserve(uid(), url, uid(), 'browser_extract')
+        self.w.begin(r)
         gate = NetworkGate(self.w, r)
         with patch('crawler.consent.require', side_effect=Rejected('permission_check_unavailable')), patch('crawler.network_gate.public_addresses') as dns:
             with self.assertRaisesRegex(Rejected, 'permission_check_unavailable'):
@@ -794,6 +1025,27 @@ class Safety(unittest.TestCase):
                 with self.assertRaisesRegex(Rejected, 'robots_review_stale'):
                     worker.reserve(uid(), 'https://source.test/kr', uid(), 'auto_discovery')
             finally: store.close()
+
+    def test_browser_origin_eligibility_uses_normalized_origin_and_kst_review_age(self):
+        from crawler.config import browser_policy_for_origin
+        now = dt.datetime(2026, 10, 22, 16, tzinfo=dt.timezone.utc).timestamp()
+        cfg = config()
+        origin = 'https://' + '사우나.test'.encode('idna').decode('ascii')
+        policy = {**cfg['policies'][0], 'origin': 'https://사우나.test.:443', 'paths': ['/guides/']}
+        reviewed = dt.date(2026, 10, 23)
+        cfg['policies'] = [{**policy, 'robots_reviewed_at': '2026-01-01'}, policy]
+        for age in (-1, 0, 90, 91):
+            with self.subTest(age=age):
+                policy['robots_reviewed_at'] = (reviewed - dt.timedelta(days=age)).isoformat()
+                if 0 <= age <= 90:
+                    self.assertIs(browser_policy_for_origin(cfg, origin, now), policy)
+                else:
+                    with self.assertRaisesRegex(Rejected, '^robots_review_stale$'):
+                        browser_policy_for_origin(cfg, origin, now)
+        for flag in ('public', 'browser'):
+            cfg['policies'] = [{**policy, 'robots_reviewed_at': reviewed.isoformat(), flag: False}]
+            with self.subTest(flag=flag), self.assertRaisesRegex(Rejected, '^access_not_approved$'):
+                browser_policy_for_origin(cfg, origin, now)
 
     def test_external_config_can_extend_but_never_remove_exclusions(self):
         with tempfile.TemporaryDirectory() as t:

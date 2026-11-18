@@ -115,13 +115,10 @@ class NetworkGate:
             raise Rejected('request_not_allowed')
         url = safe_url(url)
         policy = policy_for(w.cfg, url, browser, now=w.clock())
-        import json
-        record = json.loads(w.store.db.execute('SELECT data FROM records WHERE id=?', (res['record_id'],)).fetchone()[0])
-        if record.get('extension_origin'):
-            origin = 'https://' + urlsplit(res['url']).netloc
-            grant = w.store.db.execute('SELECT enabled FROM grants WHERE origin=? AND extension_origin=?', (origin, record['extension_origin'])).fetchone()
-            if not grant or not grant[0]:
-                raise Rejected('permission_revoked')
+        extension_origin = res.get('extension_origin')
+        origin = 'https://' + urlsplit(res['url']).netloc
+        if extension_origin and not w.browser_grant_enabled(w.store.db, origin, extension_origin):
+            raise Rejected('permission_revoked')
         host = urlsplit(url).hostname
         delay = max(w.cfg['min_interval'], float(policy.get('crawl_delay', 0)))
         # Waiting never holds a SQLite transaction. Recheck authority afterwards.
@@ -131,18 +128,15 @@ class NetworkGate:
             if w.clock() + wait >= res['expires']:
                 raise Rejected('lease_too_short')
             time.sleep(wait)
-        if record.get('extension_origin'):
+        if extension_origin:
             from .consent import require
-            require(w, record, 'https://' + urlsplit(url).netloc)
+            require(w, res, 'https://' + urlsplit(url).netloc)
         ips = public_addresses(host)
         request_id, conn, response = str(uuid.uuid4()), None, None
         with w.store.transaction() as db:
             row = current(db, res, w.clock(), running=True)
-            if record.get('extension_origin'):
-                grant = db.execute('SELECT enabled FROM grants WHERE origin=? AND extension_origin=?',
-                                   ('https://' + urlsplit(res['url']).netloc, record['extension_origin'])).fetchone()
-                if not grant or not grant[0]:
-                    raise Rejected('permission_revoked')
+            if extension_origin and not w.browser_grant_enabled(db, origin, extension_origin):
+                raise Rejected('permission_revoked')
             if row['request_count'] >= w.cfg['max_requests']:
                 raise Rejected('request_budget_exhausted')
             db.execute('INSERT OR IGNORE INTO domains(host) VALUES (?)', (host,))

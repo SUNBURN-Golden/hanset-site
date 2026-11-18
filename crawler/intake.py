@@ -2,7 +2,8 @@
 import json
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlsplit
-from .config import Rejected, policy_for
+from .config import Rejected, browser_policy_for_origin, policy_for
+from .privacy_filter import safe_url
 
 MAX_BODY = 64000
 
@@ -62,26 +63,29 @@ def handler(worker):
                     from .consent import exchange
                     result = exchange(worker, self.headers['Origin'], value.get('answers', []))
                 elif self.path == '/grant':
-                    origin = value['origin']
-                    policy_for(worker.cfg, origin + '/', browser=True, now=worker.clock())
-                    enabled = value.get('enabled') is True
-                    worker.store.db.execute('INSERT OR REPLACE INTO grants VALUES (?,?,?)', (origin, self.headers['Origin'], int(enabled)))
-                    if not enabled:
-                        for row in worker.store.db.execute("SELECT * FROM reservations WHERE channel='browser_extract' AND state IN ('reserved','running')").fetchall():
-                            if row['url'].startswith(origin + '/'):
-                                worker.revoke(dict(row))
+                    origin, enabled = value['origin'], value['enabled']
+                    if not isinstance(origin, str) or safe_url(origin) != origin + '/':
+                        raise Rejected('invalid_grant_origin')
+                    if type(enabled) is not bool:
+                        raise Rejected('invalid_grant_enabled')
+                    extension_origin = self.headers['Origin']
+                    if enabled:
+                        browser_policy_for_origin(worker.cfg, origin, now=worker.clock())
+                        worker.store.db.execute('INSERT OR REPLACE INTO grants VALUES (?,?,1)', (origin, extension_origin))
+                    else:
+                        worker.revoke_browser_grant(origin, extension_origin)
                     result = {'enabled': enabled}
                 elif self.path == '/submit':
                     url = value['url']
                     origin = 'https://' + urlsplit(url).netloc
-                    grant = worker.store.db.execute('SELECT enabled FROM grants WHERE origin=? AND extension_origin=?', (origin, self.headers['Origin'])).fetchone()
-                    if not grant or not grant[0]:
-                        raise Rejected('permission_not_granted')
-                    policy_for(worker.cfg, url, browser=True, now=worker.clock())
-                    rid = worker.candidate(url, channel='browser_extract')
+                    extension_origin = self.headers['Origin']
                     with worker.store.transaction() as db:
+                        if not worker.browser_grant_enabled(db, origin, extension_origin):
+                            raise Rejected('permission_not_granted')
+                        policy_for(worker.cfg, url, browser=True, now=worker.clock())
+                        rid = worker.candidate(url, channel='browser_extract', db=db)
                         record = json.loads(db.execute('SELECT data FROM records WHERE id=?', (rid,)).fetchone()[0])
-                        record['extension_origin'] = self.headers['Origin']
+                        record['extension_origin'] = extension_origin
                         record['channel'] = 'browser_extract'
                         record['recheck_requested'] = True
                         worker._save(db, record)

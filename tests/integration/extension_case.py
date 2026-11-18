@@ -2,14 +2,12 @@
 
 Xvfb/xdotool drive the browser's actual optional-host permission prompt.
 """
-import copy
 import http.server
 import json
 from pathlib import Path
 import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from playwright.sync_api import sync_playwright
@@ -21,6 +19,9 @@ from crawler.store import Store
 
 def run(config_path, temp):
     cfg = load(config_path)
+    source_origin = 'https://pubmed.ncbi.nlm.nih.gov'
+    guide_base = source_origin + '/guides/'
+    grant_key = 'grant:' + source_origin
     cases = [case for case in json.loads((REPO / 'tests/fixtures/minimal_regions.json').read_text())
              if not case.get('http_only')]
     state = Path(temp) / 'extension.sqlite3'
@@ -63,7 +64,7 @@ def run(config_path, temp):
         extension_origin = worker.url.rsplit('/', 1)[0]
         cfg['extension_origins'] = [extension_origin]
         popup = context.new_page(); popup.goto(extension_origin + '/popup.html')
-        popup.select_option('#origin', 'https://pubmed.ncbi.nlm.nih.gov')
+        popup.select_option('#origin', source_origin)
         # Denying the actual permission dialog must stop before any intake job.
         popup.click('#approve')
         popup.wait_for_timeout(1500)
@@ -79,7 +80,7 @@ def run(config_path, temp):
         popup.wait_for_timeout(700)
         assert worker.evaluate("chrome.permissions.contains({origins:['http://127.0.0.1/*','https://pubmed.ncbi.nlm.nih.gov/*']})")
         page = context.new_page()
-        page.goto('https://pubmed.ncbi.nlm.nih.gov/manual-one')
+        page.goto(guide_base + 'manual-one')
         page.bring_to_front()
         # Offline: a real scripting API reads URL metadata only, never the region.
         job = worker.evaluate("handle({action:'clip'})")
@@ -108,7 +109,7 @@ def run(config_path, temp):
         assert stats() == (1, 1), 'restart must not reserve or extract again'
         assert all(j['state'] == 'acked' for j in popup.evaluate("chrome.storage.local.get('jobs').then(o=>o.jobs)").values())
         # Lost begin response leaves no extracted payload, including after real termination.
-        page.goto('https://pubmed.ncbi.nlm.nih.gov/manual-two'); page.bring_to_front()
+        page.goto(guide_base + 'manual-two'); page.bring_to_front()
         control['drop_begin'] = True
         job = popup.evaluate("chrome.runtime.sendMessage({action:'clip'})")
         assert job['state'] == 'uncertain'
@@ -116,9 +117,11 @@ def run(config_path, temp):
         stop_extension_worker()
         popup.evaluate("chrome.runtime.sendMessage({action:'resume'})")
         assert stats() == (2, 1)
-        # Real host permission withdrawal triggers the durable grant revocation path.
-        approved = popup.evaluate("chrome.runtime.sendMessage({action:'approve',origin:'https://pubmed.ncbi.nlm.nih.gov'})")
+        # Chrome consent can be registered for an origin with only guide access.
+        approved = popup.evaluate("origin => chrome.runtime.sendMessage({action:'approve',origin})", source_origin)
         assert approved['ok']
+        grant_marker = 'key => chrome.storage.local.get(key).then(o => o[key])'
+        assert popup.evaluate(grant_marker, grant_key) is True
         # A separate Linux worker must obtain fresh, actual Chrome permission
         # responses before starting, and before the real gated browser request.
         def run_once():
@@ -134,19 +137,20 @@ def run(config_path, temp):
             thread.join()
             assert len(outcomes) == 1
             return outcomes[0]
-        page.goto('https://pubmed.ncbi.nlm.nih.gov/unattended'); page.bring_to_front()
+        page.goto(guide_base + 'public'); page.bring_to_front()
         submitted = popup.evaluate("chrome.runtime.sendMessage({action:'submit'})")
         assert submitted['ok']
         assert run_once()
         assert stats() == (3, 2)
-        page.goto('https://pubmed.ncbi.nlm.nih.gov/unattended-paused'); page.bring_to_front()
+        paused_url = guide_base + 'unattended-paused'
+        page.goto(paused_url); page.bring_to_front()
         assert popup.evaluate("chrome.runtime.sendMessage({action:'submit'})")['ok']
         stop_extension_worker()
         assert not run_once(), 'terminated permission responder must prevent browser start'
         assert stats() == (3, 2), 'offline consent must not reserve a body slot'
         popup.evaluate("chrome.runtime.sendMessage({action:'resume'})")
         for index, case in enumerate(cases):
-            page.goto('https://pubmed.ncbi.nlm.nih.gov/minimal/' + str(index))
+            page.goto(guide_base + 'minimal/' + str(index))
             page.bring_to_front()
             before = stats()
             result = popup.evaluate("chrome.runtime.sendMessage({action:'clip'})")
@@ -185,15 +189,27 @@ def run(config_path, temp):
             if not accepted:
                 popup.evaluate("chrome.runtime.sendMessage({action:'resume'})")
         print('shared real clipper fixtures after reservation/begin: acceptance, sanitized evidence and rejection OK')
-        assert popup.evaluate("chrome.permissions.remove({origins:['https://pubmed.ncbi.nlm.nih.gov/*']})")
-        popup.wait_for_timeout(500)
-        assert not popup.evaluate("chrome.permissions.contains({origins:['https://pubmed.ncbi.nlm.nih.gov/*']})")
+        policy = next(p for p in cfg['policies'] if p['origin'] == source_origin)
+        cfg['policies'].remove(policy)
+        assert popup.evaluate('pattern => chrome.permissions.remove({origins:[pattern]})', source_origin + '/*')
+        deadline = time.monotonic() + 10
+        while popup.evaluate(grant_marker, grant_key) and time.monotonic() < deadline:
+            popup.wait_for_timeout(100)
+        assert popup.evaluate(grant_marker, grant_key) is None, 'worker did not acknowledge withdrawal'
+        assert not popup.evaluate('pattern => chrome.permissions.contains({origins:[pattern]})', source_origin + '/*')
         denied = popup.evaluate("chrome.runtime.sendMessage({action:'submit'})")
         assert not denied['ok']
         store = Store(state, readonly=True)
         try:
-            assert store.db.execute('SELECT enabled FROM grants').fetchone()[0] == 0
+            assert store.db.execute('SELECT enabled FROM grants WHERE origin=? AND extension_origin=?',
+                                    (source_origin, extension_origin)).fetchone()[0] == 0
+            paused = json.loads(store.db.execute('SELECT data FROM records WHERE url=?', (paused_url,)).fetchone()[0])
+            assert paused['recheck_requested'] and paused['collected_at'] is None
         finally: store.close()
+        before = stats()
+        cfg['policies'].append(policy)
+        assert not run_once(), 'restored source approval must not restore withdrawn Chrome consent'
+        assert stats() == before, 'withdrawn consent must not reserve a body slot or collect the queued URL'
         context.close()
         control['stop'] = True; thread.join(timeout=5)
     print('real Chrome extension: offline, ACK loss, service-worker termination, begin loss, permission withdrawal OK')

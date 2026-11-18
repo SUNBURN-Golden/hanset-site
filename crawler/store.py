@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS reservations(id TEXT PRIMARY KEY, clip_id TEXT UNIQUE
  brand TEXT, day TEXT, url TEXT, document_id TEXT, channel TEXT, generation INTEGER,
  domain_epoch INTEGER, domain TEXT, state TEXT, issued REAL, expires REAL,
  worker TEXT, payload_hash TEXT, ack TEXT, request_count INTEGER DEFAULT 0,
- byte_count INTEGER DEFAULT 0, FOREIGN KEY(record_id) REFERENCES records(id));
+ byte_count INTEGER DEFAULT 0, extension_origin TEXT, FOREIGN KEY(record_id) REFERENCES records(id));
 CREATE TABLE IF NOT EXISTS domains(host TEXT PRIMARY KEY, epoch INTEGER DEFAULT 0, owner TEXT,
  next_at REAL DEFAULT 0, stopped_until REAL DEFAULT 0, failures INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, reservation_id TEXT, generation INTEGER,
@@ -64,11 +64,22 @@ class Store:
             try:
                 self.db.execute('PRAGMA journal_mode=WAL')
                 self.db.executescript(SQL)
+                self._migrate_reservations()
                 return
             except sqlite3.OperationalError as e:
                 if 'locked' not in str(e) and 'busy' not in str(e) or i == attempts - 1:
                     raise
                 time.sleep(min(base_delay * (2 ** i), 8))
+
+    def _migrate_reservations(self):
+        with self.transaction() as db:
+            if 'extension_origin' in {row['name'] for row in db.execute('PRAGMA table_info(reservations)')}:
+                return
+            db.execute('ALTER TABLE reservations ADD COLUMN extension_origin TEXT')
+            # Older network reservations used the record's extension for consent checks.
+            db.execute("""UPDATE reservations SET extension_origin=(
+                       SELECT json_extract(data, '$.extension_origin') FROM records WHERE id=reservations.record_id)
+                       WHERE channel!='manual_clip' AND state IN ('reserved','running','revoking')""")
 
     @contextlib.contextmanager
     def transaction(self):

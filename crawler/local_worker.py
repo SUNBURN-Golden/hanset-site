@@ -16,6 +16,8 @@ from .rate_limiter import charge, day_and_expiry
 from .schema import CHANNELS, STAGES, digest, payload
 from .store import Store
 
+_RECORD_EXTENSION = object()
+
 
 def uid():
     return str(uuid.uuid4())
@@ -83,7 +85,8 @@ class Worker:
             return insert(conn)
 
     @audited('reserve')
-    def reserve(self, clip_id, url, document_id, channel='manual_clip', recheck=False):
+    def reserve(self, clip_id, url, document_id, channel='manual_clip', recheck=False, *,
+                expected_extension=_RECORD_EXTENSION):
         clip_id, document_id = identifier(clip_id), identifier(document_id)
         url = safe_url(url)
         if channel not in CHANNELS:
@@ -104,14 +107,22 @@ class Worker:
             if dom['owner'] or dom['stopped_until'] > now:
                 raise Rejected('domain_held')
             rid = self.candidate(url, channel=channel, db=db)
-            new_body = not json.loads(db.execute('SELECT data FROM records WHERE id=?', (rid,)).fetchone()[0]).get('collected_at')
-            charge(db, self.cfg, day, 'HANSET', body=True, new_body=new_body)
+            record = json.loads(db.execute('SELECT data FROM records WHERE id=?', (rid,)).fetchone()[0])
+            extension_origin = record.get('extension_origin') if channel != 'manual_clip' else None
+            if expected_extension is not _RECORD_EXTENSION and expected_extension != extension_origin:
+                raise Rejected('permission_not_granted')
+            if extension_origin:
+                origin = 'https://' + urlsplit(url).netloc
+                if not self.browser_grant_enabled(db, origin, extension_origin):
+                    raise Rejected('permission_not_granted')
+            charge(db, self.cfg, day, 'HANSET', body=True, new_body=not record.get('collected_at'))
             gen = db.execute('SELECT COALESCE(MAX(generation),0)+1 FROM reservations WHERE record_id=?', (rid,)).fetchone()[0]
             res_id = uid()
             db.execute('UPDATE domains SET owner=?,epoch=epoch+1 WHERE host=?', (res_id, host))
-            db.execute('INSERT INTO reservations(id,clip_id,record_id,brand,day,url,document_id,channel,generation,domain_epoch,domain,state,issued,expires,worker) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
+            db.execute('''INSERT INTO reservations(id,clip_id,record_id,brand,day,url,document_id,channel,generation,
+                       domain_epoch,domain,state,issued,expires,worker,extension_origin) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                        (res_id, clip_id, rid, 'HANSET', day, url, document_id, channel, gen, dom['epoch'] + 1,
-                        host, 'reserved', now, expiry, self.instance))
+                        host, 'reserved', now, expiry, self.instance, extension_origin))
             return dict(db.execute('SELECT * FROM reservations WHERE id=?', (res_id,)).fetchone())
 
     @audited('begin')
@@ -238,6 +249,26 @@ class Worker:
                        (reservation['id'], reservation['generation']))
         return self.supervisor.drain(reservation)
 
+    @staticmethod
+    def browser_grant_enabled(db, origin, extension_origin):
+        grant = db.execute('SELECT enabled FROM grants WHERE origin=? AND extension_origin=?',
+                           (origin, extension_origin)).fetchone()
+        return bool(grant and grant[0])
+
+    def revoke_browser_grant(self, origin, extension_origin):
+        with self.store.transaction() as db:
+            grant = db.execute('UPDATE grants SET enabled=0 WHERE origin=? AND extension_origin=?',
+                               (origin, extension_origin))
+            if not grant.rowcount:
+                return
+            # Canonical HTTPS source origins use the default port. The domain is the reservation's source host.
+            jobs = db.execute("""UPDATE reservations SET state='revoking'
+                               WHERE channel='browser_extract' AND domain=? AND extension_origin=?
+                               AND state IN ('reserved','running') RETURNING *""",
+                              (urlsplit(origin).hostname, extension_origin)).fetchall()
+        for job in jobs:
+            self.supervisor.drain(dict(job))
+
     def _save(self, db, r):
         db.execute('UPDATE records SET stage=?,data=?,channel=? WHERE id=?',
                    (r['pipeline_stage'], json.dumps(r, ensure_ascii=False), r['channel'], r['record_id']))
@@ -340,14 +371,14 @@ class Worker:
                     interval = policy.get('recheck_seconds', 86400 if policy.get('adapter') or any(f['field'] in ('rates', 'hours', 'closures') for f in r['extracted_facts']) else 30 * 86400)
                     if age < max(300, interval):
                         continue
-                if r.get('extension_origin'):
-                    grant = self.store.db.execute('SELECT enabled FROM grants WHERE origin=? AND extension_origin=?',
-                                                  ('https://' + urlsplit(r['url']).netloc, r['extension_origin'])).fetchone()
-                    if not grant or not grant[0]:
+                extension_origin = r.get('extension_origin')
+                if extension_origin:
+                    origin = 'https://' + urlsplit(r['url']).netloc
+                    if not self.browser_grant_enabled(self.store.db, origin, extension_origin):
                         continue
                     from .consent import require
-                    require(self, r, 'https://' + urlsplit(r['url']).netloc)
-                res = self.reserve(uid(), r['url'], uid(), r['channel'])
+                    require(self, r, origin)
+                res = self.reserve(uid(), r['url'], uid(), r['channel'], expected_extension=extension_origin)
                 self.begin(res)
                 from .fetcher import collect
                 collect(self, res)
