@@ -17,7 +17,7 @@ AGES = [90, 91, 0, -1]
 @pytest.fixture
 def inventory(monkeypatch):
     # Reuse the renderer's venue shape, replacing all published fixture evidence.
-    template = next(v for v in B.load(TODAY, None)[0] if v['slug'] == 'orakai-cheonggyesan')
+    template = next(v for v in B.load(TODAY)[0] if v['slug'] == 'orakai-cheonggyesan')
     v = deepcopy(template)
     v.update(slug='freshness-sauna', title='Fixture Sauna', source='https://example.org/venue',
              last_verified=TODAY, stale=True, hyrox=True, c={"kind": "호텔 사우나"}, extra_sources=[],

@@ -29,7 +29,7 @@ class Explorer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.today = dt.date(2026, 10, 23)
-        cls.venues, events, *_ = B.load(cls.today, None)
+        cls.venues, events, *_ = B.load(cls.today)
         cls.by_slug = {v['slug']: v for v in cls.venues}
         cls.site = B.Site(cls.today, True)
         B.build(cls.site, cls.venues, events, cls.today)
@@ -98,11 +98,44 @@ class Explorer(unittest.TestCase):
         self.assertIn('.search-form input{', css)
         self.assertNotIn('.home-hero', css)
 
-    def test_default_order_prioritizes_price_then_verification(self):
-        elements = Elements(self.site.pages['/finder/']).elements
-        actual = [a['data-slug'] for tag, a in elements if tag == 'article' and 'data-slug' in a]
-        expected = sorted(self.venues, key=lambda v: (not v['ad'], not bool(v['price']), v['status'] != 'verified', -len(v['facts']), v['order']))
-        self.assertEqual(actual, [v['slug'] for v in expected])
+    def test_finder_and_categories_keep_ordinary_venue_order(self):
+        # Stable sorting keeps the original venue order when the other keys tie.
+        ranked = sorted(self.venues, key=lambda v: (not v['price'], v['status'] != 'verified', -len(v['facts'])))
+        for category in ('finder', 'sauna', 'crossfit', 'hyrox', 'gym'):
+            with self.subTest(category=category):
+                elements = Elements(self.site.pages[f'/{category}/']).elements
+                actual = [a['data-slug'] for tag, a in elements if tag == 'article' and 'data-slug' in a]
+                expected = [v['slug'] for v in ranked if category == 'finder' or category in B.venue_categories(v)]
+                self.assertEqual(actual, expected)
+
+    def test_details_keep_official_links_dates_and_freshness(self):
+        for v in self.venues:
+            with self.subTest(venue=v['slug']):
+                page = self.site.pages[f'/finder/{v["slug"]}/']
+                verify = page.split('<div class="verify">', 1)[1].split('</div>', 1)[0]
+                sources = verify.split('<p>Source: ', 1)[1].split('</p>', 1)[0]
+                source_links = [a for tag, a in Elements(sources).elements if tag == 'a']
+                self.assertEqual([a['href'] for a in source_links], [v['source'], *(url for _, url in v['extra_sources'])])
+
+                actions = page.split('<div class="btnrow detail-actions">', 1)[1].split('</div>', 1)[0]
+                official = re.findall(r'<a\b[^>]*>Official site</a>', actions)
+                official_links = [a for tag, a in Elements(''.join(official)).elements if tag == 'a']
+                website = v['website']
+                self.assertEqual([a['href'] for a in official_links], [website] if website and 'map.naver.com' not in website else [])
+                for link in source_links + official_links:
+                    self.assertEqual(set(link['rel'].split()), {'noopener', 'noreferrer'})
+                self.assertIn(f'Last checked {v["last_verified"]:%Y.%m.%d}', verify)
+                self.assertEqual('badge-old' in verify, (self.today - v['last_verified']).days > 90)
+
+    def test_details_keep_original_next_venue_sequence(self):
+        for v in self.venues:
+            with self.subTest(venue=v['slug']):
+                city = [entry for entry in self.venues if entry['city_key'] == v['city_key']]
+                sequence = city if len(city) > 1 else self.venues
+                next_venue = sequence[(sequence.index(v) + 1) % len(sequence)]
+                page = self.site.pages[f'/finder/{v["slug"]}/']
+                next_link = re.findall(r'<p class="next-venue"><a href="([^"]+)"', page)
+                self.assertEqual(next_link, [f'/finder/{next_venue["slug"]}/'])
 
     def test_prices_preserve_all_original_terms_even_with_numeric_price(self):
         for v in self.venues:

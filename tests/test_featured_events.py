@@ -24,7 +24,7 @@ BEFORE = dt.date(2026, 11, 12)
 
 @pytest.fixture(scope='module')
 def inventory():
-    venues, events, *_ = B.load(BEFORE, None)
+    venues, events, *_ = B.load(BEFORE)
     feature = deepcopy(next(e for e in events if e.get('feature')))
     assert (feature['start'], feature['end']) == (dt.date(2026, 11, 13), dt.date(2026, 11, 15))
     return venues, feature

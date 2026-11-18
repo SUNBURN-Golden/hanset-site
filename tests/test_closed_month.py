@@ -16,7 +16,7 @@ _BUILT = {}
 def build_for(today):
     """Render the site in-process for a build date (what main() does with --today); cached per date."""
     if today not in _BUILT:
-        venues, events, *_ = B.load(today, None)
+        venues, events, *_ = B.load(today)
         site = B.Site(today, True)
         B.build(site, venues, events, today)
         _BUILT[today] = (site.pages['/guides/closed-days-korea/'], {v['slug']: v for v in venues})
@@ -77,7 +77,7 @@ if __name__ == '__main__':
 def test_build_dates_do_not_leak_active_closure_state(monkeypatch):
     """Build later/earlier/later with the same evidence and no global rebinding."""
     today = dt.date(2032, 1, 5)
-    venues, events, *_ = B.load(today, None)
+    venues, events, *_ = B.load(today)
     v = venues[0]
     checked = today - dt.timedelta(days=91)
     monkeypatch.setattr(B, 'CLOSED_ALL', {v['slug']: dict(

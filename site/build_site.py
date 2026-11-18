@@ -164,12 +164,24 @@ def guides(site, venues, today):
              f'<div class="page"><h1>Visiting Korea? Start here.</h1><p class="lead">Short guides. Official facts only.</p><ul class="clean">{links}</ul></div>', "visitors")
 
 # ------------------------------------------------------------------ data
-def load(today, ads_path):
+def load(today):
+    ads_error = "ERROR: content/ads.json must contain an empty JSON object."
+    try:
+        ads = json.loads((ROOT / "content/ads.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError, RecursionError):
+        sys.exit(ads_error)
+    if ads != {}:
+        sys.exit(ads_error)
+
     content = json.loads((ROOT / "content/venues.json").read_text(encoding="utf-8"))
-    ev_content = json.loads((ROOT / "content/events.json").read_text(encoding="utf-8"))
     en = json.loads((ROOT / "content/venues_en.json").read_text(encoding="utf-8"))
+    for path, records in (("content/venues.json", content), ("content/venues_en.json", en)):
+        if any("ad" in record for name, record in records.items()
+               if not name.startswith("_") and isinstance(record, dict)):
+            sys.exit(f"ERROR: {path} must not contain venue ad flags.")
+
+    ev_content = json.loads((ROOT / "content/events.json").read_text(encoding="utf-8"))
     ev_en = json.loads((ROOT / "content/events_en.json").read_text(encoding="utf-8"))
-    ads = json.loads(Path(ads_path).read_text(encoding="utf-8")) if ads_path else json.loads((ROOT / "content/ads.json").read_text(encoding="utf-8"))
     rows = {"boxes": {r["name"]: r for r in read_csv("boxes.csv")}, "saunas": {r["name"]: r for r in read_csv("saunas.csv")}}
     venues, skipped = [], []
     for name, c in content.items():
@@ -205,14 +217,14 @@ def load(today, ads_path):
         facts = [[k, en_fact(k, fill(v), en_only(x["location"]))] for k, v in x["facts"]]
         facts_ko = [[k, v] for k, v in c["facts"]]
         lv = ymd(r["last_verified"])
-        a = ads.get(c["slug"], {})
         v = dict(c=c, name=name, slug=c["slug"], kind_key=kind_key, kind=KIND_EN[c["kind"]], status=status, confidence=conf, title=en_only(x["title"]), title_ko=c["title"],
                  city=r["city"], city_ko=CITY_EN.get(r["city"], r["city"]), city_key=CITY_KEY.get(r["city"], r["city"].lower()),
                  location=en_only(x["location"]), location_ko=c["location"], area=x.get("area", ""), summary=x["summary"], facts=facts, facts_ko=facts_ko, tips=x.get("tips", []), unverified=[fill(u) for u in x.get("unverified", [])],
                  tags=x.get("tags", []), price=price, price_label=x.get("price_label", "Price"),
                  sunday=sunday, last_verified=lv, stale=is_outdated(lv, today), source=src, extra_sources=extra,
                  website=site, booking=book, address=addr, hyrox=c.get("hyrox") is True, pick=bool(c.get("pick")),
-                 price_caveat=x.get("price_caveat", ""), sub=("box" if kind_key == "box" else (c.get("sub") or ("hotel" if "호텔" in c["kind"] else "boutique"))), ad=bool(a.get("ad", c.get("ad", False))), ad_note=a.get("note", ""), flags=c.get("flags", {}), order=len(venues), off=off)
+                 price_caveat=x.get("price_caveat", ""), sub=("box" if kind_key == "box" else (c.get("sub") or ("hotel" if "호텔" in c["kind"] else "boutique"))),
+                 flags=c.get("flags", {}), order=len(venues), off=off)
         venues.append(v)
     for kind in rows:
         for name, r in rows[kind].items():
@@ -467,7 +479,6 @@ def clip(t, n=160):
 def badge(txt, cls=""): return f'<span class="badge {cls}">{E(txt)}</span>'
 def v_badges(v, today, full=False):
     b = []
-    if v["ad"]: b.append(badge("Ad", "badge-ad"))
     b.append(badge("Box" if v["kind_key"] == "box" else "Sauna", "badge-box" if v["kind_key"] == "box" else "badge-sauna"))
     b.append(badge(v["kind"]))
     if v["c"].get("opening_soon"): b.append(badge("Opening soon", "badge-part"))
@@ -869,7 +880,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
     feat = next((e for e in events if e.get("feature")), None)
     site.feature = feat  # Set before any page/footer is rendered.
     upcoming = [e for e in events if e["end"] >= today]
-    ordered = sorted(venues, key=lambda v: (not v["ad"], not bool(v["price"]), v["status"] != "verified", -len(v["facts"]), v["order"]))
+    ordered = sorted(venues, key=lambda v: (not v["price"], v["status"] != "verified", -len(v["facts"]), v["order"]))
     cnt_box = sum(v["kind_key"] == "box" for v in venues); cnt_sauna = len(venues) - cnt_box
     seg = lambda g, items: '<div class="seg" data-seg="%s" role="group" aria-label="%s">' % (g, g.title()) + "".join(f'<button type="button" data-v="{k}" aria-pressed="false">{E(t)}</button>' for k, t in items) + "</div>"
     explorer = f'''
@@ -939,13 +950,11 @@ def build(site, venues, events, today, vevents=(), creators=()):
             return "".join(out)
         links = []
         if v["website"] and "map.naver.com" not in v["website"]:
-            links.append(f'<a class="btn btn-d" href="{E(v["website"])}" rel="{"sponsored " if v["ad"] else ""}noopener noreferrer">Official site</a>')
+            links.append(f'<a class="btn btn-d" href="{E(v["website"])}" rel="noopener noreferrer">Official site</a>')
         if v["booking"] and v["booking"] != v["website"]:
             links.append(f'<a class="btn btn-d" href="{E(v["booking"])}" rel="noopener noreferrer">Book</a>')
         links.append(f'<a class="btn btn-d" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map</a>')
         srcs = [f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a>'] + [f'<a href="{E(u)}" rel="noopener noreferrer">{E(l)}</a>' for l, u in v["extra_sources"]]
-        adnote = (f'<div class="note ad"><strong>Ad</strong> · This entry is labeled as an ad. Verified info still comes from official sources. '
-                  f'{E(v["ad_note"])}</div>' if v["ad"] else "")
         tips = ("<h2>Tips · Heads-up</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Tip', t))}{fact_provenance(v, display_value(v, 'Tip', t), today)}</li>" for t in v["tips"]) + "</ul>") if v["tips"] else ""
         unv = ("<h2>Unconfirmed</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Unconfirmed', t))}{fact_provenance(v, 'Unconfirmed: ' + display_value(v, 'Unconfirmed', t), today)}</li>" for t in v["unverified"]) + "</ul>") if v["unverified"] else ""
         stale = (f'<div class="note">{OUTDATED} · Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if is_outdated(v["last_verified"], today) else "")
@@ -972,7 +981,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
         next_label = f'Next in this city: {E(nxt["title"])} ›' if same_city else f'Next: {E(nxt["title"])} ›'
         next_html = f'<p class="next-venue"><a href="/finder/{nxt["slug"]}/">{next_label}</a></p>'
         body = f'''<div class="detail"><p class="crumb"><a href="/finder/">{FINDER_LABEL}</a> › {E(v["city_ko"])}</p>
-{v_badges(v, today)}{amenity_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{adnote}{stale}
+{v_badges(v, today)}{amenity_badges(v)}<h1>{E(v["title"])}</h1><p class="muted">{E(v["location"])}</p>{stale}
 <div class="detail-media">{venue_media(v)}</div>
 <div class="btnrow detail-actions">{"".join(links)}</div>
 <section class="detail-glance" aria-labelledby="glance-heading"><h2 id="glance-heading">At a glance</h2>
@@ -1687,13 +1696,18 @@ def long_text_check(dist):
     return bad
 
 def main():
+    # Intercept the old option and its argparse abbreviations before any value can be echoed.
+    if any(arg.split("=", 1)[0] in ("--ads", "--ad", "--a") for arg in sys.argv[1:]):
+        sys.exit("ERROR: --ads has been removed. Advertising is disabled.")
     ap = argparse.ArgumentParser()
-    ap.add_argument("--release", action="store_true"); ap.add_argument("--ads"); ap.add_argument("--today"); ap.add_argument("--out", default=str(DIST))
+    ap.add_argument("--release", action="store_true")
+    ap.add_argument("--today")
+    ap.add_argument("--out", default=str(DIST))
     ap.add_argument("--verified-examples", action="store_true", help="preview only: render fake data from data/verified/examples")
     a = ap.parse_args()
     today = ymd(a.today) if a.today else dt.datetime.now(ZoneInfo("Asia/Seoul")).date()
     dist = Path(a.out)
-    venues, events, skipped, ev_skipped = load(today, a.ads)
+    venues, events, skipped, ev_skipped = load(today)
     if a.verified_examples and a.release: sys.exit("ERROR: --verified-examples is preview-only; never with --release")
     if a.verified_examples:
         vevents = VF.load_events(VERIFIED / "examples/events.example.json", today, allow_example=True)

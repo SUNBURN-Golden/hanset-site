@@ -1,15 +1,18 @@
 """Synthetic emitted-output fixtures; no collector or browser dependencies."""
 import contextlib
+from html.parser import HTMLParser
 import io
 import json
 from pathlib import Path
-import re
+from posixpath import normpath
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.parse import unquote, urljoin, urlsplit
+from xml.etree import ElementTree
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / 'site'))
@@ -20,6 +23,17 @@ PHONE = '-'.join(('010', '2468', '1357'))
 EMAIL = '@'.join(('fixture', 'example.invalid'))
 REMOTE = 'https://assets.example.invalid/file'
 ALLOWED = 'hanset@soulbound.co.kr'
+
+
+class PageLinks(HTMLParser):
+    def __init__(self, markup):
+        super().__init__()
+        self.links = []
+        self.feed(markup)
+
+    def handle_starttag(self, tag, attrs):
+        if tag in ('a', 'link'):
+            self.links.append((tag, dict(attrs)))
 
 
 def wrap(suffix, text):
@@ -246,11 +260,84 @@ class ReleaseLeakTests(unittest.TestCase):
     @classmethod
     def tearDownClass(cls): cls.temp.cleanup()
 
-    def build(self):
+    def build(self, *args):
         # -S selects the builder's supported stdlib/font fallback, keeping CLI
         # fixtures fast. Validation itself is never mocked or bypassed.
         return subprocess.run([sys.executable, '-S', str(self.root / 'site/build_site.py'), '--release',
-                               '--out', str(self.out)], cwd=self.root, capture_output=True, text=True)
+                               '--out', str(self.out), *args], cwd=self.root, capture_output=True, text=True)
+
+    def assert_build_rejected(self, diagnostic, *args):
+        self.out.mkdir(exist_ok=True)
+        sentinel = self.out / 'sentinel.txt'
+        sentinel.write_text('keep this output', encoding='utf-8')
+        try:
+            result = self.build(*args)
+            self.assertNotEqual(0, result.returncode)
+            self.assertEqual('', result.stdout)
+            self.assertEqual(diagnostic + '\n', result.stderr)
+            self.assertEqual('keep this output', sentinel.read_text(encoding='utf-8'))
+        finally:
+            sentinel.unlink(missing_ok=True)
+
+    def test_retired_ads_options_are_rejected_without_echoing_values(self):
+        help_result = self.build('--help')
+        self.assertEqual(0, help_result.returncode)
+        self.assertNotIn('--ads', help_result.stdout)
+
+        diagnostic = 'ERROR: --ads has been removed. Advertising is disabled.'
+        value = 'synthetic-private-path/input.json'
+        for option in ('--a', '--ad', '--ads'):
+            for args in ((option,), (option, value), (f'{option}={value}',)):
+                with self.subTest(args=args):
+                    self.assert_build_rejected(diagnostic, *args)
+
+    def test_ads_configuration_must_be_an_empty_json_object(self):
+        path = self.root / 'site/content/ads.json'
+        self.addCleanup(path.write_bytes, path.read_bytes())
+        diagnostic = 'ERROR: content/ads.json must contain an empty JSON object.'
+        for case, body in (
+            ('unknown venue', b'{"synthetic-unknown-venue": {"note": "synthetic private value"}}'),
+            ('malformed', b'{"synthetic private value":'),
+            ('invalid UTF-8', b'{"synthetic private value": "\xff"}'),
+            ('array', b'[]'),
+            ('string', b'"synthetic private value"'),
+            ('null', b'null'),
+        ):
+            with self.subTest(case=case):
+                path.write_bytes(body)
+                self.assert_build_rejected(diagnostic)
+        path.unlink()
+        with self.subTest(case='missing'):
+            self.assert_build_rejected(diagnostic)
+        # A directory at the file path makes the read fail even when running as root.
+        path.mkdir()
+        try:
+            with self.subTest(case='unreadable'):
+                self.assert_build_rejected(diagnostic)
+        finally:
+            path.rmdir()
+
+    def test_venue_ad_flags_are_rejected_even_when_false(self):
+        for name in ('venues.json', 'venues_en.json'):
+            path = self.root / 'site/content' / name
+            original = path.read_bytes()
+            records = json.loads(original)
+            record = next(record for key, record in records.items() if not key.startswith('_'))
+            record['synthetic fixture'] = 'synthetic private venue value'
+            try:
+                for flag in (True, False):
+                    with self.subTest(file=name, flag=flag):
+                        record['ad'] = flag
+                        path.write_text(json.dumps(records), encoding='utf-8')
+                        self.assert_build_rejected(f'ERROR: content/{name} must not contain venue ad flags.')
+            finally:
+                path.write_bytes(original)
+
+    def assert_no_ads_destination(self, base, href):
+        destination = urlsplit(urljoin(base, href.replace('\\', '/')))
+        if destination.hostname == urlsplit(B.SITE_URL).hostname:
+            path = normpath('/' + unquote(destination.path).lstrip('/'))
+            self.assertFalse(path in ('/ads', '/ads.html') or path.startswith('/ads/'))
 
     def test_release_fails_for_each_prohibited_category_before_other_validators(self):
         fixtures = [(wrap('.html', PHONE), '.html', 'contact.phone'),
@@ -298,12 +385,25 @@ class ReleaseLeakTests(unittest.TestCase):
         self.assertTrue((out / '404.html').is_file())
         self.assertTrue((out / 'google1cc2d472584fa095.html').is_file())
         self.assertFalse((out / 'ads').exists())
-        sitemap = (out / 'sitemap.xml').read_text()
-        self.assertNotIn('/ads/', sitemap)
-        self.assertNotIn('/404.html', sitemap)
-        for url in re.findall(r'<loc>(.*?)</loc>', sitemap):
+        self.assertFalse((out / 'ads.html').exists())
+        sitemap = ElementTree.parse(out / 'sitemap.xml')
+        urls = [loc.text for loc in sitemap.findall('./{*}url/{*}loc')]
+        self.assertIn(B.SITE_URL + '/', urls)
+        self.assertNotIn(B.SITE_URL + '/404.html', urls)
+        for url in urls:
+            self.assert_no_ads_destination(B.SITE_URL + '/', url)
             relative = url.removeprefix(B.SITE_URL).strip('/')
             self.assertTrue((out / relative / 'index.html').is_file())
+        for page in out.rglob('*.html'):
+            relative = page.relative_to(out).as_posix()
+            if page.name == 'index.html':
+                relative = relative.removesuffix('index.html')
+            with self.subTest(page=relative):
+                for tag, link in PageLinks(page.read_text(encoding='utf-8')).links:
+                    if href := link.get('href'):
+                        self.assert_no_ads_destination(f'{B.SITE_URL}/{relative}', href)
+                    if tag == 'a':
+                        self.assertNotIn('sponsored', (link.get('rel') or '').lower().split())
         self.assertRegex(home, r'/assets/css/site.css\?v=[0-9a-f]+')
         finder = (out / 'finder/index.html').read_text()
         self.assertRegex(finder, r'/assets/js/finder.js\?v=[0-9a-f]+')
