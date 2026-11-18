@@ -3,7 +3,7 @@
 - Data: `site/content/closed_days.json` holds confirmed closed days only. Each entry has the text, source URL, source type and check date. Venues not in the file show "Check before you go".
 - Guide: /guides/closed-days-korea/ (17 venues). Grand Josun Busan is left out on the owner's instruction. Sparex Goodmorning City is left out because its 24h info comes from a third party.
 - To add a venue: add a row only from an official page, operator-run profile or venue reply. Never from Naver. `test_closed_on_field_and_guide` checks it.
-- Deployed with scripts/deploy.sh, deploy 179e190f.
+- Deploy 179e190f (2026-10-26).
 
 ## 2026-10-26 14:2x KST: Josun Busan closed day + auto-expiry (follow-up to PR #49)
 - Added grand-josun-busan: 3rd Tuesday of every month, from the official page, checked 2026-10-18. The guide now has 18 venues.
