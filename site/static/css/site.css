@@ -21,7 +21,7 @@
   --surface:#1E1D1B;--surface-2:#262421;--field:#252320;--contrast:#000000;
   --accent-d:#F08A6A;--ok:#93CFA2;--warn:#E2B76A;--bad:#E89A9A;
   --header-bg:rgba(21,20,19,.94);--hero-muted:#CFC8BC;--hero-ring:#44403A}
- .hero,.race-strip-link,.badge-ad{border:1px solid var(--line)}
+ .hero,.race-strip-link{border:1px solid var(--line)}
  .pin,.btn-d,.seg button[aria-pressed=true]{border-color:var(--line)}
 }
 *{box-sizing:border-box}
@@ -97,7 +97,6 @@ p,li{max-width:38em}
 .badge{display:inline-block;font-size:var(--fs-xs);font-weight:700;padding:2px 8px;border-radius:6px;background:var(--surface-2);color:var(--ink);line-height:1.6}
 .badge-box,.badge-sauna{background:var(--surface-2)}
 .badge-ok{background:var(--surface-2);color:var(--ok)}.badge-part{background:var(--surface-2);color:var(--warn)}
-.badge-ad{background:var(--contrast);color:var(--on-contrast)}
 .badge-old{background:var(--surface-2);color:var(--bad)}
 .picks .card{border-top:4px solid var(--accent)}
 .safety-line{font-size:var(--fs-s);color:var(--muted);margin:10px 0 0;line-height:1.5}
@@ -114,7 +113,6 @@ p,li{max-width:38em}
 .list a{color:var(--ink);font-weight:700;text-decoration:none}.list a:hover{color:var(--accent-d)}
 .list .r{font-weight:700;white-space:nowrap}.list .r.unk{font-weight:400;color:var(--muted)}
 .note{border-left:4px solid var(--accent);background:var(--surface);padding:10px 14px;border-radius:0 10px 10px 0;font-size:.92rem;margin:14px 0;max-width:38em}
-.note.ad{border-color:var(--ink);background:var(--surface)}
 /* finder */
 .finder-head{padding:22px 0 6px;max-width:40em}
 .filters{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;display:grid;gap:12px;margin:12px 0}

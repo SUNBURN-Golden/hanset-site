@@ -12,7 +12,7 @@ import build_site as B
 
 @pytest.fixture(scope='module')
 def venues():
-    rows, *_ = B.load(dt.date(2026, 11, 3), None)
+    rows, *_ = B.load(dt.date(2026, 11, 3))
     return {v['slug']: v for v in rows}
 
 

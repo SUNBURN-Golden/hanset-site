@@ -36,7 +36,7 @@ class Tags(HTMLParser):
 @pytest.fixture(scope='module')
 def inventory():
     today = dt.date(2026, 11, 3)
-    venues, events, *_ = B.load(today, None)
+    venues, events, *_ = B.load(today)
     site = B.Site(today, True)
     B.build(site, venues, events, today)
     return venues, events, site
