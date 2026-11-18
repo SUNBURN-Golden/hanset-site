@@ -387,3 +387,95 @@ def test_redirect_final_url_with_session_param_still_extracts(tmp_path, monkeypa
     assert result['success'] and result['reason'] != 'state_corrupt'
     assert calls == [ROOT] and result['counts']['pages'] == 1
     assert rows[0]['url'] == ROOT and rows[0]['final_url'] == final
+
+
+def _defer_children(settings, clock, paths):
+    from hanset_active.collect.store import connect, digest, remember_web_target_observation
+    db = connect(settings.data_dir)
+    try:
+        for path in paths:
+            remember_web_target_observation(
+                db, ROOT + path, 'empty_extraction', content_hash=digest(TEXT),
+                observed_at=clock.now().isoformat())
+    finally:
+        db.close()
+    clock.sleep(86400)
+
+
+@pytest.mark.parametrize('cap', [3, 10])
+def test_deferred_children_use_slots_and_yield_to_fresh_roots(tmp_path, monkeypatch, cap):
+    settings, path = setup_run(tmp_path, monkeypatch, [ROOT, ROOT + '/manual'])
+    clock = FakeClock()
+    _defer_children(settings, clock, ['/price', '/rates'])
+    calls = fake_pages(monkeypatch, {
+        ROOT: html('<a href="/price">Price</a><a href="/rates">Rates</a>'
+                   '<a href="/about">About</a>'),
+        ROOT + '/about': html(), ROOT + '/manual': html(), ROOT + '/price': html(),
+    })
+    rows = capture_extraction(monkeypatch)
+    monkeypatch.setattr(service, 'PAGE_RUN_CAP', cap)
+    result = service.run_web(settings, targets_path=path, clock=clock, testing=True)
+    # The fresh third-ranked child gets a slot, then the first deferred child.
+    # No third child is queued, and fresh explicit jobs run before deferrals.
+    expected = [ROOT, ROOT + '/about', ROOT + '/manual']
+    if cap > 3:
+        expected.append(ROOT + '/price')
+    assert result['success'] and calls == expected
+    assert ROOT + '/rates' not in calls
+    assert result['rejections'] == {'recent_unchanged_deferred': 1}
+    children = [row for row in rows if row['depth'] == 1]
+    assert len(children) == (2 if cap > 3 else 1)
+    assert all(row['source_authorization'] is None for row in children)
+
+
+@pytest.mark.parametrize('explicit_path,anchor_path', [('/price/', '/price'), ('/price', '/price/')])
+def test_deferred_explicit_child_promotion_preserves_tier_and_authorization(
+        tmp_path, monkeypatch, explicit_path, anchor_path):
+    later = ROOT + '/hours'
+    settings, path = setup_run(tmp_path, monkeypatch, [ROOT, ROOT + explicit_path, later])
+    data = json.loads(path.read_text())
+    data['targets'].append({'venue_id': 'venue-2', 'venue_key': 'fixture-2',
+                            'name': 'Fixture Other', 'official_urls': ['https://other.example']})
+    path.write_text(json.dumps(data))
+    clock = FakeClock()
+    _defer_children(settings, clock, [anchor_path, '/hours'])
+    calls, modes = [], []
+
+    def fetch(self, url, *, subpage=False):
+        calls.append(url)
+        modes.append(subpage)
+        links = f'<a href="{anchor_path}">Price</a>' if url == ROOT else ''
+        return FetchResult(url, 'ok', status=200,
+                           content=html(links), content_type='text/html')
+
+    monkeypatch.setattr(service.Fetcher, 'fetch', fetch)
+    rows = capture_extraction(monkeypatch)
+    result = service.run_web(settings, targets_path=path, clock=clock, testing=True)
+    assert result['success'] and calls == [ROOT, 'https://other.example', ROOT + explicit_path, later]
+    assert modes == [False, False, False, False]
+    promoted = rows[2]
+    assert promoted['url'] == ROOT + explicit_path and promoted['depth'] == 1
+    assert promoted['source_authorization']['source_identity'] == ROOT + '/price'
+    assert result['rejections'] == {'recent_unchanged_deferred': 2}
+
+
+@pytest.mark.parametrize('cap', [2, 3])
+def test_deferred_child_runs_after_unseen_job_from_another_target(tmp_path, monkeypatch, cap):
+    settings, path = setup_run(tmp_path, monkeypatch)
+    data = json.loads(path.read_text())
+    other = 'https://other.example'
+    data['targets'][0].update(venue_id='fixture-01', venue_key='fixture-01', name='Fixture One')
+    data['targets'].append({'venue_id': 'fixture-02', 'venue_key': 'fixture-02',
+                            'name': 'Fixture Two', 'official_urls': [other]})
+    path.write_text(json.dumps(data))
+    clock = FakeClock()
+    _defer_children(settings, clock, ['/price'])
+    calls = fake_pages(monkeypatch, {
+        ROOT: html('<a href="/price">Price</a>'), ROOT + '/price': html(), other: html(),
+    })
+    capture_extraction(monkeypatch)
+    monkeypatch.setattr(service, 'PAGE_RUN_CAP', cap)
+    result = service.run_web(settings, targets_path=path, clock=clock, testing=True)
+    assert result['success'] and calls == [ROOT, other, ROOT + '/price'][:cap]
+    assert result['rejections'] == {'recent_unchanged_deferred': 1}
+    assert (ROOT + '/price' in State(settings.data_dir, clock).data['completed']) == (cap == 3)

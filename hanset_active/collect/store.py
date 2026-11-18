@@ -6,12 +6,13 @@ import re
 import sqlite3
 import struct
 from datetime import datetime, timedelta
+from functools import cache
 
 from hanset_active.db import deterministic_id
 from hanset_active.util.timeutil import kst_now
 
 from . import CollectError
-from .config import BLOCK_COOLDOWN_DAYS, outside
+from .config import BLOCK_COOLDOWN_DAYS, UNCHANGED_COOLDOWN_DAYS, outside
 from .ground import secrets
 
 SCHEMA = '''
@@ -148,6 +149,23 @@ CREATE TABLE IF NOT EXISTS web_target_blocks (
 '''
 _BLOCK_DISPOSITIONS = frozenset({'robots_disallowed', 'login_wall', 'blocked'})
 
+WEB_TARGET_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS web_target_observations (
+    url_hash TEXT PRIMARY KEY,
+    content_hash TEXT,
+    disposition TEXT NOT NULL CHECK (disposition IN
+      ('applied','duplicate','empty_extraction','pending_extraction',
+       'robots_disallowed','login_wall','blocked','empty_body','error',
+       'excluded','denied','asset_document','off_domain','policy_page')),
+    observed_at TEXT NOT NULL
+);
+'''
+_HASH = re.compile(r'[0-9a-f]{64}')
+
+
+def _valid_hash(value):
+    return isinstance(value, str) and bool(_HASH.fullmatch(value))
+
 
 def connect(directory):
     directory = outside(directory)
@@ -165,6 +183,7 @@ def connect(directory):
     db.executescript(CANDIDATE_SCHEMA)
     db.executescript(CHANGE_SCHEMA)
     db.executescript(BLOCK_SCHEMA)
+    db.executescript(WEB_TARGET_SCHEMA)
     os.chmod(path, 0o600)
     return db
 
@@ -247,6 +266,83 @@ def remember_web_target_block(db, url, disposition, *, status, clock=None, testi
                       ON CONFLICT(url_hash) DO UPDATE SET
                       disposition=excluded.disposition,blocked_at=excluded.blocked_at''',
                    (key, disposition, now.isoformat()))
+
+
+def _observation_time(value):
+    try:
+        at = datetime.fromisoformat(value)
+        return at if at.utcoffset() is not None else None
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
+def remember_web_target_observation(db, url, disposition, *, observed_at, content_hash=None,
+                                    testing=False):
+    """Scheduling metadata only; never refresh or relabel historical evidence."""
+    from .targets import canonical_requested_url
+    key = digest(canonical_requested_url(url, testing=testing))
+    at = _observation_time(observed_at)
+    if at is None or (content_hash is not None and not _valid_hash(content_hash)):
+        raise CollectError('state_corrupt')
+    with db:
+        db.execute('''INSERT INTO web_target_observations
+                        (url_hash,content_hash,disposition,observed_at) VALUES (?,?,?,?)
+                      ON CONFLICT(url_hash) DO UPDATE SET
+                        content_hash=excluded.content_hash,disposition=excluded.disposition,
+                        observed_at=excluded.observed_at''',
+                   (key, content_hash, disposition, at.isoformat()))
+
+
+def recent_unchanged_web_targets(db, *, clock=None, testing=False):
+    """Canonical URL hashes eligible for soft deferral, including legacy history.
+
+    A scheduling row takes precedence over legacy history even after expiry.
+    An unmatched legacy change observation gives no evidence for deferral.
+    """
+    from .targets import canonical_requested_url
+    @cache
+    def safe_key(url):
+        try:
+            return digest(canonical_requested_url(url, testing=testing))
+        except (ValueError, TypeError, UnicodeError):
+            return None
+
+    scheduling = {row['url_hash']: (row['content_hash'], row['disposition'],
+                                   _observation_time(row['observed_at']))
+                  for row in db.execute('SELECT * FROM web_target_observations')}
+    history, receipts, applied = {}, {}, set()
+
+    def latest(key, content_hash, disposition, at):
+        if key not in history or at >= history[key][2]:
+            history[key] = (content_hash, disposition, at)
+
+    for row in db.execute(
+            "SELECT source_url,content_hash,disposition,created_at FROM receipts "
+            "WHERE source_kind='web' ORDER BY rowid"):
+        key = safe_key(row['source_url'])
+        at = _observation_time(row['created_at'])
+        if key is None or at is None or not _valid_hash(row['content_hash']):
+            continue
+        receipt_key = (key, row['content_hash'])
+        if row['disposition'] == 'applied':
+            applied.add(receipt_key)
+        if key not in scheduling:
+            if receipt_key not in receipts or at >= receipts[receipt_key][1]:
+                receipts[receipt_key] = (row['disposition'], at)
+            latest(key, row['content_hash'], row['disposition'], at)
+    for row in db.execute(
+            'SELECT requested_url,content_hash,observed_at FROM web_change_observations ORDER BY observed_seq'):
+        key = safe_key(row['requested_url'])
+        at = _observation_time(row['observed_at'])
+        if key is not None and key not in scheduling and at is not None:
+            disposition, _ = receipts.get((key, row['content_hash']), (None, None))
+            latest(key, row['content_hash'], disposition, at)
+    history.update(scheduling)
+    now = kst_now(clock)
+    return {key for key, (content_hash, disposition, at) in history.items()
+            if at is not None and timedelta(0) <= now - at < timedelta(days=UNCHANGED_COOLDOWN_DAYS)
+            and (disposition in {'duplicate', 'empty_extraction'}
+                 or (disposition == 'applied' and (key, content_hash) in applied))}
 
 
 def _clean(value):

@@ -2,7 +2,7 @@
 import json
 import re
 import sqlite3
-from collections import deque
+from collections import OrderedDict
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -25,7 +25,8 @@ from .ingest import load_watchlist, parse_batch, security_flag, within_window
 from .state import State
 from .store import connect as claim_connect
 from .store import (digest, record, prune_web_target_blocks, recent_web_target_block,
-                    remember_web_target_block)
+                    remember_web_target_block, recent_unchanged_web_targets,
+                    remember_web_target_observation)
 from .targets import canonical_requested_url, resolve_jobs
 from .web import classify_page, select_subpages
 from .plan import assemble_targets, ensure_daily_plan, load_targets, local_target_order, order_targets
@@ -152,7 +153,7 @@ def _store_batch(db, rows, parsed, *, kind, clock, state):
                 claims=claims, venue_id=row['venue_id'], venue_key=row['venue_key'],
                 seen_at=row['seen_at'], clock=clock)
         if kind == 'web':
-            _observe_stored(db, row, text_hash)
+            _observe_stored(db, row, text_hash, disposition)
             state.complete(row['url'], disposition)
         else:
             state.data['counts']['ig_reads'] += 1
@@ -164,9 +165,12 @@ def _store_batch(db, rows, parsed, *, kind, clock, state):
     return pages, new_claims
 
 
-def _observe_stored(db, row, text_hash):
+def _observe_stored(db, row, text_hash, disposition):
     from .changes import insert_observation
     from .store import read_claims
+    remember_web_target_observation(
+        db, row['url'], disposition, content_hash=text_hash, observed_at=row['seen_at'],
+        testing=row.get('_testing', False))
     claims = [claim for claim in read_claims(db) if claim['content_hash'] == text_hash
               and claim['source_url'] == row['url'] and claim['venue_id'] == row['venue_id']
               and claim['venue_key'] == row['venue_key']]
@@ -188,7 +192,7 @@ def _extract(rows, *, kind, settings, state, session, clock):
                     if kind == 'instagram':
                         state.data['counts']['ig_reads'] += 1
                     else:
-                        _observe_stored(db, row, text_hash)
+                        _observe_stored(db, row, text_hash, 'duplicate')
                     state.complete(row['url'], 'duplicate')
                     pages.append({'url': row['url'], 'disposition': 'duplicate'})
                 else:
@@ -280,8 +284,9 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
         global_gap=0 if testing else 1,
     )
     active = active_connect(active_settings.data_dir / 'active.sqlite3')
-    blocks = None
+    history = None
     skipped = {}
+    deferred_urls = set()
     unsafe = 0
 
     def finish_web(body):
@@ -293,19 +298,21 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
             rejections['recent_block_skipped'] = len(skipped)
         if unsafe:
             rejections['unsafe_url_skipped'] = unsafe
+        if deferred_urls:
+            rejections['recent_unchanged_deferred'] = len(deferred_urls)
         if rejections:
             body['rejections'] = rejections
         return _finish(state, body, clock)
 
     def cooling(url):
-        if recent_web_target_block(blocks, url, clock=clock, testing=testing):
+        if recent_web_target_block(history, url, clock=clock, testing=testing):
             skipped[url] = True
             return True
         return False
 
     try:
-        blocks = claim_connect(settings.data_dir)
-        prune_web_target_blocks(blocks, clock=clock)
+        history = claim_connect(settings.data_dir)
+        prune_web_target_blocks(history, clock=clock)
         needs_search = any(item['tavily'] and not item['urls'] for item in targets)
         jobs, notes = resolve_jobs(
             targets,
@@ -314,6 +321,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
             clock=clock,
             testing=testing,
         )
+        unchanged = recent_unchanged_web_targets(history, clock=clock, testing=testing)
         notes.extend({'url': '', 'disposition': note['code']} for note in planning_notes)
         completed = set()
         for url in state.data['completed']:
@@ -324,7 +332,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 completed.add(canonical_requested_url(url, testing=testing))
             except (ValueError, TypeError):
                 continue
-        pending, queued = deque(), set()
+        pending, deferred = OrderedDict(), OrderedDict()
         for job in jobs:
             try:
                 url = canonical_requested_url(job['url'], testing=testing)
@@ -336,19 +344,22 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 unsafe += 1
                 notes.append({'url': '', 'disposition': 'unsafe_url_skipped'})
                 continue
-            if cooling(url) or url in completed or url in queued:
+            if cooling(url) or url in completed or url in pending or url in deferred:
                 continue
             # Canonical keys deduplicate work; explicit receipt URLs retain
             # their existing identity (including a trailing slash).
-            pending.append({**job, 'depth': 0})
-            queued.add(url)
-        if not pending and skipped:
+            queue = pending
+            if digest(url) in unchanged:
+                deferred_urls.add(url)
+                queue = deferred
+            queue[url] = {**job, 'depth': 0}
+        if not pending and not deferred and skipped:
             return finish_web(_base('done', 'recent_block_skipped', success=True, collected=False, mode='web', pages=notes))
-        if not pending and jobs and unsafe == len(jobs):
+        if not pending and not deferred and jobs and unsafe == len(jobs):
             return finish_web(_base('stopped', 'unsafe_url_skipped', success=False, collected=False, mode='web', pages=notes))
-        if not pending and jobs:
+        if not pending and not deferred and jobs:
             return finish_web(_base('already_complete', 'already_complete', success=True, collected=False, mode='web', pages=notes))
-        if not pending:
+        if not pending and not deferred:
             reason = notes[0]['disposition'] if notes else 'no_urls'
             return finish_web(_base('stopped', reason, success=False, collected=False, mode='web', pages=notes))
         if state.data['counts']['pages'] >= PAGE_DAY_CAP:
@@ -375,10 +386,8 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 try:
                     run_pages = 0
                     attempted, children = set(), {}
-                    while pending:
-                        job = pending.popleft()
-                        job_key = canonical_requested_url(job['url'], testing=testing)
-                        queued.discard(job_key)
+                    while pending or deferred:
+                        job_key, job = (pending or deferred).popitem(last=False)
                         if cooling(job_key) or job_key in completed or job_key in attempted:
                             continue
                         if state.data['counts']['pages'] >= PAGE_DAY_CAP:
@@ -392,53 +401,69 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                             fetched = (fetcher.fetch(job['url'], subpage=True) if job.get('discovered_subpage')
                                        else fetcher.fetch(job['url']))
                         except web_proxy.ProxyUnavailable:
+                            remember_web_target_observation(
+                                history, job['url'], 'error',
+                                observed_at=kst_now(clock).isoformat(), testing=testing)
                             stop_reason = 'proxy_unavailable'
                             break
                         if fetched.outcome == 'cap_reached':
                             stop_reason = 'active_body_cap'
                             break
+                        seen_at = kst_now(clock).isoformat()
                         state.data['counts']['pages'] += 1
                         run_pages += 1
                         state.save()
                         disposition, text = classify_page(fetched, job['domains'])
-                        remember_web_target_block(blocks, job['url'], disposition,
+                        remember_web_target_block(history, job['url'], disposition,
                                                   status=fetched.status, clock=clock, testing=testing)
+                        # A failed extraction must leave a retryable latest outcome,
+                        # rather than cooling on an older successful receipt.
+                        remember_web_target_observation(
+                            history, job['url'], 'pending_extraction' if disposition == 'ready' else disposition,
+                            content_hash=digest(text) if text is not None else (fetched.content_hash or None),
+                            observed_at=seen_at, testing=testing)
                         target_key = (job['venue_id'], job['venue_key'])
                         if (job['depth'] == 0 and fetched.outcome == 'ok'
                                 and disposition in ('ready', 'empty_body')
                                 and children.get(target_key, 0) < SUBPAGE_MAX):
-                            follow = []
+                            fresh_children, deferred_children = [], []
+                            slots = SUBPAGE_MAX - children.get(target_key, 0)
                             for fetch_url in select_subpages(fetched.content, fetched.url or job['url'],
                                                              job['domains'], testing=testing, limit=None):
-                                if children.get(target_key, 0) >= SUBPAGE_MAX:
-                                    break
                                 child_key = canonical_requested_url(fetch_url, testing=testing)
-                                if child_key in completed or child_key in attempted:
+                                if child_key in completed or child_key in attempted or cooling(child_key):
                                     continue
-                                # Promote an explicit job without losing its exact-URL
-                                # authorization. Discovered URLs inherit no authorization.
-                                if child_key in queued:
-                                    child = next(item for item in pending if
-                                                 canonical_requested_url(item['url'], testing=testing) == child_key)
-                                    pending.remove(child)
+                                if digest(child_key) in unchanged:
+                                    deferred_children.append((child_key, fetch_url, deferred))
                                 else:
-                                    # A cooling child is noted as skipped but never
-                                    # consumes one of the target's subpage slots.
-                                    if cooling(child_key):
-                                        continue
+                                    fresh_children.append((child_key, fetch_url, pending))
+                                if len(fresh_children) == slots:
+                                    break
+                            selected = (fresh_children + deferred_children)[:slots]
+                            follow = []
+                            for child_key, fetch_url, queue in selected:
+                                # Promote an explicit job without losing its exact-URL
+                                # authorization or request mode. A queued deferred job
+                                # also keeps its place within the deferred queue.
+                                child = queue.get(child_key)
+                                if child is None:
                                     child = {**job, 'url': fetch_url, 'source_authorization': None,
                                              'discovered_subpage': True}
-                                follow.append({**child, 'depth': 1})
-                                queued.add(child_key)
-                                children[target_key] = children.get(target_key, 0) + 1
-                            pending.extendleft(reversed(follow))
+                                queue[child_key] = {**child, 'depth': 1}
+                                if queue is deferred:
+                                    deferred_urls.add(child_key)
+                                else:
+                                    follow.append(child_key)
+                            for child_key in reversed(follow):
+                                pending.move_to_end(child_key, last=False)
+                            children[target_key] = children.get(target_key, 0) + len(selected)
                         if disposition != 'ready':
                             state.complete(job['url'], disposition)
                             pages.append({'url': job['url'], 'disposition': disposition})
                             continue
                         proposal_evidence.extend(inspect_page(
-                            job, fetched, observed_at=kst_now(clock).isoformat(), disposition=disposition))
-                        ready.append({**job, 'text': text, 'seen_at': kst_now(clock).isoformat(),
+                            job, fetched, observed_at=seen_at, disposition=disposition))
+                        ready.append({**job, 'text': text, 'seen_at': seen_at,
                                       'final_url': fetched.url or job['url'], '_testing': testing})
                 finally:
                     fetcher.close()
@@ -468,8 +493,8 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
     except (sqlite3.Error, ValueError, TypeError):
         raise CollectError('state_corrupt') from None
     finally:
-        if blocks is not None:
-            blocks.close()
+        if history is not None:
+            history.close()
         active.close()
 
 
