@@ -1,12 +1,15 @@
 # HANSET / 한셋 — static site source
 
-(Historical note: the site is now live at https://hanset.soulbound.co.kr. This repo contains source only; deploys are done by the HANSET operations bot. See ../README.md and ../AGENTS.md.) No trackers, no external requests (fonts are self-hosted Pretendard, OFL).
+(Historical note: the site is now live at https://hanset.soulbound.co.kr. This repo contains source only; deploys are done by the HANSET operations bot. See ../README.md and ../AGENTS.md.) No trackers or external requests. Web fonts are self-hosted.
 
 ## Build / run
     cd site
     python3 -m http.server 8765 --directory dist --bind 127.0.0.1   # http://127.0.0.1:8765/
     .venv/bin/python build_site.py --release  # indexable build: canonical + sitemap for hanset.soulbound.co.kr
-(.venv = fonttools+brotli only, for font subsetting; stdlib python3 also builds, falling back to system fonts.)
+The site build environment uses FontTools and Brotli to subset Pretendard.
+If FontTools or its WOFF2 Brotli backend is unavailable, body text uses the
+system font stack. The bundled Excalifont and Gaegu display fonts stay available.
+See the [release verification matrix](../README.md#release-build-verification).
 Restart the http.server after a rebuild (dist/ is recreated).
 
 ## Source of truth
@@ -135,6 +138,7 @@ python3 site/build_site.py --release --out "$(mktemp -d)"
 
 Fixtures use generated synthetic contacts in temporary directories. Release
 failure tests invoke the real CLI in an isolated repository copy and use its
-supported stdlib/font fallback (`python -S`); leak validation is never mocked.
+supported stdlib/font fallback (`python -E -S`); leak validation is never mocked.
 The clean release test checks canonical/robots/sitemap, 404, Search Console
-verification, cache-busting hashes, CSP and the absence of an advertising page.
+verification, font references, cache-busting hashes, CSP and the absence of an
+advertising page.

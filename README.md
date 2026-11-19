@@ -27,7 +27,7 @@ python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # fonttools
 python3 -m http.server 8765 --directory dist --bind 127.0.0.1          # http://127.0.0.1:8765/
 ```
 - The preview build (no `--release`) adds `noindex` — local look only, never deploy.
-- Without fonttools the builder still builds (falls back to system fonts) but fonts will differ.
+- With FontTools and a Brotli backend, the builder serves self-hosted Pretendard for body text. If either dependency is unavailable, body text uses the system font stack. The bundled Excalifont and Gaegu display fonts are available in both cases.
 - Illustrations: `cd illustrations && python3 make_all.py && ./render_png.sh` (needs Chrome headless for PNG; fonts in `_fonts/`, SIL OFL). Copy updated SVGs into `site/static/img/{guide,archive}/`.
 
 ## Site tests
@@ -51,18 +51,38 @@ For the collector, clipper, twin, data foundation and browser suites, see
 
 ### Release build verification
 
-From the repository root, activate the site build virtual environment
-(`source site/.venv/bin/activate`) so the builder can use FontTools and Brotli
-for font subsetting. Build into a temporary directory.
+From the repository root, use the site build environment created above for the
+full build and separate temporary directories for each release. The FontTools-only
+environment exercises a missing WOFF2 encoder backend.
 
 ```bash
-release_dir=$(mktemp -d) &&
-  python3 site/build_site.py --release --out "$release_dir"
+verify_dir=$(mktemp -d)
+site/.venv/bin/python site/build_site.py --release --out "$verify_dir/full"
+python3 -E -S site/build_site.py --release --out "$verify_dir/stdlib"
+python3 -m venv "$verify_dir/fonttools-only"
+"$verify_dir/fonttools-only/bin/python" -m pip install 'fonttools>=4.50'
+"$verify_dir/fonttools-only/bin/python" -c 'from importlib.util import find_spec; import fontTools; assert find_spec("brotli") is None and find_spec("brotlicffi") is None'
+"$verify_dir/fonttools-only/bin/python" site/build_site.py --release --out "$verify_dir/no-brotli"
 ```
 
-Require a successful exit, the `built … pages` summary and `leak check OK`.
-Serve the generated output locally, open affected pages at mobile and desktop
-widths, and check their internal links.
+| Build environment | Body font output |
+| --- | --- |
+| FontTools and Brotli | Pretendard Regular and Bold WOFF2 subsets and license, CSS weights 400 and 700, and a Regular preload |
+| Stdlib only | System font stack |
+| FontTools without a Brotli backend | System font stack |
+
+Require a successful exit, the `built … pages` summary and `leak check OK`
+from each build. Excalifont and Gaegu must resolve in all three builds, including
+the Excalifont preload. Each fallback build should warn once and omit Pretendard
+files, preloads, and CSS font URLs. Resolve every HTML font preload and CSS font
+URL relative to its document or stylesheet and check that it points to a nonempty
+same-origin WOFF2 file. Check that each stylesheet's `?v=` matches the first eight
+hex digits of the MD5 of its emitted bytes and that the full and fallback CSS
+hashes differ.
+
+Serve the full and fallback outputs locally. Open Home, Finder, a venue detail,
+and Archive at mobile and desktop widths. Confirm that text is readable, fonts
+load locally without failures, and internal links resolve.
 
 ## Deploy
 Only the HANSET operations bot deploys, through its external release entry point on the operations box: `python build_site.py --release` plus Pages Functions bundling for Cloudflare Pages project `hanset` (owner-authorized 2026-10-19, see [AGENTS.md](AGENTS.md)). No deploy script or CI deploy step lives in this repo. PRs must be merge-ready: release build clean, `leak check OK`, no secrets. Frontend workers have no tokens — use the local build, test and loopback preview commands above; never deploy from a worker.

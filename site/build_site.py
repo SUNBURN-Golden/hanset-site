@@ -10,6 +10,7 @@ Nothing is deployed, nothing is sent. No trackers, no external requests.
   .venv/bin/python build_site.py --release       # indexable + canonical/sitemap for hanset.soulbound.co.kr
 """
 import argparse, csv, datetime as dt, html, json, re, shutil, sys
+from hashlib import md5
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import NamedTuple
@@ -23,6 +24,7 @@ DIST = ROOT / "dist"
 VENUE_SKETCH = ROOT / "static/venue-sketch"
 VERIFIED = DATA / "data/verified"
 SITE_URL = "https://hanset.soulbound.co.kr"
+PRETENDARD_WEIGHTS = {400: "Regular", 700: "Bold"}
 BRAND_KO, BRAND_EN = "한셋", "HANSET"
 FINDER_LABEL = "Drop-in & Sauna Finder"
 CITY_KO = {"Seoul": "서울", "Busan": "부산", "Jeju": "제주", "Gyeonggi": "경기"}
@@ -444,18 +446,32 @@ def venue_media(v):
 
 
 class Site:
-    def __init__(self, today, release):
+    def __init__(self, today, release, *, pretendard=False):
         self.today, self.release = today, release
         self.pages = {}  # path -> html
         self.noindex = set()  # pages kept out of canonical/sitemap even in release (e.g. /join/welcome/)
         self.creators = False
         self.feature = None
+        self.pretendard = pretendard
+        self.css = (ROOT / "static/css/site.css").read_bytes()
+        if pretendard:
+            font_faces = "".join(
+                f'@font-face{{font-family:"Pretendard";font-weight:{weight};font-style:normal;font-display:swap;'
+                f'src:url(/assets/fonts/{pretendard_filename(weight)}) format("woff2")}}\n'
+                for weight in PRETENDARD_WEIGHTS
+            )
+            self.css = font_faces.encode("utf-8") + self.css
+        self.css_version = content_ver(self.css)
 
     def head(self, title, desc, path, noindex=False):
         full = title if title.startswith(BRAND_EN) else f"{title} · {BRAND_EN}"
         indexable = self.release and not noindex
         robots = "" if indexable else '<meta name="robots" content="noindex,nofollow">\n'
         canon = f'<link rel="canonical" href="{SITE_URL}{path}">\n' if indexable else ""
+        pretendard_preload = (
+            f'<link rel="preload" href="/assets/fonts/{pretendard_filename(400)}" as="font" type="font/woff2" crossorigin>'
+            if self.pretendard else ""
+        )
         og = (f'<meta property="og:type" content="website"><meta property="og:site_name" content="{BRAND_EN}">'
               f'<meta property="og:title" content="{E(full)}"><meta property="og:description" content="{E(desc)}">'
               + (f'<meta property="og:url" content="{SITE_URL}{path}"><meta property="og:locale" content="en_US">'
@@ -465,9 +481,9 @@ class Site:
         return (f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
                 f'<title>{E(full)}</title><meta name="description" content="{E(desc)}">\n{robots}{canon}{og}'
                 f'<meta name="msvalidate.01" content="5986AEB0A3C1E9F1E558DA5CA02E1CE0" /><meta name="theme-color" content="#F5F2EC"><link rel="icon" href="/favicon.svg" type="image/svg+xml">'
-                f'<link rel="preload" href="/assets/fonts/Pretendard-Regular.subset.woff2" as="font" type="font/woff2" crossorigin>'
+                f'{pretendard_preload}'
                 f'<link rel="preload" href="/assets/fonts/Excalifont/Excalifont-Regular.woff2" as="font" type="font/woff2" crossorigin>'
-                f'<link rel="stylesheet" href="/assets/css/site.css?v={asset_ver("css/site.css")}"></head>')
+                f'<link rel="stylesheet" href="/assets/css/site.css?v={self.css_version}"></head>')
 
     def nav(self, active):
         tabs = "".join(f'<a href="/{key}/"' + (' aria-current="page"' if active == key else '')
@@ -1270,9 +1286,11 @@ def build(site, venues, events, today, vevents=(), creators=()):
     guides(site, venues, today)
     site.add("/404.html", "Page not found", "This page doesn’t exist.", f'<div class="page"><h1>Lost? Let’s get you back.</h1><p>This page doesn’t exist. Start again from <a href="/">Home</a> or the <a href="/finder/">{FINDER_LABEL}</a>.</p></div>')
 
+def content_ver(content):
+    return md5(content).hexdigest()[:8]
+
 def asset_ver(rel):
-    import hashlib
-    return hashlib.md5((ROOT / "static" / rel).read_bytes()).hexdigest()[:8]
+    return content_ver((ROOT / "static" / rel).read_bytes())
 
 ILLUSTRATIONS = [
     ("box", "crossfit-box-plan", "Inside a CrossFit box", "Hand-drawn plan of a typical CrossFit box: whiteboard, WOD floor with kettlebells and boxes, rig, open gym with barbell racks, lockers, rowers and bikes, front desk and entrance."),
@@ -1303,13 +1321,27 @@ def ics(events, today):
     lines.append("END:VCALENDAR")
     return "\r\n".join(fold(line) for line in lines) + "\r\n"
 
-def subset_fonts(dist):
+def pretendard_filename(weight):
+    return f"Pretendard-{PRETENDARD_WEIGHTS[weight]}.subset.woff2"
+
+def font_subsetting_available():
     try:
-        from fontTools import subset
-        from fontTools.ttLib import TTFont
-    except ImportError:
-        print("WARN: fonttools not installed; skipping font subsetting (site falls back to system fonts). Use .venv/bin/python.")
-        return
+        from fontTools.ttLib import woff2
+    except ModuleNotFoundError as exc:
+        if exc.name != "fontTools":
+            raise
+        missing = "FontTools"
+    else:
+        if woff2.haveBrotli:
+            return True
+        missing = "a Brotli backend for FontTools"
+    print(f"WARN: {missing} is unavailable; skipping font subsetting (using system fonts for body text).")
+    return False
+
+def subset_fonts(dist):
+    from fontTools import subset
+    from fontTools.ttLib import TTFont
+
     corpus = []
     for p in list(dist.rglob("*.html")) + list((dist / "assets/js").glob("*.js")):
         try:
@@ -1321,11 +1353,14 @@ def subset_fonts(dist):
     text = "".join(corpus)
     chars = "".join(sorted(set(text + "".join(chr(c) for c in range(0x20, 0x7F)) + "₩–—·→›×℃™…“”‘’")))
     out = dist / "assets/fonts"; out.mkdir(parents=True, exist_ok=True)
-    for w in ("Regular", "Bold"):
+    for weight, style in PRETENDARD_WEIGHTS.items():
         opts = subset.Options(); opts.flavor = "woff2"; opts.layout_features = ["*"]; opts.name_IDs = ["*"]; opts.notdef_outline = True
-        f = TTFont(ROOT / f"static/fonts/Pretendard-{w}.otf")
-        s = subset.Subsetter(opts); s.populate(text=chars); s.subset(f)
-        f.flavor = "woff2"; f.save(out / f"Pretendard-{w}.subset.woff2")
+        with TTFont(ROOT / f"static/fonts/Pretendard-{style}.otf") as font:
+            subsetter = subset.Subsetter(opts)
+            subsetter.populate(text=chars)
+            subsetter.subset(font)
+            font.flavor = "woff2"
+            font.save(out / pretendard_filename(weight))
     shutil.copy(ROOT / "static/fonts/Pretendard-OFL-LICENSE.txt", out / "Pretendard-OFL-LICENSE.txt")
 
 # Leak rules are deliberately a vocabulary, not a semantic claim detector. Keep
@@ -1904,7 +1939,8 @@ def main():
         creators = VF.load_creators(VERIFIED / "examples/creators.example.json", allow_example=True)
     else:
         vevents = VF.load_events(VERIFIED / "events.json", today); creators = VF.load_creators(VERIFIED / "creators.json")
-    site = Site(today, a.release); site.creators = bool(creators)
+    pretendard = font_subsetting_available()
+    site = Site(today, a.release, pretendard=pretendard); site.creators = bool(creators)
     build(site, venues, events, today, vevents, creators)
     if dist.exists(): shutil.rmtree(dist)
     dist.mkdir(parents=True)
@@ -1912,6 +1948,7 @@ def main():
         p = dist / path.lstrip("/") if path.endswith(".html") else dist / path.lstrip("/") / "index.html"
         p.parent.mkdir(parents=True, exist_ok=True); p.write_text(h, encoding="utf-8")
     (dist / "assets").mkdir(); shutil.copytree(ROOT / "static/css", dist / "assets/css"); shutil.copytree(ROOT / "static/js", dist / "assets/js"); shutil.copytree(ROOT / "static/img", dist / "assets/img")
+    (dist / "assets/css/site.css").write_bytes(site.css)
     for family in ("Excalifont", "Gaegu"):
         shutil.copytree(ROOT / "static/fonts" / family, dist / "assets/fonts" / family)
     for v in venues:
@@ -1933,7 +1970,8 @@ def main():
     (dist / "_headers").write_text("/*\n  X-Content-Type-Options: nosniff\n  Referrer-Policy: strict-origin-when-cross-origin\n  X-Frame-Options: DENY\n  Permissions-Policy: camera=(), microphone=(), geolocation=()\n"
         "  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'\n"
         "/assets/*\n  Cache-Control: public, max-age=86400\n/*.html\n  Cache-Control: public, max-age=0, must-revalidate\n")
-    subset_fonts(dist)
+    if pretendard:
+        subset_fonts(dist)
     bad = leak_check(dist)
     if bad:
         for path, rule in bad: print(f"LEAK-CHECK FAIL: {path} [{rule}]")

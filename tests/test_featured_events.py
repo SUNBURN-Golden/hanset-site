@@ -1,6 +1,7 @@
 """Featured-event lifecycle and cached-page regressions, without maintained data edits."""
 from copy import deepcopy
 import datetime as dt
+from hashlib import md5
 from html.parser import HTMLParser
 import json
 import os
@@ -147,13 +148,13 @@ def test_release_routes_sitemap_and_site_locks(inventory, tmp_path, capsys, mode
         page = path.read_text()
         for href in re.findall(r'href="(/[^"?#]*)', page):
             if href.startswith('/api/'): continue
-            if 'skipping font subsetting' in output and href == '/assets/fonts/Pretendard-Regular.subset.woff2':
-                continue  # The builder supports running without optional fonttools.
             destination = out / href.lstrip('/')
             if href.endswith('/'): destination /= 'index.html'
             assert destination.is_file(), (path.relative_to(out), href)
+            if destination.suffix == '.woff2':
+                assert destination.read_bytes().startswith(b'wOF2'), (path.relative_to(out), href)
         for asset, version in re.findall(r'(?:src|href)="(/assets/(?:js|css)/[^"?]+)\?v=([a-f0-9]+)"', page):
-            assert version == B.asset_ver(asset.removeprefix('/assets/'))
+            assert version == md5((out / asset.lstrip('/')).read_bytes()).hexdigest()[:8]
         if '<footer' in page:
             assert ('href="/hyrox-seoul/"' in page) == (mode == 'featured' and '<body class="home">' not in page)
 

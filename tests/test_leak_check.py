@@ -1,10 +1,12 @@
 """Synthetic emitted-output fixtures; no collector or browser dependencies."""
 import contextlib
+from hashlib import md5
 from html.parser import HTMLParser
 import io
 import json
 from pathlib import Path
 from posixpath import normpath
+import re
 import shutil
 import subprocess
 import sys
@@ -261,10 +263,19 @@ class ReleaseLeakTests(unittest.TestCase):
     def tearDownClass(cls): cls.temp.cleanup()
 
     def build(self, *args):
-        # -S selects the builder's supported stdlib/font fallback, keeping CLI
+        # -E -S selects the builder's supported stdlib/font fallback, keeping CLI
         # fixtures fast. Validation itself is never mocked or bypassed.
-        return subprocess.run([sys.executable, '-S', str(self.root / 'site/build_site.py'), '--release',
+        return subprocess.run([sys.executable, '-E', '-S', str(self.root / 'site/build_site.py'), '--release',
                                '--out', str(self.out), *args], cwd=self.root, capture_output=True, text=True)
+
+    def assert_local_font(self, base_url, href):
+        url = urlsplit(urljoin(base_url, href))
+        self.assertEqual(urlsplit(B.SITE_URL)[:2], url[:2])
+        font = self.out / unquote(url.path).lstrip('/')
+        self.assertEqual('.woff2', font.suffix)
+        self.assertTrue(font.is_file(), href)
+        self.assertTrue(font.read_bytes().startswith(b'wOF2'), href)
+        return url.path
 
     def assert_build_rejected(self, diagnostic, *args):
         self.out.mkdir(exist_ok=True)
@@ -377,7 +388,20 @@ class ReleaseLeakTests(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stdout + result.stderr)
         self.assertIn('leak check OK', result.stdout)
         self.assertRegex(result.stdout, r'built \d+ pages, \d+ venues')
+        self.assertEqual(1, result.stdout.count('skipping font subsetting'))
         out = self.out
+        excalifont = '/assets/fonts/Excalifont/Excalifont-Regular.woff2'
+        gaegu = '/assets/fonts/Gaegu/Gaegu-Regular.woff2'
+        self.assertEqual([], list((out / 'assets/fonts').glob('Pretendard-*')))
+        css = out / 'assets/css/site.css'
+        css_text = css.read_text(encoding='utf-8')
+        font_urls = re.findall(r'url\(\s*["\']?([^\s"\')]+)', '\n'.join(
+            re.findall(r'@font-face\s*\{([^}]+)\}', css_text)
+        ))
+        self.assertCountEqual([excalifont, gaegu], [
+            self.assert_local_font(B.SITE_URL + '/assets/css/site.css', href) for href in font_urls
+        ])
+        css_hash = md5(css.read_bytes()).hexdigest()[:8]
         home = (out / 'index.html').read_text()
         self.assertIn('<link rel="canonical" href="' + B.SITE_URL + '/">', home)
         self.assertIn('Allow: /', (out / 'robots.txt').read_text())
@@ -399,12 +423,24 @@ class ReleaseLeakTests(unittest.TestCase):
             if page.name == 'index.html':
                 relative = relative.removesuffix('index.html')
             with self.subTest(page=relative):
+                font_preloads = []
+                stylesheets = []
+                base_url = f'{B.SITE_URL}/{relative}'
                 for tag, link in PageLinks(page.read_text(encoding='utf-8')).links:
                     if href := link.get('href'):
-                        self.assert_no_ads_destination(f'{B.SITE_URL}/{relative}', href)
+                        self.assert_no_ads_destination(base_url, href)
                     if tag == 'a':
                         self.assertNotIn('sponsored', (link.get('rel') or '').lower().split())
-        self.assertRegex(home, r'/assets/css/site.css\?v=[0-9a-f]+')
+                    if tag == 'link' and link.get('rel') == 'preload' and link.get('as') == 'font':
+                        font_preloads.append(self.assert_local_font(base_url, link['href']))
+                    if tag == 'link' and link.get('rel') == 'stylesheet':
+                        stylesheets.append(link['href'])
+                if stylesheets:
+                    self.assertEqual([f'/assets/css/site.css?v={css_hash}'], stylesheets)
+                    self.assertEqual([excalifont], font_preloads)
+                else:
+                    self.assertFalse(font_preloads)
+        self.assertIn(f'/assets/css/site.css?v={css_hash}', home)
         finder = (out / 'finder/index.html').read_text()
         self.assertRegex(finder, r'/assets/js/finder.js\?v=[0-9a-f]+')
         self.assertIn("connect-src 'none'", (out / '_headers').read_text())
