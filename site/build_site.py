@@ -1279,7 +1279,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <label class="chk"><input type="checkbox" name="nl" value="1" checked> Send me the weekly picks.</label>
 <button class="btn btn-d" type="submit">Continue with Google</button>
 </form>
-<p class="muted">Google only. We keep your name and email. Nothing else. <a href="/privacy/">Privacy</a></p>'''
+<p class="muted">When you join with Google, we store your email, your name if Google provides it, your Google account ID, your newsletter choice, and your sign-up date. Signing in again refreshes your email and name and keeps your original newsletter choice and sign-up date. <a href="/privacy/">Privacy</a></p>'''
     site.add("/join/", f"{BRAND_EN} — Join", "Join HANSET with Google. Weekly drop-ins and saunas, checked.", f'<div class="page">{jbody}</div>', "about", ("join.js",))
     site.add("/join/welcome/", "You're in", "Welcome to HANSET.", '<div class="page"><h1>You&#x27;re in.</h1><p><a class="btn btn-d" href="/">Back home</a></p></div>', "about", noindex=True)
 
