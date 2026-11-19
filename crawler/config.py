@@ -69,7 +69,7 @@ def load(path=None):
         raise Rejected('invalid_extension_origin')
     # Registry values are operator input, never inferred from discovered text.
     for seed in cfg['seeds']:
-        policy_for(cfg, seed)
+        seed_policy(cfg, seed)
     return cfg
 
 
@@ -102,7 +102,7 @@ def browser_policy_for_origin(cfg, origin, now=None):
     raise Rejected(reason)
 
 
-def policy_for(cfg, url, browser=False, now=None, required=True):
+def _matching_policy(cfg, url):
     from .privacy_filter import safe_url
     u = urlsplit(safe_url(url))
     key = _origin_key(u)
@@ -110,15 +110,31 @@ def policy_for(cfg, url, browser=False, now=None, required=True):
         paths = [policy_path(x) for x in p['paths']]
         if _origin_key(urlsplit(p['origin'])) == key and any(
                 u.path == x or u.path.startswith(x if x.endswith('/') else x + '/') for x in paths):
-            if not p.get('public') or (browser and not p.get('browser')):
-                break
-            if not _review_is_fresh(p, now):
-                if required:
-                    raise Rejected('robots_review_stale')
-                return {}
-            if any(u.path.startswith(policy_path(x)) for x in p.get('disallow', [])):
-                break
-            return p
+            return p, u.path
+    return None, u.path
+
+
+def _disallowed(policy, path):
+    return any(path.startswith(policy_path(x)) for x in policy.get('disallow', []))
+
+
+def seed_policy(cfg, url):
+    """Validate configured seed coverage without granting current network access."""
+    policy, path = _matching_policy(cfg, url)
+    if not policy or not policy.get('public') or _disallowed(policy, path):
+        raise Rejected('access_not_approved')
+    return policy
+
+
+def policy_for(cfg, url, browser=False, now=None, required=True):
+    policy, path = _matching_policy(cfg, url)
+    if policy and policy.get('public') and (not browser or policy.get('browser')):
+        if not _review_is_fresh(policy, now):
+            if required:
+                raise Rejected('robots_review_stale')
+            return {}
+        if not _disallowed(policy, path):
+            return policy
     if required:
         raise Rejected('access_not_approved')
     return {}  # Manual DOM clips may be clues; this never grants network access.

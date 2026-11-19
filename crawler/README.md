@@ -235,10 +235,17 @@ Milestones and quota lifecycle counts are separate. Legacy reports derive 44
 candidates (three missing URLs) and 31 previously published venues from individual
 inventory; legacy summary-only values are never treated as processing evidence.
 Discovery indexes have separate operational progress (`discovery_indexes`) and
-do not add placeholder evidence to the five-stage or identity counts. Unapproved
-scheduled candidates appear in `access_holds`; a hold is audited only when its
-reason changes, and is reconsidered when local policy changes. Robots-review
-age checks use the same injected worker clock as quotas and evidence.
+do not add placeholder evidence to the five-stage or identity counts. The worker
+registers seeds within the candidate quota and reconciles scheduled records before
+selecting a body. An explicitly configured seed reuses the existing record if its
+URL was previously clipped. An expired robots review leaves the registry available
+for reports and manual intake and holds the individual seed without a network request.
+After the worker runs, `show` exposes `access_hold = "robots_review_stale"` on the
+held record and `report` includes it in `access_holds`. The worker audits a hold
+when it is set or its reason changes. After a renewed robots review is recorded
+in the registry, the next `worker --once` reloads it and clears the hold if the
+seed is approved. Collection then follows the usual cadence and access checks.
+Robots-review age checks use the same injected worker clock as quotas and evidence.
 
 Run each suite from the repository root. Use a Python 3.11+ test virtual
 environment with `pytest` for the Python suites. Keep test and browser

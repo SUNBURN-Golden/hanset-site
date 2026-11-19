@@ -7,7 +7,7 @@ import time
 import uuid
 from functools import wraps
 from urllib.parse import urlsplit, unquote
-from .config import Rejected, load, policy_for
+from .config import Rejected, load, policy_for, seed_policy
 from . import evidence
 from .dedup import venue_for, group_for
 from .leases import Supervisor, current, process_start
@@ -49,7 +49,7 @@ class Worker:
         self.instance = f'{os.getpid()}:{process_start(os.getpid())}:{uid()}'
         self.supervisor = Supervisor(self)
 
-    def candidate(self, url, title='', channel='auto_discovery', depth=0, db=None):
+    def candidate(self, url, title='', channel='auto_discovery', depth=0, db=None, *, seed=False):
         if channel not in CHANNELS or type(depth) is not int or not 0 <= depth <= self.cfg['max_depth']:
             raise Rejected('invalid_channel_or_depth')
         url, title = safe_url(url), text(title)[:240]
@@ -57,9 +57,16 @@ class Worker:
             raise Rejected('excluded_venue')
         if any(v['venue_id'] in self.cfg['excluded_venues'] and url in (safe_url(value) for value in v.get('urls', [])) for v in self.cfg['venues']):
             raise Rejected('excluded_venue')
+        configured_policy = seed_policy(self.cfg, url) if seed else None
         def insert(conn):
-            old = conn.execute('SELECT id FROM records WHERE brand=? AND url=?', ('HANSET', url)).fetchone()
+            old = conn.execute('SELECT id, channel FROM records WHERE brand=? AND url=?', ('HANSET', url)).fetchone()
             if old:
+                if seed and old['channel'] == 'manual_clip':
+                    # Explicit seed configuration schedules this URL even if it was clipped first.
+                    row = conn.execute('SELECT data FROM records WHERE id=?', (old['id'],)).fetchone()
+                    record = json.loads(row[0])
+                    record['channel'] = 'auto_discovery'
+                    self._save(conn, record)
                 return old[0]
             now = self.clock()
             day, _ = day_and_expiry(now, self.cfg['lease_seconds'])
@@ -73,7 +80,8 @@ class Worker:
                           dedup_group_id=None, verification_status='candidate', pipeline_stage=STAGES[0],
                           has_conflict=False, conflicts=[], privacy_status='passed', schema_version=1,
                           depth=depth, selected_evidence_ids=[])
-            if policy_for(self.cfg, url, now=now, required=False).get('adapter'):
+            policy = configured_policy if seed else policy_for(self.cfg, url, now=now, required=False)
+            if policy.get('adapter'):
                 record['item_type'] = 'discovery_index'
             conn.execute('INSERT INTO records VALUES (?,?,?,?,?,?)',
                          (rid, 'HANSET', url, channel, STAGES[0], json.dumps(record, ensure_ascii=False)))
@@ -334,6 +342,28 @@ class Worker:
             self._save(db, r)
             self._history(db, record_id, STAGES[4], 'operator_publish_pending')
 
+    def _reconcile_access(self):
+        eligible = []
+        with self.store.transaction() as db:
+            now = self.clock()
+            rows = db.execute("SELECT data FROM records WHERE channel!='manual_clip'").fetchall()
+            for row in rows:
+                record = json.loads(row[0])
+                try:
+                    policy = policy_for(self.cfg, record['url'], browser=record['channel'] == 'browser_extract', now=now)
+                except Rejected as exc:
+                    reason = str(exc)
+                    if record.get('access_hold') != reason:
+                        record['access_hold'] = reason
+                        self._save(db, record)
+                        db.execute('INSERT INTO audit(operation,reason,at) VALUES (?,?,?)',
+                                   ('access_policy', reason, now))
+                    continue
+                if record.pop('access_hold', None):
+                    self._save(db, record)
+                eligible.append((record, policy))
+        return eligible
+
     def once(self):
         self.supervisor.recover()
         self.supervisor.expire()
@@ -341,30 +371,17 @@ class Worker:
             self._refresh(db)
         for seed in self.cfg['seeds']:
             try:
-                self.candidate(seed)
+                self.candidate(seed, seed=True)
             except Rejected:
                 continue
-        records = [json.loads(r[0]) for r in self.store.db.execute('SELECT data FROM records')]
+        eligible = self._reconcile_access()
         # Recheck volatile fields before new discovery; prior observations remain append-only.
         def priority(r):
             volatile = any(f['field'] in ('rates', 'hours', 'closures') for f in r['extracted_facts'])
             return (0 if volatile else 1, r.get('collected_at') or '', r['url'])
-        for r in sorted(records, key=priority):
-            if r['channel'] == 'manual_clip':
-                continue
+        for r, policy in sorted(eligible, key=lambda entry: priority(entry[0])):
             res = None
             try:
-                try:
-                    policy = policy_for(self.cfg, r['url'], browser=r['channel'] == 'browser_extract', now=self.clock())
-                except Rejected as exc:
-                    if r.get('access_hold') != str(exc):
-                        r['access_hold'] = str(exc)
-                        self._save(self.store.db, r)
-                        self.store.db.execute('INSERT INTO audit(operation,reason,at) VALUES (?,?,?)',
-                                              ('access_policy', str(exc), self.clock()))
-                    continue
-                if r.pop('access_hold', None):
-                    self._save(self.store.db, r)
                 last_ts = r.get('collected_at') or r.get('last_attempt_at')
                 if last_ts and not r.get('recheck_requested'):
                     age = self.clock() - dt.datetime.fromisoformat(last_ts).timestamp()
@@ -386,8 +403,8 @@ class Worker:
             except Rejected as exc:
                 if res:
                     self.revoke(res)
-                    r['last_attempt_at'] = dt.datetime.fromtimestamp(self.clock(), dt.timezone.utc).isoformat()
-                    r['last_error'] = str(exc)
-                    self._save(self.store.db, r)
+                    attempted_at = dt.datetime.fromtimestamp(self.clock(), dt.timezone.utc).isoformat()
+                    self.store.db.execute("UPDATE records SET data=json_set(data, '$.last_attempt_at', ?, '$.last_error', ?) WHERE id=?",
+                                          (attempted_at, str(exc), r['record_id']))
                 continue
         return False
