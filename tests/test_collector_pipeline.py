@@ -103,6 +103,10 @@ class Pipeline(unittest.TestCase):
     def record(self, rid):
         return json.loads(self.store.db.execute('SELECT data FROM records WHERE id=?', (rid,)).fetchone()[0])
 
+    def body_charges(self):
+        row = self.store.db.execute('SELECT SUM(attempts), SUM(new_bodies) FROM counters').fetchone()
+        return tuple(row)
+
     def review_cli(self, approvals, state, *args):
         from crawler.__main__ import main
 
@@ -591,6 +595,129 @@ class Pipeline(unittest.TestCase):
             self.assertTrue(self.w.once())
         self.assertEqual(self.record(rid)['pipeline_stage'], STAGES[1])
         self.assertEqual(report(self.store, self.cfg, self.now)['access_holds'], 0)
+
+    def test_once_stops_after_first_rejected_body(self):
+        first, second = 'https://blog.test/a', 'https://source.test/kr'
+        second_id = self.w.candidate(second)
+        first_id = self.w.candidate(first)
+        approvals = Path(self.tmp.name) / 'approvals.json'
+        approvals.write_text(json.dumps(self.cfg))
+        with patch('crawler.network_gate.NetworkGate.fetch') as fetch:
+            fetch.side_effect = [
+                {'url': first, 'redirects': [], 'body': b'<div>Public guide</div>'},
+                {'url': second, 'redirects': [], 'body': b'<main>Public guide</main>'},
+            ]
+            result = self.review_cli(approvals, self.store.path, 'worker', '--once')
+            self.assertEqual(result, {'processed': False, 'auto_publish_to_site': False})
+            fetch.assert_called_once_with(first)
+            self.assertEqual(self.body_charges(), (1, 1))
+            rejected = self.record(first_id)
+            self.assertEqual(rejected['last_error'], 'missing_minimal_region')
+            self.assertEqual(rejected['last_attempt_at'], '2026-10-23T03:00:00+00:00')
+            self.assertEqual(self.store.db.execute('SELECT count(*) FROM observations').fetchone()[0], 0)
+            self.assertEqual([tuple(row) for row in self.store.db.execute('SELECT record_id,state FROM reservations')],
+                             [(first_id, 'drained')])
+
+            fetch.reset_mock()
+            self.assertTrue(self.review_cli(approvals, self.store.path, 'worker', '--once')['processed'])
+            fetch.assert_called_once_with(second)
+            self.assertEqual(self.body_charges(), (2, 2))
+            self.assertEqual(self.store.db.execute('SELECT record_id FROM observations').fetchone()[0], second_id)
+
+    def test_once_failed_recheck_waits_from_failure(self):
+        url = 'https://source.test/kr'
+        self.cfg['policies'][0]['recheck_seconds'] = interval = 300
+        record_id = self.w.candidate(url)
+
+        def reject(source):
+            self.assertFalse(self.record(record_id)['recheck_requested'])
+            self.now += 2
+            return {'url': source, 'redirects': [], 'body': b'<div>Public guide</div>'}
+
+        with patch('crawler.network_gate.NetworkGate.fetch') as fetch:
+            fetch.return_value = {'url': url, 'redirects': [], 'body': b'<main>Public guide</main>'}
+            self.assertTrue(self.w.once())
+            for requested in (False, True):
+                with self.subTest(requested=requested):
+                    self.now += 1 if requested else interval
+                    record = self.record(record_id)
+                    # Store the same instant with a different offset to exercise timestamp comparison.
+                    record['collected_at'] = dt.datetime.fromisoformat(record['collected_at']).astimezone(
+                        dt.timezone(dt.timedelta(hours=9))).isoformat()
+                    record['recheck_requested'] = requested
+                    self.w._save(self.store.db, record)
+                    observations = self.store.db.execute('SELECT * FROM observations ORDER BY seq').fetchall()
+                    attempts, new_bodies = self.body_charges()
+                    fetch.reset_mock()
+                    fetch.side_effect = reject
+
+                    self.assertFalse(self.w.once())
+                    fetch.assert_called_once_with(url)
+                    failed = self.record(record_id)
+                    self.assertEqual(failed['last_error'], 'missing_minimal_region')
+                    self.assertEqual(failed['last_attempt_at'],
+                                     dt.datetime.fromtimestamp(self.now, dt.timezone.utc).isoformat())
+                    self.assertFalse(failed['recheck_requested'])
+                    self.assertEqual(failed['collected_at'], record['collected_at'])
+                    self.assertEqual(self.body_charges(), (attempts + 1, new_bodies))
+                    self.assertEqual(self.store.db.execute('SELECT * FROM observations ORDER BY seq').fetchall(),
+                                     observations)
+
+                    fetch.reset_mock()
+                    self.assertFalse(self.w.once())
+                    self.now += interval - 1
+                    self.assertFalse(self.w.once())
+                    fetch.assert_not_called()
+                    self.assertEqual(self.body_charges(), (attempts + 1, new_bodies))
+
+                    self.now += 1
+                    fetch.side_effect = None
+                    self.assertTrue(self.w.once())
+                    fetch.assert_called_once_with(url)
+                    self.assertEqual(self.body_charges(), (attempts + 2, new_bodies))
+
+    def test_once_skips_domain_hold_without_consuming_recheck(self):
+        held_id = self.w.candidate('https://blog.test/a')
+        url = 'https://source.test/kr'
+        eligible_id = self.w.candidate(url)
+        previous = dt.datetime.fromtimestamp(self.now - 1, dt.timezone.utc).isoformat()
+        held = self.record(held_id)
+        held.update(last_attempt_at=previous, recheck_requested=True)
+        self.w._save(self.store.db, held)
+        self.store.db.execute('INSERT INTO domains(host,stopped_until) VALUES (?,?)', ('blog.test', self.now + 60))
+
+        with patch('crawler.network_gate.NetworkGate.fetch') as fetch:
+            fetch.return_value = {'url': url, 'redirects': [], 'body': b'<main>Public guide</main>'}
+            self.assertTrue(self.w.once())
+            fetch.assert_called_once_with(url)
+
+        self.assertEqual(self.body_charges(), (1, 1))
+        self.assertEqual([row[0] for row in self.store.db.execute('SELECT record_id FROM reservations')], [eligible_id])
+        held = self.record(held_id)
+        self.assertTrue(held['recheck_requested'])
+        self.assertEqual(held['last_attempt_at'], previous)
+
+    def test_once_rolls_back_reservation_when_lease_expires_before_begin(self):
+        from crawler.leases import current
+
+        first, second = 'https://blog.test/a', 'https://source.test/kr'
+        first_id = self.w.candidate(first)
+        second_id = self.w.candidate(second)
+
+        def expire_first(db, reservation, now, **kwargs):
+            if reservation['url'] == first:
+                now = reservation['expires']
+            return current(db, reservation, now, **kwargs)
+
+        with patch('crawler.local_worker.current', side_effect=expire_first), \
+                patch('crawler.network_gate.NetworkGate.fetch') as fetch:
+            fetch.return_value = {'url': second, 'redirects': [], 'body': b'<main>Public guide</main>'}
+            self.assertTrue(self.w.once())
+            fetch.assert_called_once_with(second)
+
+        self.assertEqual(self.body_charges(), (1, 1))
+        self.assertEqual([row[0] for row in self.store.db.execute('SELECT record_id FROM reservations')], [second_id])
+        self.assertIsNone(self.record(first_id).get('last_attempt_at'))
 
     def test_expired_seed_is_held_and_renewal_restores_collection(self):
         from crawler.__main__ import main
