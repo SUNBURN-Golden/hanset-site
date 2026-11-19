@@ -95,6 +95,10 @@ class Worker:
     @audited('reserve')
     def reserve(self, clip_id, url, document_id, channel='manual_clip', recheck=False, *,
                 expected_extension=_RECORD_EXTENSION):
+        with self.store.transaction() as db:
+            return self._reserve(db, clip_id, url, document_id, channel, expected_extension)
+
+    def _reserve(self, db, clip_id, url, document_id, channel, expected_extension):
         clip_id, document_id = identifier(clip_id), identifier(document_id)
         url = safe_url(url)
         if channel not in CHANNELS:
@@ -102,45 +106,47 @@ class Worker:
         now = self.clock()
         policy_for(self.cfg, url, browser=channel == 'browser_extract', now=now,
                    required=channel != 'manual_clip')
-        with self.store.transaction() as db:
-            old = db.execute('SELECT * FROM reservations WHERE clip_id=?', (clip_id,)).fetchone()
-            if old:
-                if (old['url'], old['document_id'], old['channel']) != (url, document_id, channel):
-                    raise Rejected('intent_mismatch')
-                return dict(old)
-            day, expiry = day_and_expiry(now, self.cfg['lease_seconds'])
-            host = urlsplit(url).hostname
-            db.execute('INSERT OR IGNORE INTO domains(host) VALUES (?)', (host,))
-            dom = db.execute('SELECT * FROM domains WHERE host=?', (host,)).fetchone()
-            if dom['owner'] or dom['stopped_until'] > now:
-                raise Rejected('domain_held')
-            rid = self.candidate(url, channel=channel, db=db)
-            record = json.loads(db.execute('SELECT data FROM records WHERE id=?', (rid,)).fetchone()[0])
-            extension_origin = record.get('extension_origin') if channel != 'manual_clip' else None
-            if expected_extension is not _RECORD_EXTENSION and expected_extension != extension_origin:
+        old = db.execute('SELECT * FROM reservations WHERE clip_id=?', (clip_id,)).fetchone()
+        if old:
+            if (old['url'], old['document_id'], old['channel']) != (url, document_id, channel):
+                raise Rejected('intent_mismatch')
+            return dict(old)
+        day, expiry = day_and_expiry(now, self.cfg['lease_seconds'])
+        host = urlsplit(url).hostname
+        db.execute('INSERT OR IGNORE INTO domains(host) VALUES (?)', (host,))
+        dom = db.execute('SELECT * FROM domains WHERE host=?', (host,)).fetchone()
+        if dom['owner'] or dom['stopped_until'] > now:
+            raise Rejected('domain_held')
+        rid = self.candidate(url, channel=channel, db=db)
+        record = json.loads(db.execute('SELECT data FROM records WHERE id=?', (rid,)).fetchone()[0])
+        extension_origin = record.get('extension_origin') if channel != 'manual_clip' else None
+        if expected_extension is not _RECORD_EXTENSION and expected_extension != extension_origin:
+            raise Rejected('permission_not_granted')
+        if extension_origin:
+            origin = 'https://' + urlsplit(url).netloc
+            if not self.browser_grant_enabled(db, origin, extension_origin):
                 raise Rejected('permission_not_granted')
-            if extension_origin:
-                origin = 'https://' + urlsplit(url).netloc
-                if not self.browser_grant_enabled(db, origin, extension_origin):
-                    raise Rejected('permission_not_granted')
-            charge(db, self.cfg, day, 'HANSET', body=True, new_body=not record.get('collected_at'))
-            gen = db.execute('SELECT COALESCE(MAX(generation),0)+1 FROM reservations WHERE record_id=?', (rid,)).fetchone()[0]
-            res_id = uid()
-            db.execute('UPDATE domains SET owner=?,epoch=epoch+1 WHERE host=?', (res_id, host))
-            db.execute('''INSERT INTO reservations(id,clip_id,record_id,brand,day,url,document_id,channel,generation,
-                       domain_epoch,domain,state,issued,expires,worker,extension_origin) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
-                       (res_id, clip_id, rid, 'HANSET', day, url, document_id, channel, gen, dom['epoch'] + 1,
-                        host, 'reserved', now, expiry, self.instance, extension_origin))
-            return dict(db.execute('SELECT * FROM reservations WHERE id=?', (res_id,)).fetchone())
+        charge(db, self.cfg, day, 'HANSET', body=True, new_body=not record.get('collected_at'))
+        gen = db.execute('SELECT COALESCE(MAX(generation),0)+1 FROM reservations WHERE record_id=?', (rid,)).fetchone()[0]
+        res_id = uid()
+        db.execute('UPDATE domains SET owner=?,epoch=epoch+1 WHERE host=?', (res_id, host))
+        db.execute('''INSERT INTO reservations(id,clip_id,record_id,brand,day,url,document_id,channel,generation,
+                   domain_epoch,domain,state,issued,expires,worker,extension_origin) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                   (res_id, clip_id, rid, 'HANSET', day, url, document_id, channel, gen, dom['epoch'] + 1,
+                    host, 'reserved', now, expiry, self.instance, extension_origin))
+        return dict(db.execute('SELECT * FROM reservations WHERE id=?', (res_id,)).fetchone())
 
     @audited('begin')
     def begin(self, reservation):
         with self.store.transaction() as db:
-            row = current(db, reservation, self.clock())
-            if row['state'] == 'reserved':
-                self._history(db, row['record_id'], STAGES[0], 'extraction_started')
-            db.execute("UPDATE reservations SET state='running' WHERE id=?", (row['id'],))
-            return dict(db.execute('SELECT * FROM reservations WHERE id=?', (row['id'],)).fetchone())
+            return self._begin(db, reservation)
+
+    def _begin(self, db, reservation):
+        row = current(db, reservation, self.clock())
+        if row['state'] == 'reserved':
+            self._history(db, row['record_id'], STAGES[0], 'extraction_started')
+        db.execute("UPDATE reservations SET state='running' WHERE id=?", (row['id'],))
+        return dict(db.execute('SELECT * FROM reservations WHERE id=?', (row['id'],)).fetchone())
 
     def heartbeat(self, reservation):
         with self.store.transaction() as db:
@@ -210,7 +216,9 @@ class Worker:
                           dedup_group_id=group, dedup_reason=reason,
                           representative_record_id=representative['record_id'] if representative else None,
                           verification_status='candidate', pipeline_stage=stage, selected_evidence_ids=[],
-                          privacy_status='passed', recheck_requested=False)
+                          privacy_status='passed')
+            if row['channel'] == 'manual_clip':
+                record['recheck_requested'] = False
             reason = 'source_accepted'
             if not representative and previous['pipeline_stage'] in STAGES[3:]:
                 venue_records = [r for r in others if r['venue_id'] in (previous['venue_id'], venue)]
@@ -371,6 +379,34 @@ class Worker:
                 eligible.append((record, policy))
         return eligible
 
+    def _scheduled_due(self, record, policy):
+        if record.get('recheck_requested'):
+            return True
+        latest = max((dt.datetime.fromisoformat(record[key]).timestamp()
+                      for key in ('collected_at', 'last_attempt_at') if record.get(key)), default=None)
+        if latest is None:
+            return True
+        volatile = any(f['field'] in ('rates', 'hours', 'closures') for f in record['extracted_facts'])
+        interval = policy.get('recheck_seconds', 86400 if policy.get('adapter') or volatile else 30 * 86400)
+        return self.clock() - latest >= max(300, interval)
+
+    @audited('scheduled_start')
+    def _start_scheduled(self, record, policy):
+        with self.store.transaction() as db:
+            # Consent runs outside the transaction, so check the current record again.
+            latest = json.loads(db.execute('SELECT data FROM records WHERE id=?', (record['record_id'],)).fetchone()[0])
+            if latest['channel'] != record['channel'] or not self._scheduled_due(latest, policy):
+                return None
+            reservation = self._reserve(db, uid(), record['url'], uid(), record['channel'],
+                                        record.get('extension_origin'))
+            reservation = self._begin(db, reservation)
+            # Save the start before collection can finish and release the domain.
+            latest['recheck_requested'] = False
+            latest['last_attempt_at'] = dt.datetime.fromtimestamp(self.clock(), dt.timezone.utc).isoformat()
+            latest.pop('last_error', None)
+            self._save(db, latest)
+            return reservation
+
     def once(self):
         self.supervisor.recover()
         self.supervisor.expire()
@@ -387,14 +423,9 @@ class Worker:
             volatile = any(f['field'] in ('rates', 'hours', 'closures') for f in r['extracted_facts'])
             return (0 if volatile else 1, r.get('collected_at') or '', r['url'])
         for r, policy in sorted(eligible, key=lambda entry: priority(entry[0])):
-            res = None
+            if not self._scheduled_due(r, policy):
+                continue
             try:
-                last_ts = r.get('collected_at') or r.get('last_attempt_at')
-                if last_ts and not r.get('recheck_requested'):
-                    age = self.clock() - dt.datetime.fromisoformat(last_ts).timestamp()
-                    interval = policy.get('recheck_seconds', 86400 if policy.get('adapter') or any(f['field'] in ('rates', 'hours', 'closures') for f in r['extracted_facts']) else 30 * 86400)
-                    if age < max(300, interval):
-                        continue
                 extension_origin = r.get('extension_origin')
                 if extension_origin:
                     origin = 'https://' + urlsplit(r['url']).netloc
@@ -402,16 +433,24 @@ class Worker:
                         continue
                     from .consent import require
                     require(self, r, origin)
-                res = self.reserve(uid(), r['url'], uid(), r['channel'], expected_extension=extension_origin)
-                self.begin(res)
+                reservation = self._start_scheduled(r, policy)
+            except Rejected:
+                continue
+            if reservation is None:
+                continue
+            try:
                 from .fetcher import collect
-                collect(self, res)
+                collect(self, reservation)
                 return True
             except Rejected as exc:
-                if res:
-                    self.revoke(res)
+                try:
                     attempted_at = dt.datetime.fromtimestamp(self.clock(), dt.timezone.utc).isoformat()
-                    self.store.db.execute("UPDATE records SET data=json_set(data, '$.last_attempt_at', ?, '$.last_error', ?) WHERE id=?",
-                                          (attempted_at, str(exc), r['record_id']))
-                continue
+                    self.store.db.execute("""UPDATE records SET data=json_set(data, '$.last_attempt_at', ?, '$.last_error', ?)
+                                          WHERE id=? AND ?=(
+                                              SELECT MAX(generation) FROM reservations WHERE record_id=records.id
+                                          )""",
+                                          (attempted_at, str(exc), reservation['record_id'], reservation['generation']))
+                finally:
+                    self.revoke(reservation)
+                return False
         return False
