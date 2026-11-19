@@ -1,24 +1,55 @@
 # HANSET / 한셋 — static site source
 
-(Historical note: the site is now live at https://hanset.soulbound.co.kr. This repo contains source only; deploys are done by the HANSET operations bot. See ../README.md and ../AGENTS.md.) No trackers or external requests. Web fonts are self-hosted.
+The Python builder reads checked-in publication inputs and emits the static
+site with self-hosted web fonts. The HANSET operations bot owns publication.
+[Release procedure](../README.md#deploy) · [Repository rules](../AGENTS.md)
 
 ## Build / run
-    cd site
-    python3 -m http.server 8765 --directory dist --bind 127.0.0.1   # http://127.0.0.1:8765/
-    .venv/bin/python build_site.py --release  # indexable build: canonical + sitemap for hanset.soulbound.co.kr
+
+From the repository root, set up the build environment and generate the
+release into `site/dist/`.
+
+```bash
+python3 -m venv site/.venv
+site/.venv/bin/python -m pip install -r site/requirements.txt
+site/.venv/bin/python site/build_site.py --release
+```
+
 The site build environment uses FontTools and Brotli to subset Pretendard.
 If FontTools or its WOFF2 Brotli backend is unavailable, body text uses the
 system font stack. The bundled Excalifont and Gaegu display fonts stay available.
-See the [release verification matrix](../README.md#release-build-verification).
-Restart the http.server after a rebuild (dist/ is recreated).
+Use `--release` for public output. A preview build without the flag emits
+`noindex,nofollow` and disallows crawling in `robots.txt`.
+
+From the repository root, serve the generated static files on loopback.
+
+```bash
+python3 -m http.server 8765 --directory site/dist --bind 127.0.0.1
+```
+
+Open `http://127.0.0.1:8765/`. Google sign-up requires the separate
+[Pages Functions](#sign-up-google). Run the [site tests](../README.md#site-tests)
+and the [release verification matrix](../README.md#release-build-verification)
+from the repository root.
 
 ## Source of truth
-- `../boxes.csv ../saunas.csv ../events.csv`: price, last_verified, source URLs, city.
-- `content/venues.json`, `content/events.json`: Korean copy for the ONLY entries cleared to publish (facts read on an official page, per VERIFICATION_2026-10-16.md). Rows not listed are not published (53 venue rows, 7 event rows).
-- The build REFUSES to publish a box unless CSV confidence is verified/partial, a sauna unless official-page-read, an event unless organizer/official-verified. Blank values render as 확인 중.
-- `content/ads.json` must remain `{}`. Advertising output is prohibited; `/ads/` stays 404 and is excluded from the sitemap.
-- `content/pages/*.html`: about / privacy / corrections text.
-- The build validates all emitted text with the leak checker described below.
+
+Operations maintains [boxes.csv](../boxes.csv), [saunas.csv](../saunas.csv),
+and [events.csv](../events.csv), along with the published copy in
+[`content/`](content/). Published facts carry an official source and check date.
+Unchecked values stay pending (`확인 중`), and evidence older than 90 days
+shows `오래됨` (Outdated). [Public verification policy](content/pages/faq.html)
+
+For the main venue and event records, the builder requires a matching CSV row,
+an entry in the publication JSON, and matching English copy. The CSV confidence
+gate accepts `verified` or `partial` for boxes, `high`-prefixed confidence for
+official-page-checked saunas, and `verified` or `dates verified` prefixes for
+organizer- or official-source-checked events. [Publication gates](build_site.py)
+
+Operations also maintains the optional event and creator feeds. Their validation
+rules and preview examples are documented in the [verified feeds runbook](../data/verified/README.md).
+[`content/ads.json`](content/ads.json) must remain `{}`. The builder checks
+emitted text before reporting a successful release. [Leak validation](#emitted-output-leak-validation)
 
 ### Sunday evidence for Finder
 
@@ -50,16 +81,38 @@ in Finder. Migrate Sunday information embedded in other schedule wording to
 the structured field once operations can confirm it.
 
 ## Pages
-/ (magazine home) · /finder/ (pinned menu; filters city/type/Sunday/price-known/search, URL-deep-linkable) · /finder/<slug>/ (18 venues, 마지막 확인일 + source) · /hyrox-seoul/ · /events/ + /events.ics · /about/ · /privacy/ · /corrections/ · /join/ (Google sign-up; /join/welcome/ is noindex, sitemap lists /join/ only) · 404.
+
+| Release surface | Output |
+| --- | --- |
+| Home and Finder | `/`, `/finder/`, and `/finder/<slug>/` for each published venue. Home ends with a compact illustration list on mobile. Finder shares its search text, city, type, sauna subtype, Sunday status, confirmed-price and official-list filters, and sort order through URL query parameters. |
+| Categories | `/sauna/`, `/crossfit/`, `/hyrox/`, and `/gym/` are always generated. Each lists the published venues that qualify for that category. |
+| Illustrations | `/archive/` is the hand-drawn venue gallery. `/guide/` explains Finder and includes tap-to-enlarge illustrations. |
+| Visitor guides | `/guides/` links to the visitor guide pages listed below. |
+| Magazine | `/magazine/` is always generated. `/magazine/<slug>/` comes from the builder's `ARTICLES` list. Markdown in [`content/articles/_archive/`](content/articles/_archive/) is unpublished. |
+| Events and optional pages | `/events/` and `/events.ics` are always generated. `/hyrox-seoul/` requires a published event flagged as a feature and stays available after that event ends. `/creators/` requires at least one valid creator feed entry. Both optional pages appeared in the checked release. |
+| Information and sign-up | `/about/`, `/faq/`, `/privacy/`, `/corrections/`, and `/join/` are indexable in release. `/join/welcome/` is generated with `noindex,nofollow` and has no canonical URL or sitemap entry. |
+| Release files and exclusions | The output root contains `404.html` and the [tracked Search Console verification file](static/root/google1cc2d472584fa095.html). `/ads/` returns 404 and has no generated page, internal link, or sitemap entry. |
+
+Release `robots.txt` allows crawling and points to `sitemap.xml`. The sitemap
+lists the indexable page routes with their production canonical URLs and
+omits `404.html`, the verification file, and `events.ics`.
+
+### Visitor guide pages
+
+- `/guides/tattoo-friendly-saunas-korea/`
+- `/guides/hotel-saunas-korea-non-guests/`
+- `/guides/crossfit-hyrox-drop-in-korea/`
+- `/guides/closed-days-korea/`
 
 ## Sign-up (Google)
-- `functions/api/auth/google.js` + `functions/api/auth/callback/google.js` — Cloudflare Pages Functions, plain JS ES modules, no npm deps. `/join/` is a plain HTML form (GET `/api/auth/google`); the whole OAuth flow runs server-side, so the browser never talks to Google from our pages (CSP keeps `connect-src 'none'`, `form-action 'self' https://accounts.google.com` (Chrome applies form-action to the redirect)).
-- Pages secrets: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (optional `GOOGLE_REDIRECT_URI`; defaults to `https://hanset.soulbound.co.kr/api/auth/callback/google`). No secrets live in this repo.
-- D1 binding `DB` → database `hanset-members`; table in `schema.sql` (`members`). Repeat logins refresh email/name only — the original newsletter choice is kept.
-- Only the HANSET operations bot deploys, through its external release entry point (release build + Pages Functions bundling run on the operations box; see ../README.md#deploy). Per AGENTS.md there are no deploy scripts or CI in this repo, and frontend workers never hold Cloudflare tokens.
 
-## Placeholders to fill before launch
-Resolved 2026-10-18: contact is hanset@soulbound.co.kr only, effective date 2026-10-18, no operator info shown (owner decision).
+- The `/join/` form sends `GET /api/auth/google`. Cloudflare Pages Functions handle the OAuth redirect and callback. The functions are JS ES modules without npm dependencies. [Start handler](functions/api/auth/google.js) · [Callback handler](functions/api/auth/callback/google.js)
+- Pages secrets: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` (optional `GOOGLE_REDIRECT_URI`; defaults to `https://hanset.soulbound.co.kr/api/auth/callback/google`). No secrets live in this repo.
+- The D1 binding `DB` uses the `hanset-members` database and its `members` table. Repeat logins refresh email and name and preserve the original newsletter choice. [Schema](schema.sql)
+
+## Public contact
+
+The public contact is `hanset@soulbound.co.kr`.
 
 ## Emitted-output leak validation
 
@@ -127,16 +180,8 @@ print content. It never prints `leak check OK` or the successful build summary.
 No production bypass is provided. The collector and clipper are independent and
 are not imported or exercised by these tests.
 
-Verification from the repository root:
-
-```bash
-python3 -m unittest discover -s tests -p 'test_leak_check.py'
-python3 -m unittest discover -s tests -p 'test_*.py'
-python3 -m pytest -q tests/test_redesign.py tests/test_detail_evidence.py tests/test_drawing_disclaimer.py tests/test_drawing_hangul.py
-python3 site/build_site.py --release --out "$(mktemp -d)"
-```
-
-Fixtures use generated synthetic contacts in temporary directories. Release
+The [root site test targets](../README.md#site-tests) include the leak-check
+suite. Fixtures use generated synthetic contacts in temporary directories. Release
 failure tests invoke the real CLI in an isolated repository copy and use its
 supported stdlib/font fallback (`python -E -S`); leak validation is never mocked.
 The clean release test checks canonical/robots/sitemap, 404, Search Console
