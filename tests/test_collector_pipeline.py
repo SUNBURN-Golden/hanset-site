@@ -1,5 +1,5 @@
 """Offline collector contracts. No site fixtures or operational queue are mutated."""
-from contextlib import redirect_stdout
+from contextlib import closing, redirect_stdout
 import copy
 import datetime as dt
 import hashlib
@@ -102,6 +102,24 @@ class Pipeline(unittest.TestCase):
 
     def record(self, rid):
         return json.loads(self.store.db.execute('SELECT data FROM records WHERE id=?', (rid,)).fetchone()[0])
+
+    def review_cli(self, approvals, state, *args):
+        from crawler.__main__ import main
+
+        argv = ['crawler', '--config', str(approvals), '--state', str(state), *args]
+        with (patch.object(sys, 'argv', argv),
+              patch('crawler.report.time.time', return_value=self.now),
+              patch('crawler.local_worker.Worker', side_effect=lambda store, cfg: Worker(store, cfg, lambda: self.now)),
+              redirect_stdout(io.StringIO()) as output):
+            main()
+        return json.loads(output.getvalue())
+
+    def require_offline_review(self):
+        for target in ('crawler.fetcher.collect', 'crawler.network_gate.NetworkGate.fetch',
+                       'crawler.network_gate.public_addresses', 'socket.getaddrinfo',
+                       'crawler.browser_runner.BrowserRunner.run'):
+            call = self.enterContext(patch(target, side_effect=AssertionError(f'unexpected call to {target}')))
+            self.addCleanup(call.assert_not_called)
 
     def post(self, path, data, extension=EXTENSION):
         with HTTPServer(('127.0.0.1', 0), handler(self.w)) as server:
@@ -716,6 +734,134 @@ class Pipeline(unittest.TestCase):
         self.assertFalse(result['auto_publish_to_site'])
         self.assertFalse(result['stage_venue_counts_are_additive'])
 
+    def test_reports_and_refresh_revalidate_official_approval(self):
+        self.require_offline_review()
+        _, verified = self.accept()
+        _, pending = self.accept(SOURCE_ORIGIN + '/en')
+        selections = {rid: [self.record(rid)['extracted_facts'][0]['evidence_id']]
+                      for rid in (verified, pending)}
+        for rid, ids in selections.items():
+            self.w.verify(rid, ids)
+        self.w.publish_pending(pending)
+
+        original = tuple(self.store.db.iterdump())
+        protected = list(REPO.glob('*.csv'))
+        for folder in ('site/content', 'data/verified', 'data/pipeline'):
+            protected.extend(p for p in (REPO / folder).rglob('*') if p.is_file())
+        protected_hashes = {p: hashlib.sha256(p.read_bytes()).digest() for p in protected}
+        today = dt.datetime.fromtimestamp(self.now, dt.timezone.utc).date()
+        cases = [
+            ('day_90', 90, None),
+            ('day_91', 91, 'robots_review_stale'),
+            ('venue_removed', 0, 'official_approval_revoked'),
+            ('policy_removed', 0, 'access_not_approved'),
+        ]
+        for case, days, reason in cases:
+            with self.subTest(case=case):
+                cfg = copy.deepcopy(self.cfg)
+                policy = cfg['policies'][0]
+                policy['robots_reviewed_at'] = (today - dt.timedelta(days=days)).isoformat()
+                if case == 'venue_removed':
+                    policy['official_venues'] = []
+                if case == 'policy_removed':
+                    cfg['policies'].remove(policy)
+                approvals = Path(self.tmp.name) / f'{case}.json'
+                registry = json.dumps(cfg)
+                approvals.write_text(registry)
+                with closing(Store(Path(self.tmp.name) / f'{case}.sqlite3')) as case_store:
+                    db = case_store.db
+                    self.store.db.backup(db)
+                    before = tuple(db.iterdump())
+                    history = [tuple(r) for r in db.execute('SELECT * FROM history ORDER BY seq')]
+                    projected = self.review_cli(approvals, case_store.path, 'report', '--format', 'json')
+                    self.assertEqual(tuple(db.iterdump()), before)
+                    counts = (0, 2, 0, 0, 0) if reason else (0, 0, 0, 1, 1)
+                    self.assertEqual(projected['stage_counts'], dict(zip(STAGES, counts)))
+                    self.assertEqual(projected['unique_venue_counts_by_stage'],
+                                     {stage: int(count > 0) for stage, count in zip(STAGES, counts)})
+                    self.assertEqual(projected['unique_venues_total'], 1)
+                    self.assertEqual(projected['milestone_counts'][STAGES[3]], 2)
+                    self.assertEqual(projected['milestone_counts'][STAGES[4]], 1)
+                    self.assertEqual(projected['stale'], 0)
+                    self.assertIs(projected['auto_publish_to_site'], False)
+
+                    worker = self.review_cli(approvals, case_store.path, 'worker', '--once')
+                    self.assertEqual(worker, {'processed': False, 'auto_publish_to_site': False})
+                    self.assertEqual(approvals.read_text(), registry)
+                    transitions = []
+                    for rid, stage in ((verified, STAGES[3]), (pending, STAGES[4])):
+                        record = self.record(rid)
+                        if reason:
+                            stage = STAGES[1]
+                            record.update(pipeline_stage=stage, verification_status='review_required')
+                            record['extracted_facts'][0]['verification_status'] = 'candidate'
+                            transitions.append((rid, stage, reason, self.now))
+                        stored_stage, data = db.execute('SELECT stage,data FROM records WHERE id=?', (rid,)).fetchone()
+                        self.assertEqual(stored_stage, stage)
+                        self.assertEqual(json.loads(data), record)
+                        self.assertEqual(record['selected_evidence_ids'], selections[rid])
+                    updated_history = [tuple(r) for r in db.execute('SELECT * FROM history ORDER BY seq')]
+                    self.assertEqual(updated_history[:len(history)], history)
+                    self.assertCountEqual([r[1:] for r in updated_history[len(history):]], transitions)
+                    after = tuple(db.iterdump())
+                    mutable = ('INSERT INTO "records"', 'INSERT INTO "history"', 'INSERT INTO "sqlite_sequence"')
+                    self.assertEqual([row for row in after if not row.startswith(mutable)],
+                                     [row for row in before if not row.startswith(mutable)])
+                    self.assertEqual(self.review_cli(approvals, case_store.path, 'report'), projected)
+                    self.assertEqual(self.review_cli(approvals, case_store.path, 'worker', '--once'), worker)
+                    self.assertEqual(tuple(db.iterdump()), after)
+
+                    if reason:
+                        approvals.write_text(json.dumps(self.cfg))
+                        self.assertEqual(self.review_cli(approvals, case_store.path, 'report'), projected)
+                        self.assertEqual(self.review_cli(approvals, case_store.path, 'worker', '--once'), worker)
+                        self.assertEqual(tuple(db.iterdump()), after)
+                        self.review_cli(approvals, case_store.path, 'verify', verified, *selections[verified])
+                        self.assertEqual(self.review_cli(approvals, case_store.path, 'report')['stage_counts'][STAGES[3]], 1)
+
+        self.assertEqual(tuple(self.store.db.iterdump()), original)
+        self.assertEqual({p: hashlib.sha256(p.read_bytes()).digest() for p in protected}, protected_hashes)
+
+    def test_review_rejects_invalid_current_evidence(self):
+        self.require_offline_review()
+        _, rid = self.accept()
+        selected = [self.record(rid)['extracted_facts'][0]['evidence_id']]
+        self.w.verify(rid, selected)
+        approvals = Path(self.tmp.name) / 'approvals.json'
+        today = dt.datetime.fromtimestamp(self.now, dt.timezone.utc).date()
+        cases = [
+            ('stale', 'checked_at', (today - dt.timedelta(days=91)).isoformat(), 'stale_evidence'),
+            ('empty_selection', 'selected_evidence_ids', [], 'invalid_fact_selection'),
+            ('missing_id', 'selected_evidence_ids', selected + ['missing'], 'invalid_fact_selection'),
+            ('unverified_fact', 'verification_status', 'candidate', 'review_required'),
+            ('missing_quote', 'quote', '', 'not_official_evidence'),
+            ('fact_source', 'source_url', 'https://blog.test/a', 'official_approval_revoked'),
+        ]
+        approvals.write_text(json.dumps(self.cfg))
+        for case, field, value, reason in cases:
+            with self.subTest(case=case), closing(Store(Path(self.tmp.name) / f'{case}.sqlite3')) as case_store:
+                db = case_store.db
+                self.store.db.backup(db)
+                record = self.record(rid)
+                target = record if field == 'selected_evidence_ids' else record['extracted_facts'][0]
+                target[field] = value
+                db.execute('UPDATE records SET data=? WHERE id=?', (json.dumps(record), rid))
+                before = tuple(db.iterdump())
+                projected = self.review_cli(approvals, case_store.path, 'report')
+                self.assertEqual(tuple(db.iterdump()), before)
+                self.assertEqual(projected['stage_counts'], dict(zip(STAGES, (0, 1, 0, 0, 0))))
+                self.assertIs(projected['auto_publish_to_site'], False)
+                self.assertEqual(self.review_cli(approvals, case_store.path, 'worker', '--once'),
+                                 {'processed': False, 'auto_publish_to_site': False})
+                self.assertEqual(self.review_cli(approvals, case_store.path, 'report'), projected)
+                stage, data = db.execute('SELECT stage,data FROM records WHERE id=?', (rid,)).fetchone()
+                record = json.loads(data)
+                self.assertEqual((stage, record['pipeline_stage'], record['verification_status']),
+                                 (STAGES[1], STAGES[1], 'review_required'))
+                self.assertEqual(record['selected_evidence_ids'], value if field == 'selected_evidence_ids' else selected)
+                self.assertNotEqual(record['extracted_facts'][0]['verification_status'], 'verified')
+                self.assertEqual(db.execute('SELECT reason FROM history ORDER BY seq DESC').fetchone()[0], reason)
+
     def test_blog_rate_never_verifies_even_with_official_claim(self):
         r = self.start('https://blog.test/a')
         data = sample(r)
@@ -738,6 +884,83 @@ class Pipeline(unittest.TestCase):
             self.assertEqual(rec['conflicts'][0]['values'], ['30000', '40000'])
         self.assertEqual(self.record(first)['pipeline_stage'], STAGES[1])
         with self.assertRaises(Rejected): self.w.publish_pending(first)
+
+    def test_report_and_refresh_use_current_conflict_decisions(self):
+        self.require_offline_review()
+        _, first = self.accept()
+        _, second = self.accept(SOURCE_ORIGIN + '/en', '40000')
+        first_id = self.record(first)['extracted_facts'][0]['evidence_id']
+        second_id = self.record(second)['extracted_facts'][0]['evidence_id']
+        conflict_id = self.record(first)['conflicts'][0]['conflict_id']
+        self.w.resolve_conflict(conflict_id, first_id, 'operator_review')
+        self.w.verify(first, [first_id])
+        self.w.publish_pending(first)
+        approvals = Path(self.tmp.name) / 'approvals.json'
+        approvals.write_text(json.dumps(self.cfg))
+        for case, reason in [('unresolved', 'review_required'), ('opposing', 'conflict_decision_excludes_fact')]:
+            with self.subTest(case=case), closing(Store(Path(self.tmp.name) / f'{case}.sqlite3')) as case_store:
+                db = case_store.db
+                self.store.db.backup(db)
+                if case == 'unresolved':
+                    db.execute('DELETE FROM conflict_resolutions WHERE id=?', (conflict_id,))
+                else:
+                    db.execute('UPDATE conflict_resolutions SET evidence_id=? WHERE id=?', (second_id, conflict_id))
+                before = tuple(db.iterdump())
+                projected = self.review_cli(approvals, case_store.path, 'report')
+                self.assertEqual(tuple(db.iterdump()), before)
+                self.assertEqual(projected['stage_counts'], dict(zip(STAGES, (0, 2, 0, 0, 0))))
+                self.assertEqual(projected['conflicts'], 2 if case == 'unresolved' else 0)
+                self.assertEqual(projected['milestone_counts'][STAGES[4]], 1)
+                self.assertIs(projected['auto_publish_to_site'], False)
+                self.assertEqual(self.review_cli(approvals, case_store.path, 'worker', '--once'),
+                                 {'processed': False, 'auto_publish_to_site': False})
+                self.assertEqual(self.review_cli(approvals, case_store.path, 'report'), projected)
+                self.assertEqual(db.execute('SELECT stage FROM records WHERE id=?', (first,)).fetchone()[0], STAGES[1])
+                self.assertEqual(db.execute('SELECT reason FROM history ORDER BY seq DESC').fetchone()[0], reason)
+                worker = Worker(case_store, self.cfg, lambda: self.now)
+                with self.assertRaisesRegex(Rejected, f'^{reason}$'):
+                    worker.verify(first, [first_id])
+                if case == 'opposing':
+                    worker.verify(second, [second_id])
+                    worker.publish_pending(second)
+
+        # An unchanged recheck has a new evidence ID. The earlier conflict decision
+        # belongs to the previous pair of observations.
+        self.accept()
+        self.assertEqual(self.record(first)['pipeline_stage'], STAGES[1])
+        self.assertTrue(self.record(first)['has_conflict'])
+        self.assertEqual(self.store.db.execute('SELECT reason FROM history ORDER BY seq DESC').fetchone()[0], 'review_required')
+
+    def test_report_reads_decisions_and_milestones_in_one_snapshot(self):
+        from crawler import evidence
+
+        self.require_offline_review()
+        _, first = self.accept()
+        self.accept(SOURCE_ORIGIN + '/en', '40000')
+        record = self.record(first)
+        conflict_id = record['conflicts'][0]['conflict_id']
+        fact_id = record['extracted_facts'][0]['evidence_id']
+        approvals = Path(self.tmp.name) / 'approvals.json'
+        approvals.write_text(json.dumps(self.cfg))
+        current_conflicts = evidence.current_conflicts
+
+        def concurrent_review(db, records):
+            # Commit from a second connection after the report has read records.
+            with patch.object(evidence, 'current_conflicts', current_conflicts):
+                self.w.resolve_conflict(conflict_id, fact_id, 'operator_review')
+                self.w.verify(first, [fact_id])
+                self.w.publish_pending(first)
+            return current_conflicts(db, records)
+
+        with patch.object(evidence, 'current_conflicts', side_effect=concurrent_review):
+            before = self.review_cli(approvals, self.store.path, 'report')
+        self.assertEqual(before['conflicts'], 2)
+        self.assertEqual(before['stage_counts'][STAGES[1]], 2)
+        self.assertEqual(before['milestone_counts'][STAGES[4]], 0)
+        after = self.review_cli(approvals, self.store.path, 'report')
+        self.assertEqual(after['conflicts'], 0)
+        self.assertEqual(after['stage_counts'][STAGES[4]], 1)
+        self.assertEqual(after['milestone_counts'][STAGES[4]], 1)
 
     def test_scoped_historical_changes_are_not_conflicts(self):
         r = self.start()
@@ -845,8 +1068,10 @@ class Pipeline(unittest.TestCase):
         _, rid = self.accept()
         self.w.verify(rid, [self.record(rid)['extracted_facts'][0]['evidence_id']])
         self.now += 91 * 86400
-        with self.assertRaises(Rejected): self.w.publish_pending(rid)
-        # Transaction rollback cannot promote it; read-only report also reflects age.
+        self.cfg['policies'][0]['robots_reviewed_at'] = dt.datetime.fromtimestamp(self.now, dt.timezone.utc).date().isoformat()
+        with self.assertRaisesRegex(Rejected, '^stale_evidence$'):
+            self.w.publish_pending(rid)
+        self.assertEqual(self.record(rid)['pipeline_stage'], STAGES[1])
         self.assertEqual(report(self.store, self.cfg, self.now)['stage_counts'][STAGES[3]], 0)
 
     def test_publish_pending_rechecks_current_official_approval(self):
@@ -855,6 +1080,9 @@ class Pipeline(unittest.TestCase):
         self.cfg['policies'][0]['official_venues'] = []
         with self.assertRaisesRegex(Rejected, 'official_approval_revoked'):
             self.w.publish_pending(rid)
+        self.assertEqual(self.record(rid)['pipeline_stage'], STAGES[1])
+        self.assertEqual(self.store.db.execute('SELECT reason FROM history ORDER BY seq DESC').fetchone()[0],
+                         'official_approval_revoked')
 
     def test_aliases_require_branch_and_translations_need_approval(self):
         from crawler.dedup import venue_for, group_for

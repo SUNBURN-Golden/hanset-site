@@ -82,8 +82,8 @@ class Store:
                        WHERE channel!='manual_clip' AND state IN ('reserved','running','revoking')""")
 
     @contextlib.contextmanager
-    def transaction(self):
-        self.db.execute('BEGIN IMMEDIATE')
+    def transaction(self, *, immediate=True):
+        self.db.execute('BEGIN IMMEDIATE' if immediate else 'BEGIN')
         try:
             yield self.db
             self.db.execute('COMMIT')
