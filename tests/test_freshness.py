@@ -12,6 +12,15 @@ import build_site as B
 
 TODAY = dt.date(2032, 1, 1)
 AGES = [90, 91, 0, -1]
+TATTOO_GUIDE = '/guides/tattoo-friendly-saunas-korea/'
+NON_GUEST_GUIDE = '/guides/hotel-saunas-korea-non-guests/'
+DROP_IN_GUIDE = '/guides/crossfit-hyrox-drop-in-korea/'
+GUIDE_FIELDS = (
+    (TATTOO_GUIDE, 'Tattoo rule', 0, 'tattoo', 'Cover tattoos.'),
+    (NON_GUEST_GUIDE, 'Open to visitors?', 0, 'dropin', 'Hotel guests only.'),
+    (DROP_IN_GUIDE, 'Drop-in', 1, 'dropin', 'Book ahead.'),
+    (DROP_IN_GUIDE, 'English', 1, 'english', 'English-speaking coach.'),
+)
 
 
 @pytest.fixture
@@ -38,13 +47,14 @@ def inventory(monkeypatch):
                   source_url='https://example.org/evidence', official_url='https://example.org/registration', verified_on=TODAY)
     creator = dict(id='fixture-creator', display_name='Fixture Creator', handle='@fixture', platform='other',
                    focus=['run'], city='Seoul', profile_url='https://example.org/profile', verified_on=TODAY)
-    monkeypatch.setattr(B, 'FOREIGNER', {
-        v['slug']: {'tattoo': 'Cover tattoos.', 'dropin': 'Walk-in available.'},
-        box['slug']: {'dropin': 'Book ahead.', 'english': 'English-speaking coach.'},
-    })
+    venues = [v, box]
+    visitors = {venue['slug']: {} for venue in venues}
+    for _, _, idx, field, value in GUIDE_FIELDS:
+        visitors[venues[idx]['slug']][field] = value
+    monkeypatch.setattr(B, 'FOREIGNER', visitors)
     monkeypatch.setattr(B, 'CLOSED_ALL', {})
     monkeypatch.setattr(B, 'CLOSED_MONTH', {})
-    return [v, box], [event], vevent, creator
+    return venues, [event], vevent, creator
 
 
 def render(inventory, today=TODAY):
@@ -72,8 +82,109 @@ def assert_evidence(markup, checked, age, source):
     assert source in markup
 
 
+def guide_table(pages, path, heading):
+    return matching(pages[path], r'<table class="facts">.*?</table>(?:<p class="muted">.*?</p>)?',
+                    f'<th>{heading}</th>')
+
+
+def assert_pending(table, count):
+    note = table.split('</table>', 1)[1]
+    if count:
+        noun = 'venue' if count == 1 else 'venues'
+        assert re.findall(r'\d+ venues? pending official confirmation \(확인 중\)', note) == [
+            f'{count} {noun} pending official confirmation (확인 중)'
+        ]
+        assert '<a href="/finder/">Finder</a>' in note
+    else:
+        assert note == ''
+
+
+def assert_guide_safety(pages):
+    safety = f'<p class="safety">{B.SAFETY}</p>'
+    for path, heading in ((TATTOO_GUIDE, 'Tattoo rule'), (NON_GUEST_GUIDE, 'Open to visitors?')):
+        assert pages[path].count(safety) == 1
+        assert guide_table(pages, path, heading) + safety in pages[path]
+
+
+@pytest.mark.parametrize('explicit', [False, True], ids=['venue-date', 'field-date'])
+@pytest.mark.parametrize('age', [0, 90, 91])
+def test_official_visitor_guide_rows_keep_their_source_and_freshness(inventory, explicit, age):
+    venues = inventory[0]
+    checked = TODAY - dt.timedelta(days=age)
+    for v in venues:
+        v['last_verified'] = TODAY - dt.timedelta(days=0 if age == 91 else 91) if explicit else checked
+    if explicit:
+        for _, _, idx, field, value in GUIDE_FIELDS:
+            B.FOREIGNER[venues[idx]['slug']][field] = f'{value} (official page, checked {checked.isoformat()})'
+    pages = render(inventory)
+    for path, heading, idx, field, _ in GUIDE_FIELDS:
+        v = venues[idx]
+        table = guide_table(pages, path, heading)
+        entry = row(table, f'href="/finder/{v["slug"]}/"')
+        assert f'<td>{B.E(B.FOREIGNER[v["slug"]][field])}</td>' in entry
+        assert_evidence(entry, f'Checked {checked.isoformat() if explicit else B.dot(checked)}',
+                        age, f'<a href="{v["source"]}" rel="noopener noreferrer">Official source · ')
+        assert_pending(table, 0)
+    assert_guide_safety(pages)
+
+
+@pytest.mark.parametrize(('value', 'venue_evidence'), [
+    pytest.param(None, {}, id='missing-field'),
+    pytest.param(' \t ', {}, id='blank-field'),
+    pytest.param(B.UNKNOWN, {}, id='unknown-placeholder'),
+    pytest.param('Unknown', {}, id='unknown-value'),
+    pytest.param('확인 중', {}, id='korean-placeholder'),
+    pytest.param('Fixture policy (source claim).', {}, id='source-claim'),
+    pytest.param('Fixture policy.', {'confidence': 'partial'}, id='unofficial-venue-source'),
+    pytest.param('Fixture policy (venue reply 2032-01-01).', {}, id='venue-reply'),
+    pytest.param('Fixture policy (hotel reply 2032-01-01).', {}, id='hotel-reply'),
+    pytest.param('Fixture policy (official page and hotel reply, checked 2032-01-01).', {}, id='mixed-citation'),
+    pytest.param('Fixture policy — official page and hotel reply, checked 2032-01-01.', {}, id='mixed-inline-citation'),
+    pytest.param('Fixture policy.', {'source': '/missing-host'}, id='invalid-source-url'),
+    pytest.param('Fixture policy.', {'last_verified': None}, id='missing-venue-date'),
+    pytest.param('Fixture policy.', {'last_verified': TODAY + dt.timedelta(days=1)}, id='future-venue-date'),
+    pytest.param('Fixture policy (official page, checked).', {}, id='missing-explicit-date'),
+    pytest.param('Fixture policy (official page, checked 2032-02-30).', {}, id='invalid-explicit-date'),
+    pytest.param('Fixture policy (official page, checked 1/1).', {}, id='yearless-explicit-date'),
+    pytest.param('Fixture policy (official page, checked 2031-12-31 or 2032-01-01).', {}, id='ambiguous-explicit-date'),
+    pytest.param('Fixture policy (official page, checked 2032-01-02).', {}, id='future-explicit-date'),
+])
+def test_unsupported_visitor_fields_are_pending_in_each_table(inventory, value, venue_evidence):
+    venues = inventory[0]
+    for v in venues:
+        v.update(venue_evidence)
+    for _, _, idx, field, _ in GUIDE_FIELDS:
+        fields = B.FOREIGNER[venues[idx]['slug']]
+        if value is None:
+            del fields[field]
+        else:
+            fields[field] = value
+    pages = render(inventory)
+    for path, heading, _, _, _ in GUIDE_FIELDS:
+        table = guide_table(pages, path, heading)
+        assert '<tbody></tbody>' in table
+        assert 'Fixture policy' not in pages[path]
+        assert_pending(table, 1)
+    assert_guide_safety(pages)
+
+
+def test_drop_in_and_english_support_count_pending_independently(inventory):
+    venues = inventory[0]
+    box = venues[1]
+    B.FOREIGNER[box['slug']]['english'] = 'English available (source claim).'
+    venues.append(dict(box, slug='second-fixture-box', title='Second Fixture Box'))
+    pages = render(inventory)
+    drop_in = guide_table(pages, DROP_IN_GUIDE, 'Drop-in')
+    english = guide_table(pages, DROP_IN_GUIDE, 'English')
+    assert 'Book ahead.' in row(drop_in, f'/finder/{box["slug"]}/')
+    assert '<tbody></tbody>' in english
+    assert 'English available' not in pages[DROP_IN_GUIDE]
+    assert_pending(drop_in, 1)
+    assert_pending(english, 2)
+
+
 @pytest.mark.parametrize('age', AGES)
-def test_venue_cards_detail_groups_checklists_and_guides(inventory, age):
+def test_venue_cards_detail_groups_and_checklists(inventory, age):
     venues, *_ = inventory
     checked = TODAY - dt.timedelta(days=age)
     for v in venues:
@@ -101,12 +212,6 @@ def test_venue_cards_detail_groups_checklists_and_guides(inventory, age):
     for label in ('Adult ₩24,000', 'Daily 06:00–22:00', 'Dry sauna and cold bath'):
         fact = matching(glance, r'<span class="fact-line">.*?</small></span>', label)
         assert_evidence(fact, B.dot(checked), age, 'https://example.org/venue')
-    for path, slug in (('/guides/tattoo-friendly-saunas-korea/', v['slug']),
-                       ('/guides/hotel-saunas-korea-non-guests/', v['slug']),
-                       ('/guides/crossfit-hyrox-drop-in-korea/', venues[1]['slug'])):
-        for guide_row in re.findall(r'<tr>.*?</tr>', pages[path], re.S):
-            if f'/finder/{slug}/' in guide_row:
-                assert_evidence(guide_row, B.dot(checked), age, 'https://example.org/venue')
     assert inventory == before
 
 
@@ -156,7 +261,7 @@ def test_closure_evidence_is_independent_in_detail_guide_and_month(inventory, mo
 
 @pytest.mark.parametrize('age', AGES)
 @pytest.mark.parametrize('citation', ['(venue reply {date})', '— official page, checked {date}'])
-def test_independent_citations_on_detail_tips_checklist_and_guide(inventory, age, citation):
+def test_independent_citations_on_detail_tips_and_checklist(inventory, age, citation):
     v = inventory[0][0]
     v['last_verified'] = TODAY - dt.timedelta(days=91 if age <= 90 else 0)
     checked = TODAY - dt.timedelta(days=age)
@@ -167,8 +272,7 @@ def test_independent_citations_on_detail_tips_checklist_and_guide(inventory, age
     pages = render(inventory)
     for markup in (row(pages['/finder/freshness-sauna/'], '<th>Tattoos</th>'),
                    matching(pages['/finder/freshness-sauna/'], r'<li>.*?</li>', 'Cover tattoos.'),
-                   row(B.fchk(v, TODAY), '<th>Tattoos</th>'),
-                   row(pages['/guides/tattoo-friendly-saunas-korea/'], '/finder/freshness-sauna/')):
+                   row(B.fchk(v, TODAY), '<th>Tattoos</th>')):
         assert_evidence(markup, checked.isoformat(), age, 'Venue reply' if 'reply' in citation else v['source'])
         assert ('Source claim' in markup) == ('reply' in citation)
         assert ('Official source' in markup) == ('reply' not in citation)
@@ -225,10 +329,9 @@ def test_source_claim_links_and_unknown_classifications_survive_age(inventory, a
     v.update(last_verified=checked, confidence='partial', status='partial',
              unverified=['Entry fee', f'Access pending (hotel reply {checked.isoformat()})'])
     pages = render(inventory)
-    for markup in (article(pages['/finder/'], '/finder/freshness-sauna/'),
-                   row(pages['/guides/tattoo-friendly-saunas-korea/'], '/finder/freshness-sauna/')):
-        assert_evidence(markup, B.dot(checked), age, v['source'])
-        assert 'Source claim' in markup and 'Official source' not in markup
+    finder_card = article(pages['/finder/'], '/finder/freshness-sauna/')
+    assert_evidence(finder_card, B.dot(checked), age, f'<a href="{v["source"]}"')
+    assert 'Source claim' in finder_card and 'Official source' not in finder_card
     detail = pages['/finder/freshness-sauna/']
     unconfirmed = detail.split('<h2>Unconfirmed</h2>', 1)[1].split('</ul>', 1)[0]
     assert 'Official source' not in unconfirmed and 'Source claim' not in unconfirmed
