@@ -1,6 +1,4 @@
 /* HANSET — brand: PLAN.md §6.3 (accent #E4572E is provisional). Mobile-first, no external resources. */
-@font-face{font-family:"Pretendard";font-weight:400;font-style:normal;font-display:swap;src:url(/assets/fonts/Pretendard-Regular.subset.woff2) format("woff2")}
-@font-face{font-family:"Pretendard";font-weight:700;font-style:normal;font-display:swap;src:url(/assets/fonts/Pretendard-Bold.subset.woff2) format("woff2")}
 /* Official Excalidraw Latin subset; Korean display text falls back to Hangul-only Gaegu. */
 @font-face{font-family:"Excalifont";font-weight:400;font-style:normal;font-display:swap;src:url(/assets/fonts/Excalifont/Excalifont-Regular.woff2) format("woff2")}
 @font-face{font-family:"Gaegu";font-weight:400;font-style:normal;font-display:swap;src:url(/assets/fonts/Gaegu/Gaegu-Regular.woff2) format("woff2");unicode-range:U+AC00-D7A3,U+3131-318E}
