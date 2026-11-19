@@ -1,4 +1,5 @@
 """Offline collector contracts. No site fixtures or operational queue are mutated."""
+from contextlib import redirect_stdout
 import copy
 import datetime as dt
 import hashlib
@@ -573,6 +574,130 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(self.record(rid)['pipeline_stage'], STAGES[1])
         self.assertEqual(report(self.store, self.cfg, self.now)['access_holds'], 0)
 
+    def test_expired_seed_is_held_and_renewal_restores_collection(self):
+        from crawler.__main__ import main
+        from crawler.rate_limiter import KST
+
+        local_time = dt.datetime(2026, 10, 23, 0, 10, tzinfo=KST)
+        self.now = local_time.timestamp()
+        today = local_time.date()
+        current_host, expired_host = 'a-current.test', 'z-expired.test'
+        current_origin, expired_origin = f'https://{current_host}', f'https://{expired_host}'
+        current_seed, expired_seed = current_origin + '/guide', expired_origin + '/feed'
+        clip_url = expired_origin + '/guide'
+        registry = {
+            'seeds': [current_seed, expired_seed],
+            'daily_candidates': 3,
+            'extension_origins': [EXTENSION],
+            'policies': [
+                dict(origin=current_origin, paths=['/guide'], public=True,
+                     robots_reviewed_at=(today - dt.timedelta(days=90)).isoformat()),
+                dict(origin=expired_origin, paths=['/feed', '/guide'], public=True, browser=True,
+                     robots_reviewed_at=(today - dt.timedelta(days=91)).isoformat(),
+                     adapter='rss', official_venues=['example-central']),
+            ],
+            'venues': [dict(venue_id='example-central', urls=[clip_url])],
+        }
+        path = Path(self.tmp.name) / 'approvals.json'
+        path.write_text(json.dumps(registry))
+
+        def cli(*args):
+            argv = ['crawler', '--config', str(path), '--state', str(self.store.path), *args]
+            with patch.object(sys, 'argv', argv), patch('crawler.report.time.time', return_value=self.now), \
+                    redirect_stdout(io.StringIO()) as output:
+                main()
+            return json.loads(output.getvalue())
+
+        def holds_audited():
+            return [row[0] for row in self.store.db.execute(
+                "SELECT reason FROM audit WHERE operation='access_policy' ORDER BY seq")]
+
+        def resolve(host):
+            return public_addresses(host, lambda *args, **kwargs: dns_answers(['93.184.216.34']))
+
+        self.cfg = load(path)
+        self.w = Worker(self.store, self.cfg, lambda: self.now)
+        self.assertEqual(cli('report')['access_holds'], 0)
+        with patch('crawler.network_gate.public_addresses', side_effect=resolve) as dns, \
+                patch('crawler.network_gate.PinnedTLS') as tls:
+            tls.return_value.getresponse.side_effect = [
+                MemoryResponse(),
+                MemoryResponse(body=b'<rss><channel></channel></rss>', content_type='application/rss+xml'),
+            ]
+            status, clip = self.post('/reserve', {'clip_id': uid(), 'url': clip_url, 'document_id': uid()})
+            self.assertEqual(status, 200)
+            self.assertEqual(self.post('/begin', {'reservation': clip})[0], 200)
+            status, accepted = self.post('/result', {'reservation': clip, 'data': sample(clip)})
+            self.assertEqual(status, 200)
+            fact, = self.record(accepted['record_id'])['extracted_facts']
+            self.assertEqual(fact['rate_kind'], 'clue_rate')
+            self.assertEqual(self.post('/grant', {'origin': expired_origin, 'enabled': True}),
+                             (409, {'reason': 'robots_review_stale'}))
+            for channel in ('auto_discovery', 'browser_extract'):
+                with self.assertRaisesRegex(Rejected, '^robots_review_stale$'):
+                    self.w.reserve(uid(), expired_seed, uid(), channel)
+            dns.assert_not_called()
+            tls.assert_not_called()
+
+            self.assertTrue(self.w.once())
+            held_id = self.store.db.execute('SELECT id FROM records WHERE url=?', (expired_seed,)).fetchone()[0]
+            held = cli('show', held_id)
+            self.assertEqual(held['access_hold'], 'robots_review_stale')
+            self.assertEqual(held['item_type'], 'discovery_index')
+            self.assertIsNone(held['collected_at'])
+            first_report = cli('report')
+            self.assertEqual(first_report['access_holds'], 1)
+            self.assertEqual(first_report['discovery_indexes'], 1)
+            self.assertEqual(list(first_report['stage_counts'].values()), [0, 2, 0, 0, 0])
+            self.assertEqual(first_report['quota_usage']['candidates'], 3)
+            self.assertEqual(first_report['quota_usage']['remaining_candidates'], 0)
+            self.assertEqual([tuple(row) for row in self.store.db.execute(
+                "SELECT url, state FROM reservations WHERE channel!='manual_clip'")], [(current_seed, 'drained')])
+            self.assertEqual([row[0] for row in self.store.db.execute('SELECT host FROM requests')], [current_host])
+            dns.assert_called_once_with(current_host)
+            tls.assert_called_once_with(current_host, '93.184.216.34', self.cfg['request_timeout'])
+
+            self.assertFalse(self.w.once())
+            self.assertEqual(self.record(held_id)['access_hold'], 'robots_review_stale')
+            self.assertEqual(holds_audited(), ['robots_review_stale'])
+            dns.assert_called_once_with(current_host)
+            self.assertEqual(tls.call_count, 1)
+
+            registry['policies'][1]['robots_reviewed_at'] = today.isoformat()
+            path.write_text(json.dumps(registry))
+            self.cfg = load(path)
+            self.w = Worker(self.store, self.cfg, lambda: self.now)
+            self.assertTrue(self.w.once())
+            renewed = self.record(held_id)
+            self.assertEqual(renewed['url'], expired_seed)
+            self.assertNotIn('access_hold', renewed)
+            self.assertIsNotNone(renewed['collected_at'])
+            self.assertEqual(cli('report')['access_holds'], 0)
+            self.assertEqual(holds_audited(), ['robots_review_stale'])
+            self.assertEqual([call.args[0] for call in dns.call_args_list], [current_host, expired_host])
+            self.assertEqual([call.args[0] for call in tls.call_args_list], [current_host, expired_host])
+            self.assertEqual([row[0] for row in self.store.db.execute(
+                'SELECT host FROM requests ORDER BY rowid')], [current_host, expired_host])
+
+    def test_seed_registration_reconciles_a_previously_clipped_url(self):
+        seed = SOURCE_ORIGIN + '/kr'
+        _, record_id = self.accept(seed)
+        self.cfg['seeds'] = [seed]
+        policy = self.cfg['policies'][0]
+        reviewed = policy['robots_reviewed_at']
+        policy['robots_reviewed_at'] = '2026-01-01'
+
+        with patch('crawler.network_gate.public_addresses') as dns, patch('crawler.network_gate.PinnedTLS') as tls:
+            self.assertFalse(self.w.once())
+            held = self.record(record_id)
+            self.assertEqual(held['access_hold'], 'robots_review_stale')
+            self.assertEqual(held['pipeline_stage'], STAGES[1])
+            policy['robots_reviewed_at'] = reviewed
+            self.assertFalse(self.w.once())  # The prior clip still counts for cadence.
+            self.assertNotIn('access_hold', self.record(record_id))
+            dns.assert_not_called()
+            tls.assert_not_called()
+
     def test_actual_five_exclusive_stages(self):
         self.w.candidate('https://source.test/candidate')
         _, checked = self.accept('https://source.test/checked', excerpt='checked independently')
@@ -1129,6 +1254,34 @@ class Safety(unittest.TestCase):
         cfg['policies'][0]['paths'] = ['/public']
         policy_for(cfg, 'https://source.test/public/article')
         with self.assertRaises(Rejected): policy_for(cfg, 'https://source.test/public-private')
+
+    def test_seed_config_validation_checks_safety_and_policy_coverage(self):
+        from crawler.config import policy_for
+
+        policy = dict(origin='https://SOURCE.test.:443', paths=['/guides'], disallow=['/guides/%70rivate/'],
+                      public=True, robots_reviewed_at='2026-10-23')
+        fallback = {**policy, 'disallow': []}
+        private_seed = 'https://source.test/guides/private/rates'
+        cases = (
+            ('http://source.test/guides/rates', {}, 'unsafe_url'),
+            ('https://source.test/guides/rates', {'robots_reviewed_at': '2026-02-30'}, 'invalid_robots_review_date'),
+            ('https://source.test/guides-extra/rates', {}, 'access_not_approved'),
+            (private_seed, {}, 'access_not_approved'),
+            (private_seed, {'robots_reviewed_at': '2026-01-01'}, 'access_not_approved'),
+        )
+        with tempfile.TemporaryDirectory() as t, patch('crawler.config.time.time', return_value=NOW):
+            path = Path(t) / 'approvals.json'
+            for seed, changes, reason in cases:
+                with self.subTest(seed=seed, changes=changes):
+                    path.write_text(json.dumps({'seeds': [seed], 'policies': [{**policy, **changes}, fallback]}))
+                    with self.assertRaisesRegex(Rejected, f'^{reason}$'):
+                        load(path)
+
+        # Live requests still report review freshness before checking disallows.
+        cfg = {'policies': [{**policy, 'robots_reviewed_at': '2026-01-01'}, fallback]}
+        with self.assertRaisesRegex(Rejected, '^robots_review_stale$'):
+            policy_for(cfg, private_seed, now=NOW)
+        self.assertEqual(policy_for(cfg, private_seed, now=NOW, required=False), {})
 
     def test_collector_defaults_are_empty_approval_and_hard_budget_caps(self):
         cfg = load()
