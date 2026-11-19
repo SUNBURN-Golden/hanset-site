@@ -213,7 +213,12 @@ class Worker:
                           privacy_status='passed', recheck_requested=False)
             reason = 'source_accepted'
             if not representative and previous['pipeline_stage'] in STAGES[3:]:
-                reason = evidence.retain_review(previous, record, now, self.cfg)
+                venue_records = [r for r in others if r['venue_id'] in (previous['venue_id'], venue)]
+                rid = record['record_id']
+                previous_conflicts = evidence.current_conflicts(db, [previous, *venue_records])[rid]
+                conflicts = evidence.current_conflicts(db, [record, *venue_records])[rid]
+                reason = evidence.retain_review(previous, record, now, self.cfg,
+                                                previous_conflicts=previous_conflicts, conflicts=conflicts)
             if archive is not None:
                 p = policy_for(self.cfg, source_url, now=now)
                 permission = p.get('full_text_permissions', {}).get(source_url)
@@ -227,7 +232,7 @@ class Worker:
             db.execute('INSERT INTO observations(record_id,reservation_id,data,observed) VALUES (?,?,?,?)',
                        (record['record_id'], row['id'], json.dumps(record, ensure_ascii=False), now))
             self._history(db, record['record_id'], record['pipeline_stage'], reason)
-            self._refresh(db)
+            self._refresh(db, now)
             ack = {'ack': row['id'], 'record_id': record['record_id']}
             db.execute("UPDATE reservations SET state='completed',payload_hash=?,ack=? WHERE id=?",
                        (raw_hash, json.dumps(ack), row['id']))
@@ -284,24 +289,27 @@ class Worker:
     def _history(self, db, rid, stage, reason):
         db.execute('INSERT INTO history(record_id,stage,reason,at) VALUES (?,?,?,?)', (rid, stage, reason, self.clock()))
 
-    def _refresh(self, db):
+    def _refresh(self, db, now):
         records = [json.loads(r[0]) for r in db.execute('SELECT data FROM records')]
-        issues = evidence.conflicts(records)
-        for issue in issues:
-            resolution = db.execute('SELECT evidence_id,reason,at FROM conflict_resolutions WHERE id=?', (issue['conflict_id'],)).fetchone()
-            issue['resolved'] = bool(resolution)
-            if resolution:
-                issue['decision'] = dict(resolution)
+        conflicts = evidence.current_conflicts(db, records)
+        blockers = {}
         for r in records:
-            r['conflicts'] = [x for x in issues if r['record_id'] in x['records']]
+            rid = r['record_id']
+            r['conflicts'] = conflicts[rid]
             r['has_conflict'] = any(not c['resolved'] for c in r['conflicts'])
-            selected = [f for f in r['extracted_facts'] if f['evidence_id'] in r['selected_evidence_ids']]
-            stale = any(evidence.fact_status(f, self.clock()) == '오래됨' for f in selected)
-            r['stale'] = stale
-            if (r['has_conflict'] or stale) and r['pipeline_stage'] in STAGES[3:]:
+            selected_ids = r.get('selected_evidence_ids') or []
+            selected = [f for f in r['extracted_facts'] if f['evidence_id'] in selected_ids]
+            r['stale'] = any(evidence.fact_status(f, now) == '오래됨' for f in selected)
+            reason = evidence.current_review_blocker(r, now, self.cfg, r['conflicts'])
+            if reason:
+                blockers[rid] = reason
                 r['pipeline_stage'], r['verification_status'] = STAGES[1], 'review_required'
-                self._history(db, r['record_id'], STAGES[1], 'conflict_or_stale')
+                for fact in r['extracted_facts']:
+                    if fact.get('verification_status') == 'verified':
+                        fact['verification_status'] = 'candidate'
+                self._history(db, rid, STAGES[1], reason)
             self._save(db, r)
+        return blockers
 
     def resolve_conflict(self, conflict_id, evidence_id, reason):
         identifier(reason)
@@ -314,18 +322,16 @@ class Worker:
                        (conflict_id, evidence_id, reason, self.clock()))
             db.execute('INSERT INTO reviews(record_id,data,at) VALUES (?,?,?)',
                        (issue['records'][0], json.dumps({'conflict_id': conflict_id, 'selected_evidence_id': evidence_id, 'reason': reason}), self.clock()))
-            self._refresh(db)
+            self._refresh(db, self.clock())
 
     def verify(self, record_id, evidence_ids):
         with self.store.transaction() as db:
-            self._refresh(db)
+            now = self.clock()
+            self._refresh(db, now)
             r = json.loads(db.execute('SELECT data FROM records WHERE id=?', (record_id,)).fetchone()[0])
             if r['pipeline_stage'] not in (STAGES[1], STAGES[3]):
                 raise Rejected('invalid_stage')
-            for issue in r['conflicts']:
-                if issue.get('resolved') and any(e in evidence_ids and e != issue['decision']['evidence_id'] for e in issue['evidence_ids']):
-                    raise Rejected('conflict_decision_excludes_fact')
-            evidence.review(r, evidence_ids, self.clock(), self.cfg)
+            evidence.review(r, evidence_ids, now, self.cfg, conflicts=r['conflicts'])
             r['pipeline_stage'] = STAGES[3]
             self._save(db, r)
             db.execute('INSERT INTO reviews(record_id,data,at) VALUES (?,?,?)', (record_id, json.dumps(evidence_ids), self.clock()))
@@ -333,14 +339,15 @@ class Worker:
 
     def publish_pending(self, record_id):
         with self.store.transaction() as db:
-            self._refresh(db)
+            blockers = self._refresh(db, self.clock())
             r = json.loads(db.execute('SELECT data FROM records WHERE id=?', (record_id,)).fetchone()[0])
-            if r['pipeline_stage'] != STAGES[3]:
-                raise Rejected('not_verified')
-            evidence.review(r, r['selected_evidence_ids'], self.clock(), self.cfg)
-            r['pipeline_stage'] = STAGES[4]
-            self._save(db, r)
-            self._history(db, record_id, STAGES[4], 'operator_publish_pending')
+            if r['pipeline_stage'] == STAGES[3]:
+                r['pipeline_stage'] = STAGES[4]
+                self._save(db, r)
+                self._history(db, record_id, STAGES[4], 'operator_publish_pending')
+                return
+        # Keep any demotion committed even when the requested promotion fails.
+        raise Rejected(blockers.get(record_id, 'not_verified'))
 
     def _reconcile_access(self):
         eligible = []
@@ -368,7 +375,7 @@ class Worker:
         self.supervisor.recover()
         self.supervisor.expire()
         with self.store.transaction() as db:
-            self._refresh(db)
+            self._refresh(db, self.clock())
         for seed in self.cfg['seeds']:
             try:
                 self.candidate(seed, seed=True)
