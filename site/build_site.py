@@ -141,15 +141,32 @@ GUIDES = [  # (slug, title, description); page bodies are built in guides()
 def guides(site, venues, today):
     sau = [v for v in venues if v["kind_key"] == "sauna"]; box = [v for v in venues if v["kind_key"] == "box"]
     def tbl(vs, key, head):
-        confirmed = [v for v in vs if _is_confirmed(FOREIGNER.get(v["slug"], {}).get(key, ""))]
-        excluded_cnt = len(vs) - len(confirmed)
-        r = "".join(f'<tr><th><a href="/finder/{v["slug"]}/">{E(v["title"])}</a><br><span class="muted">{E(v["city_ko"])}</span></th><td>{E(FOREIGNER[v["slug"]][key])}</td>'
-                    f'<td>{fact_provenance(v, FOREIGNER[v["slug"]][key], today, link_claims=True)}</td></tr>' for v in confirmed)
-        excl_note = f'<p class="muted">{excluded_cnt} open venue(s) where "{head}" is still Not confirmed on the official page are excluded from this table. See each venue page in the <a href="/finder/">Finder</a> for full details.</p>' if excluded_cnt else ""
-        return f'<table class="facts"><thead><tr><th>Venue</th><th>{head}</th><th>Checked · Source</th></tr></thead><tbody>{r}</tbody></table>{excl_note}'
-    note = '<p class="muted">Official pages only. Every line links to its source and check date. Venues where a condition is Not confirmed, pre-opening, or temporarily closed are excluded from recommendations below.</p>'
-    bodies = {"tattoo-friendly-saunas-korea": "<h1>Tattoos? Read this first.</h1><p class=\"lead\">Some Korean saunas limit entry with tattoos. Here’s exactly what each official page says. Nothing more.</p>" + note + tbl(sau, "tattoo", "Tattoo rule"),
-              "hotel-saunas-korea-non-guests": "<h1>No room? Some doors still open.</h1><p class=\"lead\">Hotel saunas in Seoul, Busan and Jeju. Who gets in, straight from the official pages.</p>" + note + tbl(sau, "dropin", "Open to visitors?") + f'<p class="safety">{SAFETY}</p>',
+        rows = []
+        for v in vs:
+            value = FOREIGNER.get(v["slug"], {}).get(key) or ""
+            if (not value.strip() or value.strip().lower().rstrip(".") in ("unknown", "n/a")
+                    or not valid_public_url(v["source"]) or evidence_status(v, value) != "fact"
+                    or REPLY_CITATION.search(value)
+                    or re.search(r"\bofficial page and (?:venue|hotel) reply\b", value, re.I)):
+                continue
+            _, checked = fact_check_date(v, value)
+            if checked is None or checked > today:
+                continue
+            rows.append(f'<tr><th><a href="/finder/{v["slug"]}/">{E(v["title"])}</a><br>'
+                        f'<span class="muted">{E(v["city_ko"])}</span></th><td>{E(value)}</td>'
+                        f'<td>{fact_provenance(v, value, today)}</td></tr>')
+        pending = len(vs) - len(rows)
+        pending_note = ""
+        if pending:
+            noun = "venue" if pending == 1 else "venues"
+            pending_note = (f'<p class="muted">{pending} {noun} pending official confirmation (확인 중). '
+                            'See the <a href="/finder/">Finder</a> for full details.</p>')
+        return (f'<table class="facts"><thead><tr><th>Venue</th><th>{head}</th><th>Checked · Source</th></tr></thead>'
+                f'<tbody>{"".join(rows)}</tbody></table>{pending_note}')
+    note = '<p class="muted">Official pages only. Each row includes the check date and a link to the source.</p>'
+    safety = f'<p class="safety">{SAFETY}</p>'
+    bodies = {"tattoo-friendly-saunas-korea": "<h1>Tattoos? Read this first.</h1><p class=\"lead\">Some Korean saunas limit entry with tattoos. Here’s exactly what each official page says. Nothing more.</p>" + note + tbl(sau, "tattoo", "Tattoo rule") + safety,
+              "hotel-saunas-korea-non-guests": "<h1>No room? Some doors still open.</h1><p class=\"lead\">Hotel saunas in Seoul, Busan and Jeju. Who gets in, straight from the official pages.</p>" + note + tbl(sau, "dropin", "Open to visitors?") + safety,
               "crossfit-hyrox-drop-in-korea": "<h1>Traveling? Keep training.</h1><p class=\"lead\">CrossFit and HYROX boxes in Korea. Drop-in and English support, from official pages only.</p>" + note + tbl(box, "dropin", "Drop-in") + "<h2>English support</h2>" + tbl(box, "english", "English")}
     by_slug = {v["slug"]: v for v in venues}
     crow = "".join(f'<tr><th><a href="/finder/{k}/">{E(by_slug[k]["title"])}</a><br><span class="muted">{E(by_slug[k]["city_ko"])}</span></th><td>{E(c["closed"])}</td>'

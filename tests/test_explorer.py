@@ -354,7 +354,7 @@ class Explorer(unittest.TestCase):
             else:
                 self.assertIn('Check before you go', page)
 
-    def test_upstream_checklists_and_guides_exclude_unconfirmed_conditions(self):
+    def test_upstream_checklists_show_unconfirmed_conditions(self):
         for v in self.venues:
             values = B.FOREIGNER.get(v['slug'], {})
             keys = B.SAUNA_PKG_KEYS if v['kind_key'] == 'sauna' and 'public_access' in values else B.FCHK_KEYS
@@ -364,18 +364,34 @@ class Explorer(unittest.TestCase):
             for key, label in keys:
                 cell = f'<td>{B.E(values[key])}{B.fact_provenance(v, values[key], self.today)}</td>' if B._is_confirmed(values.get(key, '')) else '<td class="unk">Not confirmed</td>'
                 self.assertIn(f'<tr><th>{label}</th>{cell}</tr>', checklist)
-        for slug, kind, key in (
-                ('tattoo-friendly-saunas-korea', 'sauna', 'tattoo'),
-                ('hotel-saunas-korea-non-guests', 'sauna', 'dropin'),
-                ('crossfit-hyrox-drop-in-korea', 'box', 'dropin')):
+
+    def test_visitor_guide_tables_account_for_each_candidate(self):
+        for slug, kind, headers in (
+                ('tattoo-friendly-saunas-korea', 'sauna', ('Tattoo rule',)),
+                ('hotel-saunas-korea-non-guests', 'sauna', ('Open to visitors?',)),
+                ('crossfit-hyrox-drop-in-korea', 'box', ('Drop-in', 'English'))):
             page = self.site.pages[f'/guides/{slug}/']
-            table = page.split('<tbody>', 1)[1].split('</tbody>', 1)[0]
-            for v in self.venues:
-                if v['kind_key'] != kind:
-                    continue
-                confirmed = B._is_confirmed(B.FOREIGNER.get(v['slug'], {}).get(key, ''))
-                self.assertEqual(f'href="/finder/{v["slug"]}/"' in table, confirmed, v['slug'])
-            self.assertIn('excluded from this table', page)
+            tables = re.findall(r'<table class="facts">(.*?)</table>(<p class="muted">.*?</p>)?', page, re.S)
+            self.assertEqual(len(tables), len(headers))
+            candidates = {f'/finder/{v["slug"]}/' for v in self.venues if v['kind_key'] == kind}
+            for (table, note), header in zip(tables, headers):
+                with self.subTest(guide=slug, column=header):
+                    self.assertIn(f'<th>{header}</th>', table)
+                    rows = re.findall(r'<tr>.*?</tr>', table.split('<tbody>', 1)[1], re.S)
+                    links = re.findall(r'href="(/finder/[^"]+)"', table)
+                    self.assertEqual(len(rows), len(set(links)))
+                    self.assertEqual(len(rows), len(links))
+                    self.assertLessEqual(set(links), candidates & self.site.pages.keys())
+                    for entry in rows:
+                        self.assertIn('Checked ', entry)
+                        self.assertRegex(entry, r'<a href="https?://[^"]+"[^>]*>Official source · ')
+                    pending = len(candidates) - len(rows)
+                    if pending:
+                        noun = 'venue' if pending == 1 else 'venues'
+                        self.assertIn(f'{pending} {noun} pending official confirmation (확인 중)', note)
+                        self.assertIn('<a href="/finder/">Finder</a>', note)
+                    else:
+                        self.assertEqual(note, '')
 
     def test_cards_use_three_groups_and_details_keep_actions_and_safety(self):
         for v in self.venues:
