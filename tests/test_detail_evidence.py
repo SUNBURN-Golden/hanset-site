@@ -222,6 +222,74 @@ def test_inquiry_check_dates_do_not_date_the_evidence(venues, value):
     assert B.fact_value_html(('Closed', value), v, dt.date(2026, 11, 3)) == B.UNKNOWN
 
 
+def detail_cell(page, label):
+    return page.split(f'<th>{label}</th>', 1)[1].split('</tr>', 1)[0]
+
+
+@pytest.mark.parametrize('slug', ['orakai-cheonggyesan', 'park-hyatt-seoul', 'termeden-icheon'])
+def test_closure_restatements_follow_record_expiry(venues, monkeypatch, slug):
+    v = venues[slug]
+    value = dict(v['facts'])['Closed']
+    record = B.CLOSED_ALL[slug].copy()
+    until = dt.date.fromisoformat(record['until'])
+    checklist_value = B.FOREIGNER.get(slug, {}).get('closures')
+    if slug == 'orakai-cheonggyesan':
+        # Give the record its own check date to distinguish it from the inline one.
+        record['checked'] = (until - dt.timedelta(days=91)).isoformat()
+        monkeypatch.setitem(B.CLOSED_ALL, slug, record)
+    for today in (until, until + dt.timedelta(days=1)):
+        site = B.Site(today, True)
+        B.build(site, [v], [], today)
+        page = site.pages[f'/finder/{slug}/']
+        summary = detail_cell(page, 'Closed')
+        if today > until:
+            assert summary == f'<td>{B.UNKNOWN}</td>'
+        elif slug == 'termeden-icheon':
+            assert B.E(value) in summary
+            assert 'Checked 2026-10-23' in summary and 'Official source · termeden.com' in summary
+            assert f'href="{B.E(v["source"])}"' in summary
+        else:
+            assert B.E(value) in summary
+            assert f'Checked {B.dot(B.ymd(record["checked"]))}' in summary
+            assert f'href="{B.E(record["url"])}"' in summary and 'Official page · ' in summary
+            assert (B.OUTDATED in summary) == (slug == 'orakai-cheonggyesan')
+            assert 'Checked 2026-10-18' not in summary
+        if slug == 'orakai-cheonggyesan' or slug == 'park-hyatt-seoul':
+            checklist = detail_cell(page, 'Regular &amp; temp closures')
+            if slug == 'orakai-cheonggyesan' and today == until:
+                assert B.E(checklist_value) in checklist
+                assert 'Checked 2026.09.14' in checklist and 'Official page · ' in checklist
+                assert f'href="{B.E(record["url"])}"' in checklist and B.OUTDATED in checklist
+            else:
+                assert checklist == '<td class="unk">Not confirmed</td>'
+                assert B.E(checklist_value) not in page
+
+
+@pytest.mark.parametrize('fields', [
+    {'checked': None}, {'checked': '2026-11-02'}, {'checked': '2026-02-30'},
+    {'source': 'Venue reply'}, {'source': 'Third-party notice'}, {'url': '/sauna'}, {'until': '   '},
+])
+def test_cited_closure_restatement_cannot_bypass_record_gate(venues, monkeypatch, fields):
+    today = dt.date(2026, 11, 1)
+    v = venues['orakai-cheonggyesan']
+    value = dict(v['facts'])['Closed']
+    monkeypatch.setitem(B.CLOSED_ALL, v['slug'], B.CLOSED_ALL[v['slug']] | fields)
+    assert B.fact_value_html(('Closed', value), v, today) == B.UNKNOWN
+
+
+def test_closure_occurrence_dates_resolve_years_in_the_claim_head():
+    assert B.closure_occurrence_dates('2026: Thu Nov 12; pool closed Nov 19 (9/1–10/28)'
+                                      ' — official page, checked 2025-08-09') == {
+        (2026, 11, 12), (2026, 11, 19), (2026, 9, 1), (2026, 10, 28),
+    }
+    assert B.closure_occurrence_dates('2025.10.23 · October 28, 2026 · Nov 12 (hotel reply 2026-11-01)') == {
+        (2025, 10, 23), (2026, 10, 28), (None, 11, 12),
+    }
+    record = {'closed': 'Maintenance Nov 12, 2026'}
+    assert B.closure_record_coverage(record, 'Closed 2027-11-12') is None
+    assert B.closure_record_coverage(record, 'Closed 2026-11-13 (official page, checked 2026-11-12)') is None
+
+
 def numeric_price_part(v, today):
     # The headline number + its own provenance, before the full terms block.
     return B.price_html(v, today).split('<div class="price price-context">')[0]
@@ -315,6 +383,44 @@ def load_price_case(tmp_path, monkeypatch, venues):
             return next(v for v in B.load(today)[0] if v['slug'] == slug)
 
     return load
+
+
+def test_separate_closure_notices_use_their_own_evidence(load_price_case, monkeypatch):
+    until = dt.date(2026, 11, 12)
+    sauna = 'Sauna & spa closed Thu Nov 12 for maintenance'
+    pool = 'Pool closed Nov 19 for maintenance (official page, checked 2026-11-01)'
+    v = load_price_case('park-hyatt-seoul', [('Closed', sauna), ('Temporary closures', pool)], until)
+    record_url = 'https://example.org/sauna-notice'
+    monkeypatch.setitem(B.CLOSED_ALL, v['slug'], B.CLOSED_ALL[v['slug']] | {'url': record_url})
+    for today in (until, until + dt.timedelta(days=1)):
+        site = B.Site(today, True)
+        B.build(site, [v], [], today)
+        page = site.pages[f'/finder/{v["slug"]}/']
+        sauna_row = detail_cell(page, 'Closed')
+        pool_row = detail_cell(page, 'Temporary closures')
+        if today == until:
+            assert B.E(sauna) in sauna_row and record_url in sauna_row
+        else:
+            assert sauna_row == f'<td>{B.UNKNOWN}</td>'
+        assert B.E(pool) in pool_row and f'href="{B.E(v["source"])}"' in pool_row
+        assert record_url not in pool_row and 'Official source · ' in pool_row
+
+
+@pytest.mark.parametrize('source_kind', ['official_page', 'venue_reply'])
+def test_explicit_closure_field_precedes_record_and_inline_citations(load_price_case, source_kind):
+    today = dt.date(2026, 11, 13)
+    value = ('Closed Nov 12 (official page, checked 2026-10-18) · '
+             'Pool closed Nov 19 (official page, checked 2026-10-18)')
+    url = 'https://example.org/field-notice'
+    v = load_price_case('park-hyatt-seoul', [('Closed', value)], today, field_evidence={
+        'Closed': dict(value=value, source_kind=source_kind, source_url=url, checked_on=today.isoformat()),
+    })
+    row = B.fact_value_html(('Closed', value), v, today)
+    if source_kind == 'official_page':
+        assert B.E(value) in row and f'href="{url}"' in row
+        assert 'Checked 2026.11.13' in row and 'Checked 2026-10-18' not in row
+    else:
+        assert row == B.UNKNOWN
 
 
 @pytest.mark.parametrize('age', [90, 91])

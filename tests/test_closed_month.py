@@ -100,22 +100,18 @@ def test_build_dates_do_not_leak_active_closure_state(monkeypatch):
         assert ('Official notice' in table) == active
         assert ('Check before you go' in closed) != active
         if active:
-            assert B.dot(checked) in closed and B.OUTDATED in closed
-        if build_date.month == 1:
             block = block_of(guide)
-            # Monthly summaries retain their own occurrence/month visibility rules,
-            # even after a date-bound detail/table record has expired.
-            assert ('Jan 5 (Mon)' in block) == active
-            assert 'Jan 12 (Mon)' in block
-            assert B.dot(checked) in block and 'Official notice' in block
-            assert B.OUTDATED in block
+            assert 'Jan 5 (Mon)' in block and 'Jan 12 (Mon)' not in block
+            for markup in (closed, table, block):
+                assert B.dot(checked) in markup and 'Official notice' in markup
+                assert B.OUTDATED in markup
         else:
             assert 'closed-month' not in guide
 
 
 @pytest.mark.parametrize('invalid', [
-    {'source': 'Venue reply'}, {'source': 'Operator-run profile'}, {'url': '/closure'},
-    {'checked': None}, {'checked': '11/2'}, {'checked': '2026-02-30'},
+    {'source': 'Venue reply'}, {'source': 'Operator-run profile'}, {'source': 'Third-party notice'},
+    {'url': '/closure'}, {'checked': None}, {'checked': ''}, {'checked': '11/2'}, {'checked': '2026-02-30'},
     {'checked': '2026-11-01 or 2026-11-02'}, {'checked': '2026-11-02'},
 ])
 def test_unqualified_closure_never_enters_detail_guide_or_month(monkeypatch, invalid):
@@ -136,3 +132,81 @@ def test_unqualified_closure_never_enters_detail_guide_or_month(monkeypatch, inv
     assert '<th>Closed on</th><td class="unk">Check before you go</td>' in detail
     assert '<th>Closed</th><td>Not confirmed yet</td>' in detail
     assert 'Fixture maintenance' not in detail
+
+
+def test_month_filters_each_venue_and_drops_empty_dates(monkeypatch):
+    today = dt.date(2026, 11, 1)
+    venues, events, *_ = B.load(today)
+    by_slug = {v['slug']: v for v in venues}
+    valid, invalid = SLUGS[:2]
+    closures = {slug: B.CLOSED_ALL[slug].copy() for slug in (valid, invalid)}
+    closures[invalid]['checked'] = '2026-11-02'
+    monkeypatch.setattr(B, 'CLOSED_ALL', closures)
+    monkeypatch.setattr(B, 'CLOSED_MONTH', dict(month='2026-11', title='November closed days', items=[
+        dict(date='2026-11-02', slugs=[valid, invalid]),
+        dict(date='2026-11-03', slugs=[invalid]),
+    ]))
+    site = B.Site(today, True)
+    B.build(site, venues, events, today)
+    block = block_of(site.pages['/guides/closed-days-korea/'])
+    assert block.count('<li>') == 1 and 'Nov 2 (Mon)' in block
+    assert anchor(valid, by_slug) in block and anchor(invalid, by_slug) not in block
+    assert 'Nov 3 (Tue)' not in block
+
+
+def test_month_uses_the_same_sunday_precedence_as_detail_and_table(monkeypatch):
+    today = dt.date(2026, 11, 1)
+    explicit, shim, legacy_open = ('crossfit-super-sapiens', 'crossfit-one-daeyeon', SLUGS[0])
+    closures = {slug: dict(closed=B.SUNDAY_CLOSURE, source='Official page', checked='2026-10-18',
+                           url=f'https://example.org/{slug}') for slug in (explicit, shim, legacy_open)}
+    monkeypatch.setattr(B, 'CLOSED_ALL', closures)
+    monkeypatch.setattr(B, 'CLOSED_MONTH', dict(month='2026-11', title='November closed days', items=[
+        dict(date='2026-11-08', slugs=[explicit, shim, legacy_open]),
+    ]))
+    venues, events, *_ = B.load(today)
+    by_slug = {v['slug']: v for v in venues}
+    v = by_slug[explicit]
+    v['facts'] = v['facts_ko'] = [('Hours', 'Weekdays 07:00–20:00')]
+    v['c']['sunday_evidence'] = dict(status='yes', source_kind='official_page',
+                                   source_url='https://example.org/sunday', checked_on='2026-10-18')
+    v['sunday'], v['sunday_evidence'] = B.resolve_sunday(v, today)
+    assert v['sunday'] == 'yes' and by_slug[shim]['sunday'] == 'no'
+    by_slug[legacy_open]['sunday'] = 'yes'
+
+    site = B.Site(today, True)
+    B.build(site, venues, events, today)
+    guide = site.pages['/guides/closed-days-korea/']
+    for slug in closures:
+        detail = site.pages[f'/finder/{slug}/']
+        row = detail.split('<th>Closed on</th>', 1)[1].split('</tr>', 1)[0]
+        url = closures[slug]['url']
+        assert (url in row) == (slug == shim)
+        assert (url in guide) == (slug == shim)
+        assert (anchor(slug, by_slug) in block_of(guide)) == (slug == shim)
+
+
+@pytest.mark.parametrize('expiry,active', [({}, True), ({'until': None}, True), ({'until': ''}, True),
+                                         ({'until': '   '}, False), ({'until': '2026-02-30'}, False)])
+def test_open_ended_closures_keep_their_age_across_surfaces(monkeypatch, expiry, active):
+    today = dt.date(2026, 11, 1)
+    venues, events, *_ = B.load(today)
+    v = venues[0]
+    slug = v['slug']
+    record = dict(closed='Fixture maintenance', source='Official closure notice',
+                  url='https://example.org/closure') | expiry
+    monkeypatch.setattr(B, 'CLOSED_ALL', {slug: record})
+    monkeypatch.setattr(B, 'CLOSED_MONTH', dict(month='2026-11', title='November closed days', items=[
+        dict(date='2026-11-08', slugs=[slug]),
+    ]))
+    for age in (90, 91):
+        checked = today - dt.timedelta(days=age)
+        record['checked'] = checked.isoformat()
+        site = B.Site(today, True)
+        B.build(site, [v], events, today)
+        guide = site.pages['/guides/closed-days-korea/']
+        row = site.pages[f'/finder/{slug}/'].split('<th>Closed on</th>', 1)[1].split('</tr>', 1)[0]
+        table = guide.split('<tbody>', 1)[1].split('</tbody>', 1)[0]
+        assert ('closed-month' in guide) == active
+        for markup in (row, table, block_of(guide) if active else ''):
+            assert (record['url'] in markup and B.dot(checked) in markup) == active
+            assert (B.OUTDATED in markup) == (active and age == 91)
