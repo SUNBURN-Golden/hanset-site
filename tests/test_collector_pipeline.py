@@ -949,6 +949,37 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(tuple(self.store.db.iterdump()), original)
         self.assertEqual({p: hashlib.sha256(p.read_bytes()).digest() for p in protected}, protected_hashes)
 
+    def test_review_cli_rejects_unknown_record_without_changing_state(self):
+        self.now = time.time()
+        policy = self.cfg['policies'][0]
+        policy['robots_reviewed_at'] = dt.datetime.fromtimestamp(self.now, dt.timezone.utc).date().isoformat()
+        _, rid = self.accept()
+        evidence_id = self.record(rid)['extracted_facts'][0]['evidence_id']
+        self.w.verify(rid, [evidence_id])
+
+        policy['official_venues'] = []
+        approvals = Path(self.tmp.name) / 'approvals.json'
+        approvals.write_text(json.dumps(self.cfg))
+        before = tuple(self.store.db.iterdump())
+        commands = (
+            ('show', 'missing-record'),
+            ('verify', 'missing-record', evidence_id),
+            ('publish-pending', 'missing-record'),
+        )
+        for command in commands:
+            with self.subTest(command=command[0]):
+                result = subprocess.run(
+                    [sys.executable, '-m', 'crawler', '--config', str(approvals),
+                     '--state', str(self.store.path), *command],
+                    cwd=REPO, capture_output=True, text=True, timeout=10,
+                )
+                self.assertEqual(result.returncode, 2)
+                response = json.loads(result.stdout)
+                self.assertEqual(response, {'error': 'unknown_record', 'auto_publish_to_site': False})
+                self.assertIs(response['auto_publish_to_site'], False)
+                self.assertEqual(result.stderr, '')
+                self.assertEqual(tuple(self.store.db.iterdump()), before)
+
     def test_review_rejects_invalid_current_evidence(self):
         self.require_offline_review()
         _, rid = self.accept()
