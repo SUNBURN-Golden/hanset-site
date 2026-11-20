@@ -31,10 +31,13 @@ RESERVED_HANDLES = frozenset({
     'challenge', 'checkpoint', 'about', 'login',
 })
 SHARED_WEB_DOMAINS = frozenset({
-    'blogger.com', 'blogspot.com', 'daum.net', 'expedia.com', 'g.page', 'goo.gl',
-    'google.co.kr', 'google.com', 'hotels.com', 'kakao.com', 'openstreetmap.org',
+    'airbnb.com', 'blogger.com', 'blogspot.com', 'daum.net', 'expedia.com', 'expedia.co.kr',
+    'foursquare.com', 'g.page', 'goo.gl',
+    'google.co.kr', 'google.com', 'hotels.com', 'kakao.com', 'kayak.com', 'openstreetmap.org',
+    'trip.com', 'trivago.com', 'yelp.com',
 })
 
+_SHARED_HOST = re.compile(r'(?:^|\.)(?:blog|blogs|directory|directories|listings?|ota|maps?|reviews?|news)(?:\.|$)', re.I)
 
 def outside(path):
     resolved = Path(path).resolve()
@@ -98,7 +101,7 @@ def canonical_instagram(value, *, handle=None):
 def official_site(url, *, profile=None):
     profile = load_profile() if profile is None else profile
     host = urlsplit(url).hostname
-    if (not host or is_denied(url, profile['denied_domains']) or is_denied(url)
+    if (not host or _SHARED_HOST.search(host) or is_denied(url, profile['denied_domains']) or is_denied(url)
             or is_excluded(url, terms=profile['exclusion_terms'])):
         return False
     shared = followups.portal_domains(profile) | SHARED_WEB_DOMAINS | set(profile['reservation_platform_domains'])

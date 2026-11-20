@@ -88,7 +88,7 @@ def test_exact_bounded_post_and_no_raw_persistence(tmp_path):
     outcome = search(post)
     assert outcome.reason == 'ok' and len(outcome.leads) == 1
     assert outcome.leads[0].verification == 'unverified'
-    assert outcome.budget.used == 1 and outcome.budget.remaining == 29
+    assert outcome.budget.used == 1
     args, options = post.call_args
     assert args == (tavily.ENDPOINT,)
     assert options['headers']['Authorization'] == 'Bearer ' + SENTINEL

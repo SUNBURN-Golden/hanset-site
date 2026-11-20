@@ -90,21 +90,46 @@ explicit enablement, the KST hour 13, and a configured session-state path.
 Even an open gate makes no network or browser call. Never add session material
 to the checkout or logs. Session-file Playwright collection is not supported.
 
-The separate [DeepSeek web collector](COLLECTOR.md) fetches approved official
-URLs through this bot's existing fetcher. Its web cron is already live at
-04:15 KST on the operations host; do not add another. Instagram input is a
-desktop operator summary plus the post URL, not a caption or a photo. Claims
-keep `source_claim` / `internal_review_only`. `collect report` lists stored
-provenance and conflicting hours without choosing a current value. The
-collector does not browse, follow, or post. Its wrapper is
-`scripts/run_collect_cron.sh`; this repository does not install a new line.
+## Continuous seed discovery and collection
 
-The optional [Tavily known-venue search add-on](IG_DAEMON.md) keeps its own
-30-request KST daily cap under `HANSET_IG_DIR`. The web collector calls it
-only when a target has no URL, names a venue and field, and lists approved
-official domains. It returns unverified leads only. The broad discovery
-providers and the paused Instagram connector are unchanged. The active-bot
-report above still shows AI cost zero; DeepSeek spend is not written there.
+Run from the checkout using external active and Tavily state.
+
+```sh
+python3 -m hanset_active seeds discover
+python3 -m hanset_active seeds discover --source licenses --source sitemaps
+python3 -m hanset_active seeds discover --source tavily --max-calls 10
+```
+
+Sources are `licenses`, `directories`, `sitemaps` and `tavily`. The command
+reports new, resolved, duplicate, rejected and promoted transitions overall and
+by source. Overlapping discovery returns `already_running`. Collection has its
+own run lock and can pick up committed targets between discovery pages, even
+after its daily plan freezes.
+
+License discovery reads the mode-`0600` file at `HANSET_DATAGO_KEY_FILE`, which
+defaults to `/workspace/.secrets/datago_key`. A missing file reports
+`skipped:no_key`. Each dataset completes one full pass and then replays an
+inclusive update watermark. A failed page resumes at its saved cursor. Only
+projected business identity and license fields are retained. Coordinates carry
+their original EPSG:5174 CRS.
+
+The shared Tavily ledger preserves KST day counters and records reported credit
+usage without an internal daily cap. `--max-calls` bounds Tavily dispatches for
+one invocation. Zero skips Tavily. Provider quota exhaustion stops Tavily for
+the invocation and records `tavily_provider_quota`. Use the free plan with paid
+usage disabled. Billing changes require 준태님's approval. [Tavily ledger](IG_DAEMON.md#persistent-usage-ledger)
+
+Operations owns scheduler installation. In the KST crontab, install the
+discovery trigger and replace the prior 04:15 web line with the web trigger.
+
+```cron
+05 */2 * * * /path/to/checkout/scripts/run_seed_discovery_cron.sh
+35 */2 * * * /path/to/checkout/scripts/run_collect_cron.sh web
+```
+
+The discovery wrapper records results under `HANSET_ACTIVE_DIR/logs`. Incomplete
+license and sitemap passes resume at the next invocation. Instagram intake
+remains an operator summary plus the post URL. [Web collector](COLLECTOR.md)
 
 ## Offline validation
 
@@ -114,5 +139,6 @@ python3 -m pytest tests/active_bot -q
 
 Tests use loopback HTTP and fake clocks. PDF/OCR tests skip when their system
 binary is unavailable; the crash test kills a test subprocess after a persisted
-raw insert. Production spacing is at least five seconds per domain and one
-second globally, with one request in flight per domain.
+raw insert. The legacy `run` queue retains its production spacing. Discovery and web
+collection apply robots and crawl spacing to Korean news hosts. All three
+entry points use the per-domain request lock.

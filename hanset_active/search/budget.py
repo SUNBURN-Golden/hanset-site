@@ -14,13 +14,14 @@ import threading
 from ..config import REPO_ROOT
 from ..util.timeutil import KST, kst_day, kst_now
 
-DAILY_LIMIT = 30
+_LEGACY_LIMIT = 30
+_SCHEMA = 2
 _STATE_LIMIT = 1024 * 1024
 _PROCESS_LOCK = threading.Lock()
 REASONS = frozenset({
     'ok', 'tavily_budget_exhausted', 'tavily_cooldown', 'tavily_clock_changed',
     'tavily_http_error', 'tavily_rate_limited', 'tavily_timeout',
-    'tavily_transport_error', 'tavily_invalid_response', 'tavily_response_too_large',
+    'tavily_provider_quota', 'tavily_access_blocked', 'tavily_transport_error', 'tavily_invalid_response', 'tavily_response_too_large',
 })
 
 
@@ -28,11 +29,7 @@ REASONS = frozenset({
 class BudgetSnapshot:
     day: str
     used: int
-    daily_limit: int = DAILY_LIMIT
-
-    @property
-    def remaining(self):
-        return max(0, DAILY_LIMIT - self.used)
+    reported_credits: int = 0
 
 
 @dataclass(frozen=True)
@@ -72,34 +69,39 @@ def _read(path):
     try:
         fd = _private_open(path, os.O_RDONLY | os.O_NONBLOCK)
     except FileNotFoundError:
-        return {'schema_version': 1, 'budgets': {'tavily': {
-            'daily_limit': DAILY_LIMIT, 'days': {}, 'last_reason': 'ok'}}}
+        return {'schema_version': _SCHEMA, 'budgets': {'tavily': {'days': {}, 'last_reason': 'ok'}}}
     with os.fdopen(fd, 'rb') as stream:
         data = stream.read(_STATE_LIMIT + 1)
     if len(data) > _STATE_LIMIT:
         raise BudgetUnavailable()
     state = json.loads(data, object_pairs_hook=_unique_object)
     # Never preserve arbitrary state fields (including accidentally stored secrets).
-    if set(state) != {'schema_version', 'budgets'} or type(state['schema_version']) is not int or state['schema_version'] != 1:
+    if set(state) != {'schema_version', 'budgets'} or type(state['schema_version']) is not int or state['schema_version'] not in (1, _SCHEMA):
         raise BudgetUnavailable()
     if set(state['budgets']) != {'tavily'}:
         raise BudgetUnavailable()
     budget = state['budgets']['tavily']
-    required = {'daily_limit', 'days', 'last_reason'}
+    legacy = state['schema_version'] == 1
+    required = {'days', 'last_reason'} | ({'daily_limit'} if legacy else set())
     if set(budget) not in (required, required | {'cooldown_until'}):
         raise BudgetUnavailable()
-    if type(budget['daily_limit']) is not int or budget['daily_limit'] != DAILY_LIMIT:
+    if legacy and (type(budget['daily_limit']) is not int or budget['daily_limit'] != _LEGACY_LIMIT):
         raise BudgetUnavailable()
     if budget['last_reason'] not in REASONS or not isinstance(budget['days'], dict):
         raise BudgetUnavailable()
     for day, counter in budget['days'].items():
-        if date.fromisoformat(day).isoformat() != day or set(counter) != {'used'}:
+        allowed_fields = ({'used'},) if legacy else ({'used'}, {'used', 'reported_credits'})
+        if date.fromisoformat(day).isoformat() != day or set(counter) not in allowed_fields:
             raise BudgetUnavailable()
-        if type(counter['used']) is not int or not 0 <= counter['used'] <= DAILY_LIMIT:
+        if (any(type(value) is not int or value < 0 for value in counter.values())
+                or (legacy and counter['used'] > _LEGACY_LIMIT)):
             raise BudgetUnavailable()
     cooldown = budget.get('cooldown_until', 0)
     if type(cooldown) not in (int, float) or not math.isfinite(cooldown) or cooldown < 0:
         raise BudgetUnavailable()
+    if legacy:
+        budget.pop('daily_limit')
+        state['schema_version'] = _SCHEMA
     return state
 
 
@@ -132,10 +134,8 @@ class Reservation:
         """Inspect under the dispatch lock without reserving or writing state."""
         now = kst_now(self.clock)
         budget = self.state['budgets']['tavily']
-        snapshot = BudgetSnapshot(now.date().isoformat(), budget['days'].get(now.date().isoformat(), {}).get('used', 0))
-        if not snapshot.remaining:
-            retry = (now + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0)
-            return BudgetAvailability('tavily_budget_exhausted', snapshot, retry.isoformat())
+        day = now.date().isoformat()
+        snapshot = BudgetSnapshot(day, **budget['days'].get(day, {'used': 0}))
         cooldown = budget.get('cooldown_until', 0)
         if cooldown > now.timestamp():
             return BudgetAvailability('tavily_cooldown', snapshot, datetime.fromtimestamp(cooldown, KST).isoformat())
@@ -145,14 +145,12 @@ class Reservation:
         day = kst_day(self.clock)
         budget = self.state['budgets']['tavily']
         counter = budget['days'].setdefault(day, {'used': 0})
-        self.snapshot = BudgetSnapshot(day, counter['used'])
-        if counter['used'] >= DAILY_LIMIT:
-            self.reason = 'tavily_budget_exhausted'
-        elif budget.get('cooldown_until', 0) > kst_now(self.clock).timestamp():
+        self.snapshot = BudgetSnapshot(day, **counter)
+        if budget.get('cooldown_until', 0) > kst_now(self.clock).timestamp():
             self.reason = 'tavily_cooldown'
         else:
             counter['used'] += 1
-            self.snapshot = BudgetSnapshot(day, counter['used'])
+            self.snapshot = BudgetSnapshot(day, **counter)
         budget['last_reason'] = self.reason
         _write(self.path, self.state)
         return self.reason == 'ok'
@@ -168,12 +166,16 @@ class Reservation:
                 return False
         return True
 
-    def finish(self, reason, cooldown_seconds=0):
+    def finish(self, reason, cooldown_seconds=0, credits=None):
         if reason not in REASONS:
             raise BudgetUnavailable()
         self.reason = reason
         budget = self.state['budgets']['tavily']
         budget['last_reason'] = reason
+        if credits is not None:
+            counter = budget['days'][self.snapshot.day]
+            counter['reported_credits'] = counter.get('reported_credits', 0) + credits
+            self.snapshot = BudgetSnapshot(self.snapshot.day, **counter)
         if cooldown_seconds:
             budget['cooldown_until'] = kst_now(self.clock).timestamp() + min(3600, max(1, cooldown_seconds))
         _write(self.path, self.state)

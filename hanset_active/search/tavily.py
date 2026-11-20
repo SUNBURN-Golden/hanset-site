@@ -1,4 +1,5 @@
 """One bounded POST, private credentials, and sanitized unverified search leads."""
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from email.utils import parsedate_to_datetime
 import json
@@ -13,8 +14,10 @@ import requests
 
 from .budget import BudgetSnapshot, locked_budget
 from ..util.pii import strip_pii
+from ..fetcher import USER_AGENT
+from ..locks import host_lock
 from ..util.timeutil import kst_now
-from ..util.urls import canonicalize, is_denied, is_excluded, literal_private
+from ..util.urls import canonicalize, is_collect_denied, is_denied, is_excluded, literal_private
 
 _KEY_PATH = Path('/workspace/.secrets/tavily_key')
 ENDPOINT = 'https://api.tavily.com/search'
@@ -83,25 +86,25 @@ def credential_status():
     return _load_credential().reason
 
 
-def query_status(query):
+def query_status(query, *, public_source=False):
     """Validate broad input without touching credentials or persistent state."""
     if (not isinstance(query, str) or not query.strip() or len(query) > MAX_QUERY
-            or any(not c.isprintable() for c in query) or is_excluded(_decoded(query))
+            or any(not c.isprintable() for c in query) or (not public_source and is_excluded(_decoded(query)))
             or strip_pii(_decoded(query)) != _decoded(query) or _CREDENTIAL_URL.search(_decoded(query))):
         return 'tavily_invalid_query'
     return 'ok'
 
 
-def discover_query(query, *, clock=None, transport=None, dispatch_guard=None, on_dispatch=None):
+def discover_query(query, *, clock=None, transport=None, dispatch_guard=None, on_dispatch=None, public_source=False, host_dir=None):
     """Broad discovery hints only, using the official-page filtering path.
 
     Hooks receive no credentials or request objects. The guard is checked before
     reservation and immediately before dispatch; accounting runs once per POST.
     """
-    if query_status(query) != 'ok':
+    if query_status(query, public_source=public_source) != 'ok':
         return SearchOutcome('skipped', 'tavily_invalid_query')
     return _search(query.strip(), 'official_page', clock=clock, transport=transport,
-                   dispatch_guard=dispatch_guard, on_dispatch=on_dispatch)
+                   dispatch_guard=dispatch_guard, on_dispatch=on_dispatch, public_source=public_source, host_dir=host_dir)
 
 
 def _allowed(guard):
@@ -135,10 +138,10 @@ _IG_RESERVED = frozenset({
     'direct', 'about', 'legal', 'privacy', 'terms', 'developer', 'developers',
     'directory', 'challenge', 'web', 'share', 'oauth', 'graphql', 'api',
 })
-_CREDENTIAL_URL = re.compile(r'(?i)(?:api[_-]?key|token|secret|session|sid|auth|password|credential)\s*[=/]')
+_CREDENTIAL_URL = re.compile(r'(?i)(?:api[_-]?key|service[_-]?key|token|secret|session|sid|auth|password|credential)\s*[=/]')
 
 
-def _lead(row, target, secret):
+def _lead(row, target, secret, *, public_source=False):
     if not isinstance(row, dict) or not isinstance(row.get('url'), str):
         return None
     raw = row['url']
@@ -153,9 +156,9 @@ def _lead(row, target, secret):
         # Reject userinfo, fragments and unusual ports even before canonicalization.
         if parts.username or parts.password or parts.fragment or parts.port not in (None, 80, 443):
             return None
-        url = canonicalize(raw)
+        url = canonicalize(raw, preserve_path=public_source)
         candidate_text = [row.get(key, '') for key in ('title', 'content')]
-        if literal_private(url) or is_excluded(decoded, *(v for v in candidate_text if isinstance(v, str))):
+        if literal_private(url) or (not public_source and is_excluded(decoded, *(v for v in candidate_text if isinstance(v, str)))):
             return None
         handle = None
         if target == 'instagram_handle':
@@ -167,7 +170,7 @@ def _lead(row, target, secret):
                 return None
             handle = match[1].lower()
             url = 'https://www.instagram.com/' + handle + '/'
-        elif is_denied(url):
+        elif (is_collect_denied if public_source else is_denied)(url):
             return None
         if secret in url or (handle and secret in handle):
             return None
@@ -190,7 +193,7 @@ def _retry_after(value, clock):
 
 
 def _request(query, target, credential, reservation, *, clock=None, transport=None,
-             dispatch_guard=None, on_dispatch=None):
+             dispatch_guard=None, on_dispatch=None, public_source=False):
     session = None
     response = None
     try:
@@ -203,53 +206,66 @@ def _request(query, target, credential, reservation, *, clock=None, transport=No
         # Check after session setup, immediately before invoking the transport.
         try:
             if not reservation.ready_to_dispatch():
-                return reservation.reason, (), 0
+                return reservation.reason, (), 0, None
         except Exception:
-            return 'tavily_budget_unavailable', (), 0
+            return 'tavily_budget_unavailable', (), 0, None
         if not _allowed(dispatch_guard):
-            return 'tavily_run_limit', (), 0
+            return 'tavily_run_limit', (), 0, None
         if on_dispatch is not None:
             try:
                 on_dispatch()
             except Exception:
-                return 'tavily_budget_unavailable', (), 0
+                return 'tavily_budget_unavailable', (), 0, None
         response = transport(
             ENDPOINT,
-            headers={'Authorization': 'Bearer ' + credential.value},
+            headers={'Authorization': 'Bearer ' + credential.value, 'User-Agent': USER_AGENT},
             json={'query': query, 'search_depth': 'basic', 'auto_parameters': False,
                   'topic': 'general', 'max_results': 3, 'include_answer': False,
                   'include_raw_content': False, 'include_images': False},
             timeout=(5, 10), allow_redirects=False, stream=True,
         )
-        if response.status_code == 429:
-            return 'tavily_rate_limited', (), _retry_after(response.headers.get('Retry-After'), clock)
-        if response.status_code != 200:
-            return 'tavily_http_error', (), 0
+        status = response.status_code
+        if status in (402, 432, 433):
+            return 'tavily_provider_quota', (), 0, None
+        if status in (401, 403):
+            return 'tavily_access_blocked', (), 0, None
+        if status not in (200, 429):
+            return 'tavily_http_error', (), 0, None
         body = bytearray()
         deadline = time.monotonic() + 30
         for chunk in response.iter_content(chunk_size=8192):
             if time.monotonic() > deadline:
-                return 'tavily_timeout', (), 0
+                return 'tavily_timeout', (), 0, None
             if len(body) + len(chunk) > MAX_RESPONSE:
-                return 'tavily_response_too_large', (), 0
+                return 'tavily_response_too_large', (), 0, None
             body.extend(chunk)
+        if status == 429:
+            # Providers can use a quota-specific error code inside a 429.
+            detail = body.decode('utf-8', errors='replace')
+            if re.search(r'insufficient[_ -](?:credits|quota)|(?:credit|quota|plan)[_ -](?:limit|exhausted|exceeded)|no credits', detail, re.I):
+                return 'tavily_provider_quota', (), 0, None
+            return 'tavily_rate_limited', (), _retry_after(response.headers.get('Retry-After'), clock), None
         try:
             payload = json.loads(body)
             if not isinstance(payload, dict) or not isinstance(payload.get('results'), list):
-                return 'tavily_invalid_response', (), 0
+                return 'tavily_invalid_response', (), 0, None
             leads = []
             for row in payload['results'][:3]:
-                lead = _lead(row, target, credential.value)
+                lead = _lead(row, target, credential.value, public_source=public_source)
                 if lead and lead.url not in {item.url for item in leads}:
                     leads.append(lead)
-            return 'ok', tuple(leads), 0
+            usage = payload.get('usage')
+            credits = usage.get('credits') if isinstance(usage, dict) else None
+            if type(credits) is not int or not 0 <= credits <= 1000:
+                credits = None
+            return 'ok', tuple(leads), 0, credits
         except (ValueError, TypeError, RecursionError):
-            return 'tavily_invalid_response', (), 0
+            return 'tavily_invalid_response', (), 0, None
     except requests.Timeout:
-        return 'tavily_timeout', (), 0
+        return 'tavily_timeout', (), 0, None
     except Exception:
         # Never interpolate or propagate requests exceptions (they can carry auth).
-        return 'tavily_transport_error', (), 0
+        return 'tavily_transport_error', (), 0, None
     finally:
         # Even cleanup errors from transports must not escape with credentials.
         for resource in (response, session):
@@ -260,7 +276,7 @@ def _request(query, target, credential, reservation, *, clock=None, transport=No
                     pass
 
 
-def _search(query, target, *, clock=None, transport=None, dispatch_guard=None, on_dispatch=None):
+def _search(query, target, *, clock=None, transport=None, dispatch_guard=None, on_dispatch=None, public_source=False, host_dir=None):
     """Internal: callers validate a known venue or a bounded discovery query."""
     if not _allowed(dispatch_guard):
         return SearchOutcome('skipped', 'tavily_run_limit')
@@ -273,12 +289,16 @@ def _search(query, target, *, clock=None, transport=None, dispatch_guard=None, o
             if not reservation.reserve():
                 return SearchOutcome('skipped', reservation.reason, budget=reservation.snapshot)
             snapshot = reservation.snapshot
-            reason, leads, cooldown = _request(query, target, credential, reservation, clock=clock, transport=transport,
-                                               dispatch_guard=dispatch_guard, on_dispatch=on_dispatch)
+            lock = host_lock(host_dir, 'tavily.com') if host_dir is not None else nullcontext()
+            with lock:
+                reason, leads, cooldown, credits = _request(
+                    query, target, credential, reservation, clock=clock, transport=transport,
+                    dispatch_guard=dispatch_guard, on_dispatch=on_dispatch, public_source=public_source)
             snapshot = reservation.snapshot
             if reason in {'tavily_budget_unavailable', 'tavily_budget_exhausted', 'tavily_cooldown', 'tavily_clock_changed', 'tavily_run_limit'}:
                 return SearchOutcome('skipped', reason, budget=snapshot)
-            reservation.finish(reason, cooldown)
+            reservation.finish(reason, cooldown, credits)
+            snapshot = reservation.snapshot
             return SearchOutcome('ok' if reason == 'ok' else 'error', reason, leads=leads, budget=snapshot)
     except Exception:
         return SearchOutcome('skipped', 'tavily_budget_unavailable', budget=snapshot)

@@ -11,14 +11,23 @@ def deterministic_id(*parts) -> str:
 def migrate(conn: sqlite3.Connection) -> None:
     conn.execute('CREATE TABLE IF NOT EXISTS schema_version(version TEXT PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)')
     for path in sorted((Path(__file__).parent / 'migrations').glob('*.sql')):
-        if not conn.execute('SELECT 1 FROM schema_version WHERE version=?', (path.name,)).fetchone():
-            # SQL file and version marker are one transaction, including on failure.
-            sql = path.read_text() + "\nINSERT INTO schema_version(version) VALUES ('" + path.name.replace("'", "''") + "');\nCOMMIT;"
-            try:
-                conn.executescript('BEGIN IMMEDIATE;\n' + sql)
-            except Exception:
-                conn.rollback()
-                raise
+        # Check the marker again under the write lock. Two independent
+        # entry points can open the same store during an upgrade.
+        if conn.execute('SELECT 1 FROM schema_version WHERE version=?', (path.name,)).fetchone():
+            continue
+        with conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if conn.execute('SELECT 1 FROM schema_version WHERE version=?', (path.name,)).fetchone():
+                continue
+            script = path.read_text()
+            start = 0
+            for index, char in enumerate(script):
+                if char == ';' and sqlite3.complete_statement(script[start:index + 1]):
+                    conn.execute(script[start:index + 1])
+                    start = index + 1
+            if script[start:].strip():
+                conn.execute(script[start:])
+            conn.execute('INSERT INTO schema_version(version) VALUES (?)', (path.name,))
 
 def connect(path: str | Path) -> sqlite3.Connection:
     if str(path) != ':memory:':

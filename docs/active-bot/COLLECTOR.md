@@ -9,9 +9,9 @@ browser profile, cookies, CDP, proxy, or login-challenge bypass. Signed-in
 Instagram use stays on the approved desktop. This repository only ingests the
 desktop's operator-summary batch.
 
-`hanset_active.connectors.instagram.InstagramConnector` stays a gate that
-performs no network or browser work. HTTP collection still refuses Instagram
-and Naver. `runport` / `런포트` / `butfit` / `버핏` are excluded.
+`hanset_active.connectors.instagram.InstagramConnector` gates the separate
+desktop workflow. Web collection accepts public Naver and RUNPORT sources.
+Declined listings stay outside publication and outreach workflows.
 
 ## What a successful run means
 
@@ -20,9 +20,10 @@ and Naver. `runport` / `런포트` / `butfit` / `버핏` are excluded.
 that starts, locks, and exits is not by itself a collection. `no_targets`,
 `missing_credentials`, `outside_window`, and `no_batch` are not collections.
 
-Claims are `status=source_claim` and `rights=internal_review_only`. Web claims
-use `source_type=own_site`. Instagram claims use `source_type=sns`. Neither is
-a verified fact and neither is published. Quotes are at most 240 characters.
+Claims are `status=source_claim` and `rights=internal_review_only`. Verified
+first-party web provenance uses `source_type=own_site`. Other public web
+provenance uses `source_type=third_party` and displays `미확인` in review.
+Instagram claims use `source_type=sns`. Quotes are at most 240 characters.
 Raw page text, captions, and photos are not stored. Model reasoning text is
 discarded. A new web quote is a page span (`web_verbatim`). A new Instagram
 quote is a span of the operator's paraphrase (`operator_summary`), not the
@@ -94,8 +95,8 @@ The 2026-11-15 live probe confirmed that disabling Qwen thinking produces JSON
 content within the output cap. Adding `response_format` produced malformed
 output, so it remains omitted. Tests never make live model calls.
 
-Web fetches use the existing active-bot fetcher: honest User-Agent, robots,
-denied hosts, redirect checks, and the active daily body/aux caps. This
+Web fetches use the active-bot fetcher with a fixed User-Agent, URL and redirect
+checks, Korean-news robots policy, and active daily body/aux caps. This
 collector adds its own ceiling of 10 pages per run and 20 pages per KST day.
 It holds the active `run.lock` only during fetches. `active_busy` means the
 active collector already held that lock. Web targets require HTTPS except for
@@ -184,20 +185,18 @@ echoed into status. Other jobs in the same run proceed normally. If every job is
 unsafe, the run stops with reason `unsafe_url_skipped` before credential checks
 or proxy preflight.
 
-Until the Korean-news robots helper from COLLX-01c is available, web collection
-uses the existing robots checks and spacing on all hosts. A robots refusal on
-a shared platform such as Naver can stop other targets on that registrable
-domain for the current run. Only an evaluated URL gets the 14-day hold.
-Robots transport errors and 5xx responses normally count as `robots_disallowed`.
-A confirmed proxy outage is recorded as a fetch error and leaves the robots
-cache and block holds alone.
+Web collection applies robots.txt, Crawl-delay and per-site spacing to the
+Korean news hosts listed in `hanset_active/profiles/kr_news_domains.txt`. Naver
+news hosts follow this policy. Naver blogs and place listings use serialized
+requests without crawl spacing. A robots or access refusal stops fetching for
+the affected scope in the current run. Only an evaluated URL receives a
+14-day hold. A confirmed proxy outage leaves robots cache and block holds
+alone and the fetcher continues on the box's own IP.
 
-Tavily is optional. A target with no explicit official URL and a `tavily` venue/field pair may
-call the existing `discover_known_venue` hook, which already caps basic search
-at 30 requests per KST day. Only a lead whose domain is in that target's
-`official_domains` can be fetched, and at most one. Other leads are counted
-and discarded. A missing Tavily key skips that target. The key file remains
-`/workspace/.secrets/tavily_key` and is not read by this wrapper.
+A target with a `tavily` venue/field pair may call the known-venue hook. The
+collector may fetch one lead from that target's approved `official_domains`.
+The shared ledger records usage. Provider quota exhaustion stops Tavily calls
+for the invocation. [Tavily ledger](IG_DAEMON.md#persistent-usage-ledger)
 
 ### Seven-day soft deferral of unchanged pages
 
@@ -281,20 +280,23 @@ Web targets:
 }
 ```
 
-Default web runs derive venue-owned URLs from open/conflict priority gaps and
-public URLs from the active seed freeze in a read-only DB snapshot. The next
-operator-initiated `seed --refreeze` can admit Naver and declined brands such as
-RUNPORT. Existing freeze rows stay in place. Manual targets take precedence,
-disabled identity selectors suppress derivation, and invalid files block
-derivation. Missing or empty manual files permit derivation.
+Default web runs combine manual targets, priority gaps, the current frozen
+seed, and promoted discovery observations in one read-only DB snapshot. New
+discoveries enter on the next collection run, including after the daily plan
+freezes. Manual targets take precedence and disabled identities suppress
+derivation. Missing or empty manual files permit derivation. Invalid manual
+files block it. An explicit `--targets` selects the ad hoc set.
 
-Each target has a fetch list (`urls`), a redirect scope (`scope_domains`), and
-an official subset (`official_urls` and `domains`). Public blog, portal, map,
-OTA and declined-brand seed pages can be fetched. They grant no official
-authority and supply no follow-up links. A canonical URL shared by a seed and
-a manual target is attributed to the manual target. Seed collection does not
-create venue listings. The 100-target and 10-page run / 20-page daily limits
-still apply. A plan that exceeds its 512 KB file bound fails as `plan_invalid`.
+Verified first-party URLs can supply official authorization. Public blog,
+portal, map, directory and OTA URLs are fetch targets with third-party
+`source_claim` provenance and `미확인` review labels. RUNPORT's own site can
+supply internal evidence. Listing still requires the venue's consent.
+Discovery and collection write internal state.
+
+The planner records up to 100 targets. Fetch execution rotates eligible work
+before selecting the 100-target window. Change detection sees the complete
+authorization set. Collection retains the 10-page run and 20-page KST day
+limits. A plan over 512 KB fails as `plan_invalid`.
 See [GAP_PRIORITY.md](GAP_PRIORITY.md) for ownership/seed ties, identity
 resolution, count-only diagnostics, snapshot reuse and DB failure semantics.
 Planning/execution can fall back to manual targets on DB failure; change
@@ -423,8 +425,7 @@ Preflight preserves its existing detection limit: without
 listening but hung SOCKS tunnel requires that expected exit IP to be configured,
 which enables a proxied check using `HANSET_WEB_PROXY_CHECK_URL` (default
 `https://api.ipify.org`). Retries cannot detect a proxy the probe reports as
-healthy. The existing daily 04:15 KST web schedule remains unchanged; this
-feature installs no scheduler, tunnel supervisor or deployment step.
+healthy. See the [two-hour operations schedule](RUNBOOK.md#continuous-seed-discovery-and-collection).
 
 Recovery tests mock probes, subprocesses and signals and use a fake clock:
 
@@ -525,17 +526,9 @@ persisting. Both retain conflicts and never publish. See
 [SOURCE_CLAIM_PROMOTION.md](SOURCE_CLAIM_PROMOTION.md) for source approvals,
 normalization, candidate migration, evidence holds and observation-date markers.
 
-The operations host already runs web collection daily at 04:15 KST. Do not
-register another cron for this change. Instagram ingest is still only
-`scripts/run_collect_cron.sh ingest` during hour 13, and only after a
-desktop summary batch is written. This repository does not install that line.
-
-Before the first 04:15 KST run using this scheduling change, capture the
-available run history for the prior seven days. Compare the new run's fetched
-canonical requested URLs with that snapshot. The target is at most two
-`duplicate` dispositions and at least three fetched URLs absent from the
-seven-day history. Report the new-URL count as unverified if historical
-coverage is incomplete.
+Operations replaces the previous daily web trigger with the two-hour web
+trigger. Instagram ingestion follows the hour-13 desktop summary workflow.
+[Schedule and commands](RUNBOOK.md#continuous-seed-discovery-and-collection)
 
 ## Checks
 
@@ -545,19 +538,10 @@ bash -n scripts/run_collect_cron.sh
 python3 site/build_site.py --release
 ```
 
-Web collection is already live on the operations host, including the 04:15
-KST cron and a stored Ambassador hours source claim. This change does not
-rerun that path and does not register a cron. Still unverified on the host:
-opening the live database with `collect report` (the Ambassador row should
-stay NULL), a real desktop operator-summary batch during hour 13, and any
-model extraction of that summary. Tests mock DeepSeek. Do not treat a green
-test run as that live ingest. Do not widen the Instagram hour to try it.
-
 ## Gap-priority plan
 
-The existing 04:15 KST web trigger now prepares a frozen daily gap-priority plan
-and a maximum-20 operator IG read list. No cron changes or Instagram browser
-are added. See [GAP_PRIORITY.md](GAP_PRIORITY.md) for `collect plan-gaps`, scoring,
+The web trigger prepares a frozen daily gap-priority plan and a maximum-20
+operator IG read list. See [GAP_PRIORITY.md](GAP_PRIORITY.md) for `collect plan-gaps`, scoring,
 read-only evidence rules, replay/fallback behavior and manual watchlist proposal
 application. Planning and proposals never publish or change the live watchlist.
 
@@ -568,4 +552,4 @@ review. Detection preserves claims and emits proposals, rebuild candidates and
 a VIRAL topic file without publishing or sending. See
 [OFFICIAL_WEB_CHANGES.md](OFFICIAL_WEB_CHANGES.md) for commands, authorization,
 bootstrap/rebaseline, artifact hashes and human review requirements. The
-existing web wrapper and schedule are unchanged.
+review runs through the web wrapper.

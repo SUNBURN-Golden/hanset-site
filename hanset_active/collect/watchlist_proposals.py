@@ -29,6 +29,9 @@ def inspect_page(job, fetched, *, observed_at, disposition):
     """
     if disposition != 'ready' or fetched.outcome != 'ok' or not job.get('source_authorization'):
         return []
+    from hanset_active.util.urls import is_excluded
+    if is_excluded(job.get('name', ''), job['url'], fetched.url):
+        return []
     requested, final = job['url'], fetched.url
     try:
         if (not domain_allowed(requested, job['domains']) or not domain_allowed(final, job['domains'])

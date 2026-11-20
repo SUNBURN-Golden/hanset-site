@@ -56,8 +56,7 @@ Only the `official_page` filtering path is available to broad discovery. Its
 sanitized leads become `Hit` hints with empty identity fields and ordinary trial
 tasks carrying Tavily provenance. Search results never enter extraction or fact
 storage. The executor records only credential-free dispatch metadata and numeric
-directory progress in its existing SQLite tables. Missing credentials, daily
-exhaustion, cooldowns and other temporary provider failures leave unfinished jobs
+directory progress in its existing SQLite tables. Missing credentials, provider quota exhaustion, cooldowns and other temporary provider failures leave unfinished jobs
 pending without adding failure attempts. Successful empty queries can complete.
 Provider-derived retry times clear when eligibility recovers. OSM directories
 prefer one Tavily query per region/type combination and resume from their cursor;
@@ -68,7 +67,7 @@ from authenticated search. No Instagram handling changes.
 
 Run from the checkout after provisioning the external database and state path.
 This performs a real search only when the selected venue has an eligible gap,
-credentials are valid and daily allowance is available. Tests inject `clock` and
+credentials are valid and the provider is available. Tests inject `clock` and
 `transport`; production callers omit both. The transport seam has the signature
 of `requests.Session.post`, returning a streaming response with `close()`.
 
@@ -96,7 +95,7 @@ PY
 Persist only the safe outcome if needed. Never log environment contents, request
 arguments/headers, responses, exception objects or transport debug dumps.
 `tests/active_bot/test_tavily_discovery.py` exercises a mocked daemon tick that
-continues unrelated work after missing credentials and budget exhaustion, while
+continues unrelated work after missing credentials and provider quota exhaustion, while
 leaving the gap open and all venue/fact/publication records unchanged.
 
 ## Credentials
@@ -122,7 +121,7 @@ environment values. Search is optional: a missing key does not halt the run.
 If a future daemon makes search mandatory, that daemon must handle the skip
 explicitly without printing sensitive configuration.
 
-## Persistent daily allowance
+## Persistent usage ledger
 
 `HANSET_IG_DIR` is required and must resolve outside the checkout, including
 symlink resolution. Missing or invalid configuration returns
@@ -130,7 +129,7 @@ symlink resolution. Missing or invalid configuration returns
 private permissions when absent. The add-on owns only `tavily_usage.json` and
 its stable `tavily_usage.lock`, independent of the future daemon's
 `checkpoint.json`. Both files are mode `0600`; keep the directory private and
-share it across every process/restart using this collector's allowance.
+share it across every process and restart.
 The active-bot discovery provider uses this exact directory and lock as well;
 there is no separate discovery credit pool. Advisory availability checks acquire
 the lock without reserving credits or rewriting usage. The subsequent locked
@@ -140,25 +139,21 @@ Example state (no credential data):
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "budgets": {
     "tavily": {
-      "daily_limit": 30,
-      "days": {"2026-11-05": {"used": 12}},
+      "days": {"2026-11-05": {"used": 12, "reported_credits": 12}},
       "last_reason": "ok"
     }
   }
 }
 ```
 
-The hard limit is **30 Tavily requests per KST calendar day**, separate from the
-active collector's SQLite candidate/body/auxiliary budgets. Stored values and
-configuration cannot raise it. Every attempted dispatch reserves first, including
-failed, timed-out or interrupted requests. A crash before dispatch can consume a
-slot conservatively. Restarting does not reset usage. KST midnight opens a new
-counter; UTC midnight does not. Historical date counters remain so clock rollback
-cannot restore spent allowance. Do not delete or reset these files to resume a
-run. Back up the state together with external daemon state.
+The ledger records attempts and provider-reported credits by KST calendar day.
+It migrates schema version 1 and retains its historical counters. Every dispatch
+reserves first, including failed, timed-out or interrupted requests. A crash
+before dispatch can conservatively count an attempt. KST midnight starts a new
+counter. Keep and back up these files alongside external daemon state.
 
 A process-local lock and stable Linux `flock` serialize reservations **through
 network dispatch**. Fork workers before calling the hook; do not fork while it
@@ -170,18 +165,12 @@ skips safely. Corrupt state, duplicate JSON keys, lock failure or failed writes
 prevent dispatch. If saving the post-request reason fails, the reservation
 remains spent and the caller receives `tavily_budget_unavailable`.
 
-At 30, no request is sent and `last_reason` records exactly
-`tavily_budget_exhausted`. Continue other daemon steps and leave the gap open.
-HTTP 429 sets `tavily_rate_limited` and a persisted `cooldown_until` Unix timestamp;
-Retry-After seconds or HTTP dates are clamped to 1–3600 seconds (default 60).
-During the hold, `tavily_cooldown` sends no request and consumes no slot. There
-is no retry within a search call.
-
-Tavily documents [1,000 free monthly credits, with basic search costing one
-credit](https://docs.tavily.com/documentation/api-credits). Thirty daily basic
-requests allow at most 930 credits in a 31-day month, assuming other consumers
-are not spending the same account's credits. This is a local request cap, not
-an account-wide monthly meter; all consumers must coordinate shared credits.
+A provider credit error records `tavily_provider_quota` and stops Tavily
+for the discovery or collection invocation. An ordinary HTTP 429 records
+`tavily_rate_limited` and persists a cooldown using Retry-After. The cooldown
+accepts seconds or HTTP dates and is bounded to 1–3600 seconds (default 60).
+Use the free plan with paid usage disabled. Billing changes require 준태님's
+approval.
 
 ## Transport and fixed reasons
 
@@ -202,7 +191,7 @@ URLs are discarded. Raw transport exceptions are replaced by fixed outcomes.
 | `tavily_invalid_venue`, `tavily_unknown_venue`, `tavily_unsupported_gap`, `tavily_gap_missing`, `tavily_gap_resolved`, `tavily_unsupported_target`, `tavily_venue_excluded`, `tavily_invalid_identity` | Skip ineligible work without spending allowance. |
 | `tavily_key_missing`, `tavily_key_invalid` | Skip optional search; inspect credential provisioning privately. |
 | `tavily_invalid_query`, `tavily_run_limit` | Broad discovery rejects invalid input or pauses at its run allowance/deadline without dispatch. |
-| `tavily_budget_exhausted`, `tavily_cooldown`, `tavily_clock_changed` | Continue other steps; search can be considered at a later eligible time. |
+| `tavily_provider_quota`, `tavily_cooldown`, `tavily_clock_changed` | Continue other steps; search can be considered at a later eligible time. |
 | `tavily_budget_unavailable` | No new dispatch; inspect external state/permissions privately. An earlier reserved request may already have failed or completed. |
 | `tavily_http_error`, `tavily_rate_limited`, `tavily_timeout`, `tavily_transport_error`, `tavily_invalid_response`, `tavily_response_too_large` | Attempt remains counted; continue without immediate retry. |
 

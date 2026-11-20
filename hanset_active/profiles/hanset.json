@@ -569,7 +569,8 @@
       "url": "https://www.crossfit.com/map",
       "paginate": true,
       "url_filter": "",
-      "enabled": false,
+      "enabled": true,
+      "directory": true,
       "max_pages": 8
     },
     {
@@ -578,7 +579,8 @@
       "url": "https://hyrox.com/find-a-gym/",
       "paginate": true,
       "url_filter": "",
-      "enabled": false,
+      "enabled": true,
+      "directory": true,
       "max_pages": 8
     },
     {
@@ -662,8 +664,6 @@
     "linktr.ee"
   ],
   "exclusion_terms": [
-    "runport",
-    "런포트",
     "butfit",
     "버핏"
   ],

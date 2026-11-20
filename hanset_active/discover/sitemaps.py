@@ -48,11 +48,15 @@ def expand(context,url, *, depth=0, parent_url=None, max_children=20, max_candid
             if len(tasks)>=max_candidates: break
     return tasks
 
+
+def advertised_sitemaps(text):
+    return re.findall(r'^\s*Sitemap:\s*(\S+)', text, re.I | re.M)
+
 def robots_sitemaps(context, origin):
     result=context.get(urljoin(origin,'/robots.txt'),kind='robots')
     if not result or not result.ok: return []
     tasks=[]
-    for url in re.findall(r'^Sitemap:\s*(\S+)',result.text,re.I|re.M)[:20]: tasks.extend(expand(context,url,parent_url=origin))
+    for url in advertised_sitemaps(result.text)[:20]: tasks.extend(expand(context,url,parent_url=origin))
     return tasks
 
 def expand_feed(context,url):
