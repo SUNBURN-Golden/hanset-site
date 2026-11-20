@@ -73,16 +73,31 @@ def span(a, b, ref_year):
 
 FOREIGNER = json.loads((ROOT / "content/foreigner.json").read_text(encoding="utf-8"))
 CLOSED_ALL = {k: c for k, c in json.loads((ROOT / "content/closed_days.json").read_text(encoding="utf-8")).items() if not k.startswith("_")}
+CLOSURE_SOURCES = ("Official page", "Official closure notice", "Official notice", "Official Instagram")
+
+def eligible_closure(c, today):
+    return (isinstance(c, dict) and isinstance(c.get("closed"), str) and bool(c["closed"].strip())
+            and c.get("source") in CLOSURE_SOURCES
+            and official_check_date(c.get("url"), c.get("checked"), today) is not None)
+
+
+def closure_is_active(c, today):
+    return (eligible_closure(c, today) and
+            (c.get("until") in (None, "") or (parse_evidence_date(c["until"]) or dt.date.min) >= today))
+
 def active_closed(today):
-    return {k: c for k, c in CLOSED_ALL.items()
-            if isinstance(c, dict) and c.get("closed") and c.get("source") and valid_public_url(c.get("url"))
-            and (c.get("until") in (None, "") or (parse_evidence_date(c["until"]) or dt.date.min) >= today)}
+    return {k: c for k, c in CLOSED_ALL.items() if closure_is_active(c, today)}
 CLOSED_CHECK = "Check before you go"
+
+def venue_closure_applies(v, c):
+    return (c["closed"] != SUNDAY_CLOSURE or
+            (v["sunday"] == "no" and "sunday_evidence" not in v["c"]))
+
+
 def closed_row(v, today):
     c = active_closed(today).get(v["slug"])
-    if c and c["closed"] == SUNDAY_CLOSURE and (v["sunday"] != "no" or "sunday_evidence" in v["c"]):
-        c = None
-    if not c: return f'<tr><th>Closed on</th><td class="unk">{CLOSED_CHECK}</td></tr>'
+    if not c or not venue_closure_applies(v, c):
+        return f'<tr><th>Closed on</th><td class="unk">{CLOSED_CHECK}</td></tr>'
     return (f'<tr><th>Closed on</th><td>{E(c["closed"])}<br>'
             f'<small class="fact-source">{closure_provenance(c, today)}</small></td></tr>')
 
@@ -101,7 +116,7 @@ def closed_month_block(today, by_slug):
         links = []
         for slug in it["slugs"]:
             v, c = by_slug.get(slug), CLOSED_ALL.get(slug)
-            if not v or not c: continue
+            if not v or not eligible_closure(c, today): continue
             note = (" (may change around holidays)" if "may change" in c["closed"] else "") + (" (maintenance)" if it.get("note") == "maintenance" else "")
             links.append(f'<span class="closure-entry"><a href="{E(c["url"])}" rel="noopener noreferrer">{E(v["title"])}</a>{note}'
                          f'<small class="fact-source">{closure_provenance(c, today)}</small></span>')
@@ -124,15 +139,20 @@ SAUNA_PKG_KEYS = [
     ("age_tattoo_attire", "Age · tattoo · attire rules"),
 ]
 def _is_confirmed(val):
-    return bool(val and val.strip() and val.strip().lower() not in ("not confirmed", "not stated for non-guests.", "확인 중", "확인 중 (not confirmed)"))
+    return bool(val and val.strip() and
+                not re.match(r"^not confirmed(?: yet\b|\s*\(|\.?$)|^확인 중", val.strip(), re.I) and
+                val.strip().lower() != "not stated for non-guests.")
+
 def fchk(v, today):
     d = FOREIGNER.get(v["slug"], {})
     keys = SAUNA_PKG_KEYS if (v["kind_key"] == "sauna" and "public_access" in d) else FCHK_KEYS
-    rows = "".join(
-        f'<tr><th>{lab}</th>' + (f'<td>{E(d[k])}{fact_provenance(v, d[k], today)}</td>' if _is_confirmed(d.get(k, "")) else '<td class="unk">Not confirmed</td>') + '</tr>'
-        for k, lab in keys
-    )
-    return f'<h2>Foreigner &amp; visitor access checklist</h2><table class="facts"><tbody>{rows}</tbody></table>'
+    rows = []
+    for key, label in keys:
+        value = d.get(key, "")
+        parts = venue_field_parts(v, key, value, today, visitor=True) if _is_confirmed(value) else []
+        cell = f'<td>{field_parts_html(parts)}</td>' if parts else '<td class="unk">Not confirmed</td>'
+        rows.append(f'<tr><th>{E(label)}</th>{cell}</tr>')
+    return f'<h2>Foreigner &amp; visitor access checklist</h2><table class="facts"><tbody>{"".join(rows)}</tbody></table>'
 
 GUIDES = [  # (slug, title, description); page bodies are built in guides()
     ("tattoo-friendly-saunas-korea", "Tattoos and saunas in Korea", "What official pages of Korean hotel saunas and spas say about tattoos. Verified, dated, sourced."),
@@ -146,17 +166,15 @@ def guides(site, venues, today):
         rows = []
         for v in vs:
             value = FOREIGNER.get(v["slug"], {}).get(key) or ""
-            if (not value.strip() or value.strip().lower().rstrip(".") in ("unknown", "n/a")
-                    or not valid_public_url(v["source"]) or evidence_status(v, value) != "fact"
-                    or REPLY_CITATION.search(value)
-                    or re.search(r"\bofficial page and (?:venue|hotel) reply\b", value, re.I)):
+            if not _is_confirmed(value) or value.strip().lower().rstrip(".") in ("unknown", "n/a"):
                 continue
-            _, checked = fact_check_date(v, value)
-            if checked is None or checked > today:
+            parts = venue_field_parts(v, key, value, today, visitor=True, guide=True)
+            if not parts:
                 continue
             rows.append(f'<tr><th><a href="/finder/{v["slug"]}/">{E(v["title"])}</a><br>'
-                        f'<span class="muted">{E(v["city_ko"])}</span></th><td>{E(value)}</td>'
-                        f'<td>{fact_provenance(v, value, today)}</td></tr>')
+                        f'<span class="muted">{E(v["city_ko"])}</span></th>'
+                        f'<td>{E(" · ".join(text for text, _ in parts))}</td>'
+                        f'<td>{" · ".join(note for _, note in parts if note)}</td></tr>')
         pending = len(vs) - len(rows)
         pending_note = ""
         if pending:
@@ -173,7 +191,8 @@ def guides(site, venues, today):
     by_slug = {v["slug"]: v for v in venues}
     crow = "".join(f'<tr><th><a href="/finder/{k}/">{E(by_slug[k]["title"])}</a><br><span class="muted">{E(by_slug[k]["city_ko"])}</span></th><td>{E(c["closed"])}</td>'
                    f'<td>{closure_provenance(c, today)}</td></tr>'
-                   for k, c in sorted(((k, c) for k, c in active_closed(today).items() if k in by_slug),
+                   for k, c in sorted(((k, c) for k, c in active_closed(today).items()
+                                       if k in by_slug and venue_closure_applies(by_slug[k], c)),
                                       key=lambda kc: (by_slug[kc[0]]["city_key"] != "seoul", by_slug[kc[0]]["city_key"], by_slug[kc[0]]["title"])))
     bodies["closed-days-korea"] = ('<h1>Closed today? Check first.</h1><p class="lead">Some Korean saunas and gyms close one day a month. Others close every week. Here are the ones we’ve confirmed.</p>'
         + closed_month_block(today, by_slug)
@@ -237,18 +256,22 @@ def load(today):
         if x is None: sys.exit(f"ERROR: no English copy for {c['slug']} in venues_en.json")
         if len(x["facts"]) != len(c["facts"]): sys.exit(f"ERROR: English facts mismatch for {c['slug']}")
         lv = parse_evidence_date(r["last_verified"])
-        evidence = dict(confidence=conf, source=src, last_verified=lv)
-        price, price_term, price_checked = resolve_headline_price(evidence, x["facts"], csv_amount, today)
-        ptxt = price or PENDING
+        evidence = dict(confidence=conf, source=src, last_verified=lv, c=c, slug=c["slug"], website=site)
+        price_key, price_term = bind_headline_price(x["facts"], csv_amount)
+        price_claim = resolve_publication(evidence, price_key, price_term, today) if price_term else None
+        price = csv_amount if price_claim else None
+        ptxt = csv_amount if price_term else PENDING
         def fill(s): return s.replace("{price}", ptxt)
         facts = [[k, en_fact(k, fill(v), en_only(x["location"]))] for k, v in x["facts"]]
         facts_ko = [[k, v] for k, v in c["facts"]]
-        v = dict(c=c, name=name, slug=c["slug"], kind_key=kind_key, kind=KIND_EN[c["kind"]], status=status, title=en_only(x["title"]), title_ko=c["title"],
+        v = dict(name=name, kind_key=kind_key, kind=KIND_EN[c["kind"]], status=status, title=en_only(x["title"]), title_ko=c["title"],
                  city=r["city"], city_ko=CITY_EN.get(r["city"], r["city"]), city_key=CITY_KEY.get(r["city"], r["city"].lower()),
                  location=en_only(x["location"]), location_ko=c["location"], area=x.get("area", ""), summary=x["summary"], facts=facts, facts_ko=facts_ko, tips=x.get("tips", []), unverified=[fill(u) for u in x.get("unverified", [])],
-                 tags=x.get("tags", []), price=price, price_term=price_term, price_checked=price_checked, price_label=x.get("price_label", "Price"),
+                 tags=x.get("tags", []), price=price, price_key=price_key,
+                 price_term=price_term if price_claim else None, price_checked=price_claim.checked_on if price_claim else None,
+                 price_label=x.get("price_label", "Price"),
                  stale=is_outdated(lv, today), extra_sources=extra,
-                 website=site, booking=book, address=addr, hyrox=c.get("hyrox") is True, pick=bool(c.get("pick")),
+                 booking=book, address=addr, hyrox=c.get("hyrox") is True, pick=bool(c.get("pick")),
                  price_caveat=x.get("price_caveat", ""), sub=("box" if kind_key == "box" else (c.get("sub") or ("hotel" if "호텔" in c["kind"] else "boutique"))),
                  flags=c.get("flags", {}), order=len(venues), off=off, **evidence)
         v["sunday"], v["sunday_evidence"] = resolve_sunday(v, today)
@@ -552,7 +575,14 @@ class SundayStatus(NamedTuple):
     key: str
     value: str
 
-def cav(v): return f'<div class="meta cav">※ {E(v["price_caveat"])}</div>' if v["price_caveat"] and v["price"] else ""
+
+class VisitorFact(NamedTuple):
+    key: str
+    value: str
+
+
+VISITOR_FACT_IDS = {label: key for key, label in SAUNA_PKG_KEYS}
+VISITOR_FACT_IDS.update({"Visitor access": "dropin", "English support": "english", "Tattoos": "tattoo"})
 
 def map_url(v):
     return "https://map.naver.com/p/search/" + quote(v["title_ko"] + (" " + v["address"] if v["address"] else ""))
@@ -601,7 +631,11 @@ def fact_groups(v):
             if not any(tip == value for _, value in rules + access):
                 rules.append(("Entry restriction", tip))
     tattoo = [(k, val) for k, val in facts + rules if "tattoo" in val.lower() or "tattoo" in k.lower()]
-    rules.insert(0, ("Tattoos", tattoo[0][1] if tattoo else visitor.get("tattoo") or UNKNOWN))
+    tattoo_row = VisitorFact("Tattoos", visitor.get("tattoo") or UNKNOWN)
+    if tattoo:
+        key, value = tattoo[0]
+        tattoo_row = (key if price_or_schedule(key, value) else "Tattoos", value)
+    rules.insert(0, tattoo_row)
     access_facts = [(k, val) for k, val in access if k in ("Who can use", "Non-guests", "Entry")]
     if access_conflict(v):
         access.insert(0, ("Visitor access", UNKNOWN + " · Official page and venue reply differ; confirm with the venue."))
@@ -609,7 +643,7 @@ def fact_groups(v):
         visitor_access = visitor.get("dropin") or UNKNOWN
         if re.search(r"pending|not stated|not confirmed", visitor_access, re.I):
             visitor_access = UNKNOWN
-        access.insert(0, ("Visitor access", visitor_access))
+        access.insert(0, VisitorFact("Visitor access", visitor_access))
     elif (all(re.search(r"pending|not stated|not confirmed", val, re.I) for _, val in access_facts)
           or re.search(r"pending|not stated|not confirmed", visitor.get("dropin", ""), re.I)):
         access.insert(0, ("Visitor access", UNKNOWN))
@@ -625,9 +659,9 @@ def fact_groups(v):
             else:
                 group = access
             if (label, value) not in group:
-                group.append((label, value))
+                group.append(VisitorFact(label, value))
     if visitor.get("english") and not (v["kind_key"] == "sauna" and "english" in visitor) and not any(k == "Language" for k, _ in access):
-        access.append(("English support", visitor["english"]))
+        access.append(VisitorFact("English support", visitor["english"]))
     facilities = [(k, val) for k, val in facts if re.search(r"facilit|temperature|sauna|bath|amenit|equipment|floors|areas|sequence|concept", k, re.I)
                   and (k, val) not in hours + access + rules]
     programs = [(k, val) for k, val in facts if re.search(r"program|classes|beginner|hybrid|training", k, re.I)
@@ -663,6 +697,7 @@ def is_sunday_key(key):
 def sunday_claim_status(value, *, dedicated=False):
     """Recognize explicit legacy claims for comparison with evidence."""
     text = REPLY_CITATION.sub("", value).strip().removesuffix(".")
+    text = re.sub(r"\s*(?:\(" + OFFICIAL_MARKER + r"[^()]*\)$|(?:—|--)\s*" + OFFICIAL_MARKER + r".*$)", "", text, flags=re.I)
     if SUNDAY_OPEN.fullmatch(text) or (dedicated and re.fullmatch(
             r"Open(?: \d{1,2}:\d{2}[–-]\d{1,2}:\d{2})?|(?:Classes at )?\d{1,2}:\d{2}(?:[–-]\d{1,2}:\d{2})?",
             text, re.I)):
@@ -722,18 +757,15 @@ def resolve_sunday(v, today):
     else:
         closure = CLOSED_ALL.get(v["slug"])
         evidence = None
-        if (isinstance(closure, dict) and closure.get("closed") == SUNDAY_CLOSURE
+        if (eligible_closure(closure, today) and closure.get("closed") == SUNDAY_CLOSURE
                 and closure.get("source") == "Official page" and closure.get("until") in (None, "")):
             evidence = dict(status="no", source_kind="official_page",
                             source_url=closure.get("url"), checked_on=closure.get("checked"))
     if not isinstance(evidence, dict) or evidence.get("source_kind") != "official_page":
         return "unk", None
     status, url, raw_date = (evidence.get(field) for field in ("status", "source_url", "checked_on"))
-    if (status not in ("yes", "no") or not valid_public_url(url) or
-            not isinstance(raw_date, str) or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", raw_date)):
-        return "unk", None
-    checked = parse_evidence_date(raw_date)
-    if checked is None or checked > today:
+    checked = official_check_date(url, raw_date, today, iso=True)
+    if status not in ("yes", "no") or checked is None:
         return "unk", None
     accepted = SundayEvidence(status, url, checked)
     for facts, translations in ((v["facts"], v["facts_ko"]), (v["facts_ko"], v["facts"])):
@@ -759,7 +791,7 @@ def parse_evidence_date(value):
     """Yearless, invalid and ambiguous dates never acquire an invented check date."""
     if not isinstance(value, str): return None
     try:
-        if re.fullmatch(r"\d{4}[-.]\d{2}[-.]\d{2}", value):
+        if re.fullmatch(r"[0-9]{4}([-.])[0-9]{2}\1[0-9]{2}", value):
             return ymd(value.replace(".", "-"))
         for fmt in ("%b %d, %Y", "%B %d, %Y", "%b %d %Y", "%B %d %Y"):
             try: return dt.datetime.strptime(value, fmt).date()
@@ -768,13 +800,21 @@ def parse_evidence_date(value):
         pass
     return None
 
+def official_check_date(url, raw_date, today, *, iso=False):
+    if not valid_public_url(url):
+        return None
+    if iso and not (isinstance(raw_date, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", raw_date)):
+        return None
+    checked = raw_date if isinstance(raw_date, dt.date) else parse_evidence_date(raw_date)
+    return checked if checked is not None and checked <= today else None
+
 def citation_date(citations, marker):
     # Only dates immediately attached to the evidence marker count. Inquiries,
     # scheduled closures and other dates elsewhere in the prose are not evidence.
     dates = []
     for citation in citations:
         for match in re.finditer(marker + r"\s*[:,]?\s*(?:(?:on|dated|received)\s+)?(" + EVIDENCE_DATE + r")"
-                                 r"((?:\s*(?:/|,|and|or|–|to)\s*" + EVIDENCE_DATE + r")*)", citation, re.I):
+                                 r"((?:\s*(?:/|,|;|&|and|or|–|to)\s*" + EVIDENCE_DATE + r")*)", citation, re.I):
             clause = re.split(r"[();\n]|—|--", citation[:match.start()])[-1]
             if re.search(r"\binquiry\b", clause, re.I): continue
             dates.extend(re.findall(EVIDENCE_DATE, match[1] + match[2], re.I))
@@ -792,20 +832,243 @@ def fact_check_date(v, value):
     checked = v["last_verified"]
     return dot(checked), checked
 
-def fact_provenance(v, value, today, *, link_claims=False, sunday_scope=False):
+
+class PublicationClaim(NamedTuple):
+    value: str
+    source_url: str
+    checked_on: dt.date
+
+
+PRICE_AMOUNT = re.compile(r"(?:[₩$€£]\s*\d[\d,]*|\b(?:KRW|USD)\s*\d[\d,]*|\b\d[\d,]*\s*(?:won\b|KRW\b|원)|\b\d+\s*%\s*(?:off|discount)\b)", re.I)
+OPERATING_TIME = re.compile(
+    r"\b(?:\d{1,2}:\d{2}|\d{1,2}(?::\d{2})?\s*[ap]\.?m\.?\b|24\s*(?:h(?:ours?)?|/\s*7)\b"
+    r"|closed(?![- ]toe)|closures?|holidays? only|open (?:daily|year[- ]round|all year|every \w+|(?:on )?(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\w*)"
+    r"|매주|휴무|운영시간)\b", re.I)
+DURATION = re.compile(r"\b\d+\s*(?:mins?|minutes?|h|hrs?|hours?)\b", re.I)
+NON_OFFICIAL = re.compile(
+    r"\b(?:venue|hotel|e-?mail|direct) reply\b|\breply from (?:the )?(?:venue|hotel)\b|회신"
+    r"|third[- ]party|\bblogs?\b|\broundup\b|\bsource claim\b|unverified clue|not official"
+    r"|operator[- ]run|operator profile|\bdaangn\b|\binquiry\b|\b(?:AI[- ](?:summary|generated))\b", re.I)
+OFFICIAL_MARKER = (r"\bofficial (?:page|(?:[\w-]+ ){0,2}guide|(?:hotel )?info|notice|(?:web)?site|"
+                   r"source|Instagram)\b")
+CHECK_MARKER = r"\b(?:re[- ]?)?checked\b|\bconfirmed by HANSET editor\b"
+CLAUSE_BREAK = re.compile(r"\([^()]*(?:\([^()]*\)[^()]*)*\)| · |(?<=\.)\s+(?=[A-Z])|\n+")
+PENDING_CLAIM = re.compile(
+    r"^\s*(?:not confirmed|unconfirmed|unverified|not stated|not listed|not applicable|not yet announced|unknown|pending|확인 중)\b"
+    r"|\bnot confirmed yet\b|\b(?:hours?|rates?|fees?|price|time|cutoff|closures?) (?:still )?(?:pending|not confirmed)\b", re.I)
+
+
+def price_or_schedule(key, value):
+    price_field = is_price_context(key) or key in ("full_price", "scrub_fee", "dropin", "price_caveat")
+    return bool(is_hours_key(key, value) or key in ("closures", "last_entry")
+                or "{price}" in value or PRICE_AMOUNT.search(value) or OPERATING_TIME.search(value)
+                or (price_field and re.search(r"\b(?:\d{4,}|\d{1,3},\d{3}|free|complimentary)\b", value, re.I))
+                or (DURATION.search(value) and re.search(
+                    r"session|booking|time allowed|length|last entry|access|hours|price|class|arrive|check-in|cutoff",
+                    key + " " + value, re.I)))
+
+
+def has_citation(value):
+    # Bare official-page annotations in legacy terms describe scope. A source
+    # suffix, a dated source or an explicit check must qualify on its own.
+    return bool(NON_OFFICIAL.search(value) or re.search(CHECK_MARKER, value, re.I)
+                or re.search(r"(?:—|--)\s*" + OFFICIAL_MARKER, value, re.I)
+                or re.search(OFFICIAL_MARKER + r"\s*(?:[:,]?\s*(?:date\b|\d|on\b|dated\b))", value, re.I))
+
+
+def explicit_check_date(value):
+    marker = CHECK_MARKER if re.search(CHECK_MARKER, value, re.I) else OFFICIAL_MARKER
+    markers = list(re.finditer(marker, value, re.I))
+    for match in markers:
+        tail = value[match.end():]
+        date = re.match(r"\s*[:,]?\s*(?:(?:on|dated)\s+)?(" + EVIDENCE_DATE + r")(?![\w/-]|\.\d)", tail, re.I)
+        if not date:
+            return "", None
+        # Reject a second date-like token if citation_date cannot parse its full form.
+        follow = re.match(r"\s*(?:/|,|;|&|and|or|–|to)\s*(?=\d)", tail[date.end():], re.I)
+        if follow and not re.match(EVIDENCE_DATE, tail[date.end() + follow.end():], re.I):
+            return "", None
+    return citation_date([value], "(?:" + marker + ")")
+
+
+def claim_scope(key, value):
+    label = key.lower()
+    if "closed" in label or "closure" in label or re.match(r"\s*closed\b", value, re.I):
+        return "closure"
+    if "scrub" in label:
+        return "scrub"
+    if label == "last_entry" or is_hours_key(key, value) or re.search(r"\b\d{1,2}:\d{2}\b", value):
+        return "hours"
+    if label in ("full_price", "dropin", "price_caveat", "non-guests") or is_price_context(key):
+        return "admission"
+    return label
+
+
+def claim_tokens(value, scope):
+    text = re.split(r"\s*(?:—|--)|\((?:official|venue reply|hotel reply)", value.lower(), maxsplit=1)[0]
+    if scope == "closure":
+        return frozenset(re.findall(r"\w+", text)) - {"closed", "closure", "on", "every", "each", "of", "the", "month"}
+    if scope == "hours":
+        return frozenset(re.findall(r"\b\d{1,2}:\d{2}\b", text))
+    return frozenset(re.sub(r"[^\d%$€£]", "", token) for token in PRICE_AMOUNT.findall(text))
+
+
+def restates_nonofficial(v, key, value):
+    scope = claim_scope(key, value)
+    tokens = claim_tokens(value, scope)
+    if not tokens:
+        return False
+    for other_key, other in v.get("facts", ()):
+        if not NON_OFFICIAL.search(other) or claim_scope(other_key, other) != scope:
+            continue
+        other_tokens = claim_tokens(other, scope)
+        if tokens == other_tokens or (scope != "closure" and tokens <= other_tokens):
+            return True
+    return False
+
+
+def resolve_publication(v, key, value, today, *, visitor=False, sunday_scope=False):
+    """Resolve one price or schedule claim in citation, field, record, venue order."""
+    if PENDING_CLAIM.search(value) or not value.strip() or "{price}" in value:
+        return None
+    if sunday_scope and v["sunday"] == "unk" and v["sunday_evidence"]:
+        return None
+    if has_citation(value):
+        if NON_OFFICIAL.search(value) or not re.search(OFFICIAL_MARKER, value, re.I):
+            return None
+        if has_uncited_tail(key, value):
+            return None
+        source = v["source"]
+        if re.search(r"\bofficial Instagram\b", value, re.I):
+            source = v.get("website") or source
+            if not valid_public_url(source) or host(source) != "instagram.com":
+                return None
+            profile = urlparse(source).path.strip("/").split("/", 1)[0].lower()
+            handle = re.search(r"\bofficial Instagram\s+@([\w.]+)", value, re.I)
+            if not profile or profile == "realtime.seoul" or (handle and profile != handle[1].lower()):
+                return None
+        elif evidence_status(v, "Venue information") != "fact":
+            return None
+        _, raw_date = explicit_check_date(value)
+        checked = official_check_date(source, raw_date, today)
+        return PublicationClaim(value, source, checked) if checked else None
+
+    fields = v.get("c", {}).get("price_hours_evidence", {})
+    if not isinstance(fields, dict):
+        return None
+    if key in fields:
+        entry = fields[key]
+        if not isinstance(entry, dict) or entry.get("source_kind") != "official_page" or entry.get("value") != value:
+            return None
+        source = entry.get("source_url")
+        checked = official_check_date(source, entry.get("checked_on"), today, iso=True)
+        return PublicationClaim(value, source, checked) if checked else None
+
+    if sunday_scope:
+        evidence = v["sunday_evidence"]
+        # Regular Sunday status does not attest to any particular class or opening time.
+        if (evidence and sunday_claim_status(value, dedicated=is_sunday_key(key)) == v["sunday"]
+                and not OPERATING_TIME.search(re.sub(r"\bClosed\b", "", value, flags=re.I))):
+            return PublicationClaim(value, evidence.source_url, evidence.checked_on)
+        return None
+
+    if claim_scope(key, value) == "closure":
+        record = CLOSED_ALL.get(v.get("slug"))
+        if record is not None:
+            if not eligible_closure(record, today):
+                return None
+            if claim_tokens(value, "closure") == claim_tokens(record["closed"], "closure"):
+                if not closure_is_active(record, today):
+                    return None
+                return PublicationClaim(value, record["url"], parse_evidence_date(record["checked"]))
+
+    confidence = v.get("confidence", v.get("status", ""))
+    if NON_OFFICIAL.search(confidence) or evidence_status(v, "Venue information") != "fact":
+        return None
+    if visitor and restates_nonofficial(v, key, value):
+        return None
+    _, raw_date = fact_check_date(v, value)
+    source = v["source"]
+    checked = official_check_date(source, raw_date, today)
+    return PublicationClaim(value, source, checked) if checked else None
+
+
+def field_clauses(value):
+    parts, start = [], 0
+    for match in CLAUSE_BREAK.finditer(value):
+        if not match[0].startswith("("):
+            parts.append(value[start:match.start()])
+            start = match.end()
+    parts.append(value[start:])
+    return parts
+
+
+def has_uncited_tail(key, value):
+    parts = field_clauses(value)
+    last_cited = max((i for i, part in enumerate(parts) if has_citation(part)), default=-1)
+    return any(price_or_schedule(key, part) for part in parts[last_cited + 1:])
+
+
+def publication_clauses(key, value):
+    """Split only when each scoped clause has its own citation or is already pending."""
+    parts = field_clauses(value)
+    scoped = [part for part in parts if price_or_schedule(key, part)]
+    if (scoped and (len(scoped) > 1 or any(has_citation(part) for part in parts if part not in scoped))
+            and all(has_citation(part) or PENDING_CLAIM.search(part) for part in scoped)):
+        return parts
+    return [value]
+
+
+def guide_policy_supported(v, value, today):
+    _, checked = fact_check_date(v, value)
+    return (evidence_status(v, value) == "fact" and not REPLY_CITATION.search(value)
+            and not re.search(r"\bofficial page and (?:venue|hotel) reply\b", value, re.I)
+            and official_check_date(v["source"], checked, today) is not None)
+
+
+def venue_field_parts(v, key, value, today, *, visitor=False, sunday_scope=False, unconfirmed=False, guide=False):
+    if not value.strip():
+        return []
+    clauses = publication_clauses(key, value) if sunday_scope or price_or_schedule(key, value) else [value]
+    parts = []
+    for part in clauses:
+        if not sunday_scope and not price_or_schedule(key, part):
+            if not guide or guide_policy_supported(v, part, today):
+                parts.append((part, fact_provenance(v, ("Unconfirmed: " if unconfirmed else "") + part, today)))
+        else:
+            claim = resolve_publication(v, key, part, today, visitor=visitor, sunday_scope=sunday_scope)
+            parts.append((claim.value, fact_provenance(v, claim.value, today, publication=claim)) if claim else (UNKNOWN, ""))
+    return parts if any(text != UNKNOWN for text, _ in parts) else []
+
+
+def field_parts_html(parts):
+    return " · ".join(E(text) + note for text, note in parts)
+
+
+def venue_notes_html(v, key, heading, values, today, *, unconfirmed=False):
+    items = [venue_field_parts(v, key, value, today, visitor=True, unconfirmed=unconfirmed) for value in values]
+    shown = "".join(f"<li>{field_parts_html(parts)}</li>" for parts in items if parts)
+    return f"<h2>{heading}</h2><ul class='clean'>{shown}</ul>" if shown else ""
+
+
+def fact_provenance(v, value, today, *, link_claims=False, publication=None):
     """A venue reply is not evidence available at the representative website."""
+    if publication is not None:
+        checked_text = explicit_check_date(value)[0] if has_citation(value) else dot(publication.checked_on)
+        url = publication.source_url
+        return (f'<small class="fact-source">Checked {E(checked_text)} · '
+                f'<a href="{E(url)}" rel="noopener noreferrer">Official source · {E(host(url))}</a> '
+                f'{freshness(publication.checked_on, today)}</small>')
     if not value or value.startswith(UNKNOWN) or value.lower() in ("pending", "not confirmed", "not yet announced"):
         return ""
     citations = REPLY_CITATION.findall(value)
     if citations:
         # Dates outside an explicit reply citation may be closures or inquiry dates.
         checked_text, checked = citation_date(citations, r"(?:venue|hotel) reply\b")
-        if sunday_scope or checked_text != "date not confirmed" or not any(c.lower().startswith("(official page and ") for c in citations):
+        if checked_text != "date not confirmed" or not any(c.lower().startswith("(official page and ") for c in citations):
             status = "Unconfirmed" if evidence_status(v, value) == "unverified" else "Source claim"
             return (f'<small class="fact-source">Venue reply · {E(checked_text)} · {status} · '
                     f'Public source: {UNKNOWN} {freshness(checked, today)}</small>')
-    if sunday_scope:
-        return '<small class="fact-source">Not confirmed</small>'
     status = evidence_status(v, value)
     label = {"fact": "Official source", "source_claim": "Source claim", "unverified": "Unconfirmed"}[status]
     checked_text, checked = fact_check_date(v, value)
@@ -825,23 +1088,16 @@ def fact_value_html(row, v, today):
         if v["sunday"] != "unk":
             provenance = sunday_provenance(evidence, today)
         elif evidence:
-            claim = SUN_TXT[evidence.status].removesuffix(" (verified)")
-            provenance = (f'<span class="fact-line">{E(claim)}'
-                          '<small class="fact-source">Sunday sources disagree · Not confirmed</small></span>')
+            provenance = '<small class="fact-source">Sunday sources disagree · Not confirmed</small>'
         return (f'<span class="sunday-status">{E(value)}</span>{provenance}'
                 + (fact_lines(claims, v, today) if claims else ""))
     if not v:
         return E(value)
-    shown = display_value(v, "Hours" if isinstance(row, SundayClaim) else key, value)
-    if isinstance(row, SundayClaim):
-        if (shown == value and v["sunday"] in sunday_row_statuses(row)
-                and not REPLY_CITATION.search(value)):
-            provenance = sunday_provenance(v["sunday_evidence"], today)
-        else:
-            provenance = fact_provenance(v, shown, today, sunday_scope=True)
-    else:
-        provenance = fact_provenance(v, shown, today)
-    return E(shown) + provenance
+    visitor = isinstance(row, VisitorFact)
+    claim_id = VISITOR_FACT_IDS[key] if visitor else "Tip" if key == "Entry restriction" else key
+    parts = venue_field_parts(v, claim_id, value, today, visitor=visitor or key == "Entry restriction",
+                              sunday_scope=isinstance(row, SundayClaim))
+    return field_parts_html(parts) if parts else UNKNOWN
 
 
 def fact_lines(rows, v, today):
@@ -854,32 +1110,41 @@ def is_price_context(key):
         "Day pass", "Group session", "Open gym", "Traveler pass", "Trial", "Guest discount rate", "Jjimjil", "Jjimjil wear")
 
 
-def resolve_headline_price(v, raw_facts, csv_amount, today):
+def bind_headline_price(raw_facts, csv_amount):
     """Bind the CSV amount to the term designated by operations' price placeholder."""
-    pending = (None, None, None)
     if not csv_amount:
-        return pending
+        return None, None
     terms = [(key, value) for key, value in raw_facts if "{price}" in value]
-    if len(terms) != 1 or not is_price_context(terms[0][0]):
-        return pending
-    _, raw_term = terms[0]
-    # The separate membership note in Signiel's guest price row describes another rate.
-    term = raw_term.removesuffix(" · Membership rates not listed").replace("{price}", csv_amount)
-    if evidence_status(v, term) != "fact" or REPLY_CITATION.search(term):
-        return pending
-    _, checked = fact_check_date(v, term)
-    if checked is None or checked > today:
-        return pending
-    return csv_amount, term, checked
+    if len(terms) != 1 or terms[0][1].count("{price}") != 1 or not is_price_context(terms[0][0]):
+        return None, None
+    key, term = terms[0]
+    # A compound row can qualify its bound price independently if every
+    # priced clause is cited. Keep the full value for single-claim map matching.
+    clause = next(part for part in publication_clauses(key, term) if "{price}" in part)
+    return key, clause.replace("{price}", csv_amount)
+
+
+def headline_publication(v, today):
+    if v["price"] and v["price_term"]:
+        return resolve_publication(v, v.get("price_key") or "Price", v["price_term"], today)
+    return None
 
 
 def price_html(v, today):
     # The confirmed headline summarizes the full terms below.
     context = [(k, val) for k, val in v["facts"] if
                is_price_context(k) and val.strip() and val != PENDING]
-    numeric = (f'<div class="price"><span class="price-label">{E(v["price_label"])}:</span> '
-               f'<strong>{E(v["price"])}</strong></div>{cav(v)}{fact_provenance(v, v["price_term"], today)}') if v["price"] else ""
-    terms = fact_lines(context, v, today) if context else ("" if numeric else f'<span class="unk">Price: {UNKNOWN}</span>')
+    numeric = ""
+    claim = headline_publication(v, today)
+    if claim:
+        caveat = venue_field_parts(v, "price_caveat", v["price_caveat"], today, visitor=True)
+        caveat_html = f'<div class="meta cav">※ {field_parts_html(caveat)}</div>' if caveat else ""
+        numeric = (f'<div class="price"><span class="price-label">{E(v["price_label"])}:</span> '
+                   f'<strong>{E(v["price"])}</strong></div>'
+                   f'{fact_provenance(v, claim.value, today, publication=claim)}{caveat_html}')
+    terms = fact_lines(context, v, today) if context else ""
+    if not numeric and (not terms or all(fact_value_html(row, v, today) == UNKNOWN for row in context)):
+        terms = f'<span class="unk">Price: {UNKNOWN}</span>'
     return numeric + '<div class="price price-context">' + terms + '</div>'
 
 
@@ -955,12 +1220,12 @@ def venue_contents(v, today, *, show_sunday=False):
     return (f'<a class="card-media" href="/finder/{v["slug"]}/" tabindex="-1" aria-hidden="true">{venue_media(v)}</a>'
             f'<div class="card-body"><h3><a href="/finder/{v["slug"]}/">{E(v["title"])}</a></h3>'
             f'<p class="card-type">{E(v["kind"])}</p><p class="card-meta">{E(v["area"] or v["location"])}'
-            f'{(" · " + price_short(v)) if v["price"] else ""}</p>{sunday}{amenity_badges(v, limit=3)}'
+            f'{(" · " + price_short(v)) if headline_publication(v, today) else ""}</p>{sunday}{amenity_badges(v, limit=3)}'
             f'<p class="card-evidence">{fact_provenance(v, "Venue information", today, link_claims=True)}</p></div>')
 
 def venue_card(v, today):
     checked = v["last_verified"].isoformat() if v["last_verified"] else ""
-    attrs = (f'data-slug="{v["slug"]}" data-city="{v["city_key"]}" data-type="{v["kind_key"]}" data-sunday="{v["sunday"]}" data-price="{1 if v["price"] else 0}" data-cf="{1 if v["off"]["cf"] else 0}" data-hyrox="{1 if v["off"]["hyrox"] else 0}" data-sub="{v["sub"]}" data-order="{v["order"]}" data-date="{checked}" data-title="{E(v["title"])}" '
+    attrs = (f'data-slug="{v["slug"]}" data-city="{v["city_key"]}" data-type="{v["kind_key"]}" data-sunday="{v["sunday"]}" data-price="{int(headline_publication(v, today) is not None)}" data-cf="{1 if v["off"]["cf"] else 0}" data-hyrox="{1 if v["off"]["hyrox"] else 0}" data-sub="{v["sub"]}" data-order="{v["order"]}" data-date="{checked}" data-title="{E(v["title"])}" '
              f'data-name="{E((v["title"] + " " + (v.get("name") or v["title"]) + " " + v["location"] + " " + v["area"] + " " + v["kind"] + " " + v["title_ko"] + " " + v["location_ko"]).lower())}"')
     return f'<article class="card venue-card" {attrs}>{venue_contents(v, today, show_sunday=True)}</article>'
 
@@ -1162,8 +1427,8 @@ def build(site, venues, events, today, vevents=(), creators=()):
             links.append(f'<a class="btn btn-d" href="{E(v["booking"])}" rel="noopener noreferrer">Book</a>')
         links.append(f'<a class="btn btn-d" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map</a>')
         srcs = [f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a>'] + [f'<a href="{E(u)}" rel="noopener noreferrer">{E(l)}</a>' for l, u in v["extra_sources"]]
-        tips = ("<h2>Tips · Heads-up</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Tip', t))}{fact_provenance(v, display_value(v, 'Tip', t), today)}</li>" for t in v["tips"]) + "</ul>") if v["tips"] else ""
-        unv = ("<h2>Unconfirmed</h2><ul class='clean'>" + "".join(f"<li>{E(display_value(v, 'Unconfirmed', t))}{fact_provenance(v, 'Unconfirmed: ' + display_value(v, 'Unconfirmed', t), today)}</li>" for t in v["unverified"]) + "</ul>") if v["unverified"] else ""
+        tips = venue_notes_html(v, "Tip", "Tips · Heads-up", v["tips"], today)
+        unv = venue_notes_html(v, "Unconfirmed", "Unconfirmed", v["unverified"], today, unconfirmed=True)
         stale = (f'<div class="note">{OUTDATED} · Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if is_outdated(v["last_verified"], today) else "")
         safety = f'<p class="safety">{SAFETY}</p>' if v["kind_key"] == "sauna" else ""
         offrows = f'<tr><th>Official list</th><td>{off_html(v, today)}</td></tr>' if v["off"]["cf"] or v["off"]["hyrox"] else ""
@@ -1843,7 +2108,7 @@ AERIAL = [
     ('aerial-spa-haesurang', 'spa-haesurang-busan', "Hand-drawn bird's-eye plan of Spa Haesurang's sauna floor in Busan: dry and wet saunas, warm, hot and cold pools, event bath, rows of showers (about 80) and powder room; sauna ₩15,000 on weekdays."),
     ('aerial-heosimcheong', 'heosimcheong-busan', "Hand-drawn bird's-eye plan of the 5th-floor hot-spring baths at Hurshimchung, Busan: longevity, event, celadon, cave, cold, half-body, salt and open-air baths, mini pool, steam and dry saunas, showers and scrub corner; ₩15,000 on weekdays."),
     ('aerial-orakai-cheonggyesan', 'orakai-cheonggyesan', "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools, showers; adult ₩24,000."),
-    ('aerial-sisu-house', 'sisu-house', "Hand-drawn bird's-eye plan of Sisu House in Seoul: a one-person private room with Finnish sauna, warm bath, 14°C cold shower, ice fountain and changing room, plus the touch-care room and check-in; from ₩79,000."),
+    ('aerial-sisu-house', 'sisu-house', "Hand-drawn bird's-eye plan of Sisu House in Seoul: a one-person private room with Finnish sauna, warm bath, 14°C cold shower, ice fountain and changing room, plus the touch-care room and check-in."),
     ('aerial-crossfit-super-sapiens', 'crossfit-super-sapiens', "Hand-drawn bird's-eye plan of CrossFit Super Sapiens in Seoul: 1st-floor training floor with rig and barbells, 2nd-floor accessory area, showers and lockers, 3rd-floor tanning and staff room; drop-in ₩30,000."),
 ]
 AERIAL_BY_VENUE = {a[1]: a for a in AERIAL}

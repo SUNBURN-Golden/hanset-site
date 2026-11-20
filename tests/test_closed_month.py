@@ -4,6 +4,8 @@ from pathlib import Path
 import sys
 import unittest
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'site'))
 import build_site as B
 
@@ -109,3 +111,28 @@ def test_build_dates_do_not_leak_active_closure_state(monkeypatch):
             assert B.OUTDATED in block
         else:
             assert 'closed-month' not in guide
+
+
+@pytest.mark.parametrize('invalid', [
+    {'source': 'Venue reply'}, {'source': 'Operator-run profile'}, {'url': '/closure'},
+    {'checked': None}, {'checked': '11/2'}, {'checked': '2026-02-30'},
+    {'checked': '2026-11-01 or 2026-11-02'}, {'checked': '2026-11-02'},
+])
+def test_unqualified_closure_never_enters_detail_guide_or_month(monkeypatch, invalid):
+    today = dt.date(2026, 11, 1)
+    venues, events, *_ = B.load(today)
+    v = venues[0]
+    v['facts'].append(('Closed', 'Closed on the fixture maintenance day'))
+    c = dict(closed='Fixture maintenance', source='Official notice',
+             url='https://example.org/closure', checked=today.isoformat()) | invalid
+    monkeypatch.setattr(B, 'CLOSED_ALL', {v['slug']: c})
+    monkeypatch.setattr(B, 'CLOSED_MONTH', dict(month='2026-11', title='November closed days',
+                        items=[dict(date='2026-11-02', slugs=[v['slug']])]))
+    site = B.Site(today, True)
+    B.build(site, [v], events, today)
+    guide = site.pages['/guides/closed-days-korea/']
+    assert 'closed-month' not in guide and 'Fixture maintenance' not in guide
+    detail = site.pages[f'/finder/{v["slug"]}/']
+    assert '<th>Closed on</th><td class="unk">Check before you go</td>' in detail
+    assert '<th>Closed</th><td>Not confirmed yet</td>' in detail
+    assert 'Fixture maintenance' not in detail

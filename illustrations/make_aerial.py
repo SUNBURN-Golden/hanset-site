@@ -174,9 +174,7 @@ def sisu():
     b += zone(560, 700, 460, 200, C["tan"], "1F Check-in", "+ shop", 30)
     b += entrance(840, 910, 170, 60)
     b += notes(70, 1000, ["① touch care  →  ② warm bath  →  ③ sauna + 14°C cold shower"], 28)
-    b += notes(70, 1060, ["Spa Basic ₩79,000 · Deep ₩89,000 · Recovery ₩109,000", "11:00–21:45 · closed every Tuesday",
-                          "Booking only · one person per room"], 30)
-    b += notes(70, 1230, ["venue reply 2026.10.18"], 24, color=C["dark"])
+    b += notes(70, 1060, ["Booking only · one person per room"], 30)
     return b
 
 def termeden():
@@ -231,7 +229,7 @@ SCENES = {
  "aerial-spa-haesurang": (haesurang, "Spa Haesurang, bird's-eye", "Hand-drawn bird's-eye plan of Spa Haesurang's sauna floor in Busan: dry and wet saunas, warm, hot and cold pools, event bath, rows of showers (about 80) and powder room; sauna ₩15,000 on weekdays."),
  "aerial-heosimcheong": (heosimcheong, "Hurshimchung, bird's-eye", "Hand-drawn bird's-eye plan of the 5th-floor hot-spring baths at Hurshimchung, Busan: longevity, event, celadon, cave, cold, half-body, salt and open-air baths, mini pool, steam and dry saunas, showers and scrub corner; ₩15,000 on weekdays."),
  "aerial-orakai-cheonggyesan": (orakai, "Orakai Cheonggyesan, bird's-eye", "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools, showers; adult ₩24,000."),
- "aerial-sisu-house": (sisu, "Sisu House, bird's-eye", "Hand-drawn bird's-eye plan of Sisu House in Seoul: a one-person private room with Finnish sauna, warm bath, 14°C cold shower, ice fountain and changing room, plus the touch-care room and check-in; from ₩79,000."),
+ "aerial-sisu-house": (sisu, "Sisu House, bird's-eye", "Hand-drawn bird's-eye plan of Sisu House in Seoul: a one-person private room with Finnish sauna, warm bath, 14°C cold shower, ice fountain and changing room, plus the touch-care room and check-in."),
  "aerial-crossfit-super-sapiens": (supersapiens, "CrossFit Super Sapiens, bird's-eye", "Hand-drawn bird's-eye plan of CrossFit Super Sapiens in Seoul: 1st-floor training floor with rig and barbells, 2nd-floor accessory area, showers and lockers, 3rd-floor tanning and staff room; drop-in ₩30,000."),
 }
 

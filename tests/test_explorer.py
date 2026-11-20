@@ -140,11 +140,13 @@ class Explorer(unittest.TestCase):
                 next_link = re.findall(r'<p class="next-venue"><a href="([^"]+)"', page)
                 self.assertEqual(next_link, [f'/finder/{next_venue["slug"]}/'])
 
-    def test_prices_preserve_all_original_terms_even_with_numeric_price(self):
+    def test_prices_keep_confirmed_terms_and_withhold_operator_profile_rates(self):
         for v in self.venues:
             for key, value in v['facts']:
                 if B.is_price_context(key) and value.strip() and value != B.PENDING:
-                    self.assertIn(B.E(B.display_value(v, key, value)), B.price_html(v, self.today), v['slug'])
+                    claim = B.resolve_publication(v, key, value, self.today)
+                    if claim:
+                        self.assertIn(B.E(claim.value), B.price_html(v, self.today), v['slug'])
             if v['price']:
                 self.assertIn(B.E(v['price']), B.price_html(v, self.today))
                 if v['price_caveat']:
@@ -152,9 +154,9 @@ class Explorer(unittest.TestCase):
         repo = self.by_slug['solo-sauna-repo-noryangjin']
         terms = next(value for key, value in repo['facts'] if key == 'Price')
         page = self.site.pages['/finder/solo-sauna-repo-noryangjin/']
-        self.assertIn(B.E(terms), page)
-        self.assertIn('60 min from ₩45,000', page)
-        self.assertIn('Family room, 2 people', page)
+        self.assertNotIn(B.E(terms), page)
+        self.assertNotIn('₩45,000', page)
+        self.assertIn('<th>Price</th><td>Not confirmed yet</td>', page)
         # List cards are headline-only (PR #62): full terms live on the venue page.
         for output in (B.venue_card(repo, self.today), B.venue_contents(repo, self.today)):
             self.assertNotIn('class="price-short"', output)
@@ -187,14 +189,10 @@ class Explorer(unittest.TestCase):
         self.assertIn(B.E("Children 12 and under can't enter, for safety."), self.site.pages['/finder/grand-josun-busan/'])
         sisu = self.by_slug['sisu-house']
         for key, value in sisu['facts']:
-            if 'reply' in value:
+            if key in ('Booking', 'Capacity'):
                 self.assertIn(B.E(value), B.price_html(sisu, self.today) + B.venue_facts(sisu, self.today))
-        note = B.fact_provenance(sisu, B.FOREIGNER[sisu['slug']]['full_price'], self.today)
-        self.assertIn('Venue reply', note)
-        self.assertIn('2026-10-18', note)
-        self.assertNotIn('href=', note)
 
-    def test_zest_split_and_hannam_reply_stay_verbatim_with_scoped_provenance(self):
+    def test_zest_weekday_hours_survive_and_unverified_sunday_claims_stay_pending(self):
         zest = self.by_slug['crossfit-zest']
         page = self.site.pages['/finder/crossfit-zest/']
         main_hours = next(value for key, value in zest['facts'] if key == 'Hours (main box)')
@@ -203,13 +201,12 @@ class Explorer(unittest.TestCase):
         official = B.fact_provenance(zest, remainder, self.today)
         self.assertIn(f'href="{B.E(zest["source"])}"', official)
         self.assertEqual(page.count(B.E(remainder) + official), 2)
-        self.assertEqual(page.count(B.E(clause) + '<small class="fact-source">Not confirmed</small>'), 2)
+        self.assertNotIn(B.E(clause), page)
         hannam = self.by_slug['crossfit-hannam']
         reply = next(value for key, value in hannam['facts'] if key == 'Sunday')
-        note = B.fact_provenance(hannam, reply, self.today)
-        self.assertIn('Venue reply', note)
-        self.assertNotIn('href=', note)
-        self.assertEqual(self.site.pages['/finder/crossfit-hannam/'].count(B.E(reply) + note), 2)
+        hannam_page = self.site.pages['/finder/crossfit-hannam/']
+        self.assertNotIn(B.E(reply), hannam_page)
+        self.assertIn('<th>Sunday</th><td>Not confirmed yet</td>', hannam_page)
 
     def test_pending_reply_is_unlinked_and_confirmed_booking_keeps_official_provenance(self):
         grand = self.by_slug['grand-hyatt-seoul']
@@ -238,12 +235,9 @@ class Explorer(unittest.TestCase):
         v = self.by_slug['paradise-hotel-busan']
         value = next(value for key, value in v['facts'] if key == 'Closed')
         self.assertIn('October: 10/28 (official page and hotel reply)', value)
-        note = B.fact_provenance(v, value, self.today)
-        self.assertNotIn('Venue reply', note)
-        self.assertNotIn('10/28', note)
-        self.assertIn(f'Checked {B.dot(v["last_verified"])}', note)
-        self.assertIn(f'href="{B.E(v["source"])}"', note)
-        self.assertIn(B.E(value) + note, self.site.pages[f'/finder/{v["slug"]}/'])
+        detail = self.site.pages[f'/finder/{v["slug"]}/']
+        self.assertNotIn(B.E(value), detail)
+        self.assertIn('<th>Closed</th><td>Not confirmed yet</td>', detail)
 
     def test_dash_reply_provenance_for_paradise_and_sisu_facts(self):
         for slug, checked, keys in (
@@ -256,12 +250,18 @@ class Explorer(unittest.TestCase):
             for key, value in facts:
                 with self.subTest(venue=slug, fact=key):
                     self.assertIn(f'— venue reply, {checked}', value)
-                    note = B.fact_provenance(v, value, self.today)
-                    self.assertIn(f'Venue reply · {checked} ·', note)
-                    self.assertNotIn('Official source', note)
-                    self.assertNotIn('href=', note)
-                    for output in outputs:
-                        self.assertIn(B.E(value) + note, output)
+                    if key in ('Booking', 'Capacity'):
+                        note = B.fact_provenance(v, value, self.today)
+                        self.assertIn(f'Venue reply · {checked} ·', note)
+                        self.assertNotIn('href=', note)
+                        for output in outputs:
+                            self.assertIn(B.E(value) + note, output)
+                    else:
+                        for output in outputs:
+                            self.assertIn(f'<th>{key}</th><td>Not confirmed yet</td>', output)
+                            self.assertNotIn(B.E(value), output)
+                            for amount in re.findall(r'₩[\d,]+', value):
+                                self.assertNotIn(amount, output)
 
     def test_reply_dates_are_scoped_to_explicit_citations(self):
         v = self.by_slug['paradise-hotel-busan']
@@ -302,7 +302,8 @@ class Explorer(unittest.TestCase):
         for key, value in v['facts']:
             if key in ('Who can use', 'Non-guests'):
                 self.assertIn((key, value), rows)
-                self.assertIn(B.E(value), B.venue_facts(v, self.today))
+                self.assertIn(B.E(value) if key == 'Who can use' else 'Non-guests:</strong> Not confirmed yet',
+                              B.venue_facts(v, self.today))
         self.assertNotIn('No. Hotel guests only.', B.venue_contents(v, self.today))
 
     def test_sauna_package_fields_reach_glance(self):
@@ -319,10 +320,13 @@ class Explorer(unittest.TestCase):
                     value = value if B._is_confirmed(value) else B.UNKNOWN
                     group = 'Hours & Closed' if key in ('last_entry', 'closures') else 'Visitor / Tattoo rules' if key in ('scrub_fee', 'age_tattoo_attire') else 'Access / Booking'
                     self.assertIn((label, value), groups[group])
+                    pending = {
+                        'sisu-house': {'full_price', 'last_entry', 'closures'},
+                        'solo-sauna-repo-noryangjin': {'full_price', 'last_entry', 'closures'},
+                    }
+                    rendered = B.UNKNOWN if key in pending.get(v['slug'], set()) else value
                     for output in outputs:
-                        self.assertIn(f'<strong>{B.E(label)}:</strong> {B.E(value)}', output)
-                        if B._is_confirmed(B.FOREIGNER[v['slug']][key]):
-                            self.assertIn(B.fact_provenance(v, value, self.today), output)
+                        self.assertIn(f'<strong>{B.E(label)}:</strong> {B.E(rendered)}', output)
 
     def test_closed_days_expire(self):
         import datetime as _dt
@@ -362,8 +366,12 @@ class Explorer(unittest.TestCase):
             self.assertIn('Foreigner &amp; visitor access checklist', checklist)
             self.assertEqual(checklist.count('<tr>'), len(keys))
             for key, label in keys:
-                cell = f'<td>{B.E(values[key])}{B.fact_provenance(v, values[key], self.today)}</td>' if B._is_confirmed(values.get(key, '')) else '<td class="unk">Not confirmed</td>'
-                self.assertIn(f'<tr><th>{label}</th>{cell}</tr>', checklist)
+                value = values.get(key, '')
+                if not B._is_confirmed(value):
+                    self.assertIn(f'<tr><th>{B.E(label)}</th><td class="unk">Not confirmed</td></tr>', checklist)
+                elif not B.price_or_schedule(key, value):
+                    cell = f'<td>{B.E(value)}{B.fact_provenance(v, value, self.today)}</td>'
+                    self.assertIn(f'<tr><th>{B.E(label)}</th>{cell}</tr>', checklist)
 
     def test_visitor_guide_tables_account_for_each_candidate(self):
         for slug, kind, headers in (

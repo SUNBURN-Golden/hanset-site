@@ -199,19 +199,31 @@ def test_venue_cards_detail_groups_and_checklists(inventory, age):
         assert_evidence(card, B.dot(checked), age, 'https://example.org/venue')
         assert 'card-evidence' in card
         assert card.index('card-evidence') > card.index('</p>', card.index('card-meta'))
-        assert '₩24,000' in card and 'Dry sauna' in card
+        assert ('₩24,000' in card) == (age >= 0)
+        assert 'Dry sauna' in card
+        if age < 0:
+            assert 'price-short' not in card
     detail = pages['/finder/freshness-sauna/']
     assert_evidence(B.v_badges(v, TODAY), 'Sauna', age, 'badge')
     assert ('Last checked over 90 days ago' in detail) == (age > 90)
-    for label in ('Price', 'Hours', 'Facilities', 'Tattoos', 'Drop-in for visitors'):
+    for label in ('Facilities', 'Tattoos', 'Drop-in for visitors'):
         assert_evidence(row(detail, f'<th>{label}</th>'), B.dot(checked), age, 'https://example.org/venue')
-    for markup in (B.price_html(v, TODAY), B.venue_facts(v, TODAY), B.fchk(v, TODAY),
-                   matching(detail, r'<li>.*?</li>', 'Bring swimwear.')):
+    for label in ('Price', 'Hours'):
+        markup = row(detail, f'<th>{label}</th>')
+        if age < 0:
+            assert f'<td>{B.UNKNOWN}</td>' in markup and 'Checked' not in markup
+        else:
+            assert_evidence(markup, B.dot(checked), age, 'https://example.org/venue')
+    for markup in (B.venue_facts(v, TODAY), B.fchk(v, TODAY), matching(detail, r'<li>.*?</li>', 'Bring swimwear.')):
         assert_evidence(markup, B.dot(checked), age, 'https://example.org/venue')
+    assert ('₩24,000' in B.price_html(v, TODAY)) == (age >= 0)
     glance = detail.split('class="glance-grid"', 1)[1].split('<h2>Source notes', 1)[0]
     for label in ('Adult ₩24,000', 'Daily 06:00–22:00', 'Dry sauna and cold bath'):
-        fact = matching(glance, r'<span class="fact-line">.*?</small></span>', label)
-        assert_evidence(fact, B.dot(checked), age, 'https://example.org/venue')
+        if age < 0 and label != 'Dry sauna and cold bath':
+            assert label not in glance
+        else:
+            fact = matching(glance, r'<span class="fact-line">.*?</small></span>', label)
+            assert_evidence(fact, B.dot(checked), age, 'https://example.org/venue')
     assert inventory == before
 
 
@@ -251,12 +263,37 @@ def test_closure_evidence_is_independent_in_detail_guide_and_month(inventory, mo
     pages = render(inventory)
     detail_row = row(pages['/finder/freshness-sauna/'], '<th>Closed on</th>')
     guide = pages['/guides/closed-days-korea/']
+    if age < 0:
+        assert 'Check before you go' in detail_row and 'fact-source' not in detail_row
+        assert 'First Monday' not in guide and 'closed-month' not in guide
+        return
     guide_row = row(guide, '/finder/freshness-sauna/')
     month_entry = matching(guide, r'<span class="closure-entry">.*?</span>', v['title'])
     for markup in (detail_row, guide_row, month_entry):
         assert_evidence(markup, B.dot(checked), age, closure['url'])
         assert closure['source'] in markup
     assert '2032.01.05' not in month_entry  # occurrence is not a check date
+
+
+def test_guide_and_checklist_do_not_upgrade_uncited_reply_restated_as_drop_in(inventory):
+    v = inventory[0][1]
+    v['facts'] += [('Drop-in price', 'Visitor ₩19,000 (venue reply 2031-12-31)')]
+    B.FOREIGNER[v['slug']]['dropin'] = 'Yes, ₩19,000.'
+    pages = render(inventory)
+    guide = guide_table(pages, DROP_IN_GUIDE, 'Drop-in')
+    assert '₩19,000' not in guide and '<tbody></tbody>' in guide
+    assert_pending(guide, 1)
+    assert '<th>Drop-in for visitors</th><td class="unk">Not confirmed</td>' in B.fchk(v, TODAY)
+    assert '₩19,000' not in pages[f'/finder/{v["slug"]}/']
+
+
+def test_tips_and_unconfirmed_notes_omit_unsupported_values(inventory):
+    v = inventory[0][0]
+    v['tips'] = ['Last entry is 20:30 (hotel reply 2031-12-31).', 'Bring swimwear.']
+    v['unverified'] = ['Scrub fee ₩15,000 (third-party guide).', 'Ask about walk-ins.']
+    page = render(inventory)[f'/finder/{v["slug"]}/']
+    assert '20:30' not in page and '₩15,000' not in page
+    assert 'Bring swimwear.' in page and 'Ask about walk-ins.' in page
 
 
 @pytest.mark.parametrize('age', AGES)
