@@ -332,8 +332,14 @@ class Worker:
                        (issue['records'][0], json.dumps({'conflict_id': conflict_id, 'selected_evidence_id': evidence_id, 'reason': reason}), self.clock()))
             self._refresh(db, self.clock())
 
+    @staticmethod
+    def _require_record(db, record_id):
+        if db.execute('SELECT 1 FROM records WHERE id=?', (record_id,)).fetchone() is None:
+            raise Rejected('unknown_record')
+
     def verify(self, record_id, evidence_ids):
         with self.store.transaction() as db:
+            self._require_record(db, record_id)
             now = self.clock()
             self._refresh(db, now)
             r = json.loads(db.execute('SELECT data FROM records WHERE id=?', (record_id,)).fetchone()[0])
@@ -347,6 +353,7 @@ class Worker:
 
     def publish_pending(self, record_id):
         with self.store.transaction() as db:
+            self._require_record(db, record_id)
             blockers = self._refresh(db, self.clock())
             r = json.loads(db.execute('SELECT data FROM records WHERE id=?', (record_id,)).fetchone()[0])
             if r['pipeline_stage'] == STAGES[3]:
