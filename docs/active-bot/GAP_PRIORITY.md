@@ -4,7 +4,7 @@ The existing 04:15 KST web run prepares a frozen daily ordering and an operator
 IG read list. No new cron is needed. This collector never publishes, requests
 Instagram, discovers accounts there, or opens `collector.sqlite3` for planning.
 It does not change the static generator, Linux collector/clipper, site facts,
-or operator-summary provenance. Official sources only; Naver remains denied.
+or operator-summary provenance. Priority scoring uses official evidence.
 
 ```sh
 python -m hanset_active collect plan-gaps
@@ -26,14 +26,14 @@ priority field still unresolved by `project_needs`. Fresh verified evidence can
 therefore suppress stale gap rows. No lifecycle rows or identities are edited.
 
 Derivation uses the venue's HTTPS website (preserving its path), then HTTPS
-roots of its recorded domains and uniquely tied frozen seed domains, at most
-three canonical URLs per venue. HTTP websites are never upgraded or fetched;
-a separately recorded usable domain may still supply its HTTPS root. URLs
-pass credential/PII, private-host, official-domain, portal, Naver, Instagram and
-RUNPORT checks. Seed ownership requires the current `seed_freeze` checkpoint,
-a seed name/domain row in that set, and an exact normalized venue name or alias
-matching exactly one venue. The `frozen_seed` marker is not an ownership join.
-Derived targets never enable Tavily or discovery.
+roots of its recorded domains. The current `seed_freeze` checkpoint also
+supplies public HTTPS pages regardless of gaps. An exact normalized venue name
+or alias matching exactly one venue ties the seed to that identity. An
+unmatched seed keeps its own stable identity. The shared-platform domain alone
+cannot tie identities. HTTP seed websites are skipped, and a domain-only seed
+may supply its approved HTTPS root. Seed URLs pass credential, PII,
+private-host and Instagram guards. Public portal, OTA, blog and declined-brand
+pages enter fetch scope only. Derived targets do not enable Tavily.
 
 Web identity resolves by exact `(venue_id, venue_key)` first, then the union of
 exact normalized names/aliases and venue website/domain matches. Only a unique
@@ -48,8 +48,9 @@ has a narrow SHA-256 ID exception to generic PII redaction; configured secrets
 inside those IDs remain forbidden.
 
 Manual targets take precedence per canonical identity and canonical URL.
-Their explicit URLs, domains and Tavily spec are preserved; appended derived
-URLs must fit within their existing domain authorization and three-URL limit.
+Their explicit URLs, domains and Tavily spec are preserved. Additional
+venue-owned gap URLs must fit the manual domain authorization. Third-party
+seed URLs can augment fetch scope without extending official authorization.
 Well-formed identity pairs from disabled rows suppress that venue's derivation,
 using the same conservative identity resolution. Other malformed disabled data
 is ignored as before. Enabled manual rows win over disabled selectors.
@@ -68,7 +69,7 @@ evidence fingerprint reads share this transaction. Effective targets and rows
 are materialized before closing it; planning and local execution ordering reuse
 that snapshot, with no transaction held across ranking or fetch I/O. Website,
 domains, aliases and tied seed inputs enter the snapshot digest. Authorization
-fingerprints cover only identity, URLs and domains, never ranking or gaps.
+fingerprints cover identity, official URLs and official domains.
 No migrations or lifecycle writes run.
 
 Exactly six profile field IDs are scored: `hours`, `price_day_pass`,
@@ -246,8 +247,8 @@ browser automation are added.
 
 ## Watchlist proposals and ops application
 
-Only pages that already passed every normal guarded fetch and `classify_page`
-check are inspected. Requested and resolved URLs must share an approved
+Only exact-authorized pages that passed the guarded fetch and `classify_page`
+checks are inspected. Requested and resolved URLs must share an approved
 official domain. Full sanitized HTML anchors include footer links, with no
 additional request. Query/fragment-bearing evidence page URLs are omitted.
 

@@ -164,11 +164,21 @@ def test_symlink_outputs_rejected(store, tmp_path, component):
     'https://' + 'user:password' + '@' + 'venue.example/hours', 'https://venue.example/hours?token=sample',
     'https://venue.example/[token]', 'https://venue.example/%5Bredacted%5D',
     'https://venue.example/hours?password=sample',
-    'https://localhost/hours', 'https://naver.com/hours', 'https://instagram.com/venue/',
+    'https://localhost/hours', 'https://instagram.com/venue/',
 ])
 def test_unsafe_urls_are_rejected_instead_of_sanitized(url):
     with pytest.raises(ValueError):
         canonical_requested_url(url)
+
+
+def test_public_collection_url_is_ineligible_for_official_feed(store):
+    db, _ = store
+    observe(db)
+    observe(db, value=FIXTURES['hours']['after'], day=2)
+    event = dict(events(db)[0])
+    url = 'https://naver.com/seed-spa-a'
+    assert canonical_requested_url(url) == url and feeds._safe_event(event)
+    assert not feeds._safe_event({**event, 'requested_url': url, 'final_url': url})
 
 
 def test_unsafe_free_text_is_held_and_secrets_never_exported(store, monkeypatch):

@@ -1,4 +1,5 @@
 import sqlite3
+from pathlib import Path
 import pytest
 from hanset_active.db import connect, migrate, deterministic_id, consume_budget
 from hanset_active.util.timeutil import FakeClock
@@ -8,10 +9,29 @@ def test_schema_and_idempotent_migration(tmp_path):
     migrate(db); migrate(db)
     assert db.execute('PRAGMA journal_mode').fetchone()[0]=='wal'
     assert db.execute('PRAGMA foreign_keys').fetchone()[0]==1
-    assert db.execute('SELECT count(*) FROM schema_version').fetchone()[0]==1
+    assert db.execute('SELECT count(*) FROM schema_version').fetchone()[0]==2
     tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert set('raw_documents fetch_log extractions labels observations venues venue_aliases venue_links venue_fields field_changes confirmations seed_venues seed_domains sources source_trials tasks gaps gap_attempts review_queue failures runs run_checkpoints run_lease structure_baselines structure_alerts budgets_daily request_log robots_cache provider_state taxonomy_candidates'.split())<=tables
     db.close()
+
+
+def test_seed_url_migration_preserves_existing_freeze(tmp_path):
+    path = tmp_path / 'previous.db'
+    migrations = Path(__file__).resolve().parents[2] / 'hanset_active' / 'migrations'
+    original = ('seed-id', 'freeze-id', 'Seed Spa A', 'seedspaa', 'example.test',
+                'https://spa.example.test/hours', '2026-11-20T10:00:00+09:00')
+    db = sqlite3.connect(path)
+    with db:
+        db.executescript((migrations / '0001_init.sql').read_text())
+        db.execute('CREATE TABLE schema_version(version TEXT PRIMARY KEY)')
+        db.execute('INSERT INTO schema_version VALUES (?)', ('0001_init.sql',))
+        db.execute('INSERT INTO seed_venues VALUES (?,?,?,?,?,?,?)', original)
+        db.execute("INSERT INTO run_checkpoints(checkpoint_id,cursor) VALUES ('seed_freeze',?)", (original[1],))
+    db.close()
+    migrated = connect(path)
+    assert tuple(migrated.execute('SELECT * FROM seed_venues').fetchone()) == original
+    assert migrated.execute("SELECT cursor FROM run_checkpoints WHERE checkpoint_id='seed_freeze'").fetchone()[0] == original[1]
+    migrated.close()
 
 def test_uniqueness_and_foreign_keys():
     db=connect(':memory:')

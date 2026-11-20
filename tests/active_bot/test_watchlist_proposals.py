@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 from hanset_active.collect.service import run_web
+from hanset_active.collect.targets import source_authorization
 from hanset_active.collect.watchlist_proposals import (
     PROPOSAL_KEYS, classify, inspect_page, write_proposals,
 )
@@ -21,6 +22,7 @@ def page(target, links, *, final=None, disposition='ready', outcome='ok'):
     html += '</footer><script>do not persist scripts</script></html>'
     fetched = SimpleNamespace(url=final or target['urls'][0], outcome=outcome, content=html.encode())
     job = {**target, 'url': target['urls'][0]}
+    job['source_authorization'] = source_authorization(target, job['url'], fetched.url)
     return inspect_page(job, fetched, observed_at=STAMP, disposition=disposition)
 
 

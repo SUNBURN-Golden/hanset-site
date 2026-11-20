@@ -195,7 +195,7 @@ def test_primary_402_extraction_reports_skip_without_network(tmp_path, monkeypat
     } for n in range(6)]}))
     # Six bounded pages exceed one extraction batch; fetches remain entirely fake.
     page = f'<main>{HOURS} ' + 'Official sauna guide. ' * 200 + SENTINEL + '</main>'
-    def fetch(self, url):
+    def fetch(self, url, **kwargs):
         return FetchResult(url=url, outcome='ok', status=200, content=page.encode(),
                            content_type='text/html', content_hash='fixture-hash')
     monkeypatch.setattr('hanset_active.collect.service.Fetcher.fetch', fetch)
@@ -503,7 +503,7 @@ def test_derived_targets_keep_existing_page_run_and_day_caps(tmp_path, monkeypat
     for n in range(25):
         eligible(active, n, website=f'https://venue{n}.example/hours')
     fetched = []
-    def blocked(self, url):
+    def blocked(self, url, **kwargs):
         fetched.append(url)
         return FetchResult(url=url, outcome='blocked', status=403)
     monkeypatch.setattr('hanset_active.collect.service.Fetcher.fetch', blocked)

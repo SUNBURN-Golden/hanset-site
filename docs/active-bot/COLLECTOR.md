@@ -88,7 +88,7 @@ again. A Qwen 402 does not activate the primary skip.
   never controls routing on a later run. Successful fallback retains its ordinary
   success reason; failed fallback retains `model_insufficient_balance`.
 - Model calls (DeepSeek and Qwen) go direct with `trust_env=False` and never
-  use the SOCKS web proxy. Web-fetch proxy rules are unchanged.
+  use the SOCKS web proxy.
 
 The 2026-11-15 live probe confirmed that disabling Qwen thinking produces JSON
 content within the output cap. Adding `response_format` produced malformed
@@ -98,16 +98,19 @@ Web fetches use the existing active-bot fetcher: honest User-Agent, robots,
 denied hosts, redirect checks, and the active daily body/aux caps. This
 collector adds its own ceiling of 10 pages per run and 20 pages per KST day.
 It holds the active `run.lock` only during fetches. `active_busy` means the
-active collector already held that lock; nothing was fetched. Official URLs
-must be HTTPS except loopback fixtures in tests. A redirect that leaves the
-approved domain is `off_domain` and is not sent to the model. Asset and policy
-URLs are not sent either.
+active collector already held that lock. Web targets require HTTPS except for
+loopback fixtures. The fixed User-Agent includes `hanset@soulbound.co.kr` and
+requests are serialized per registrable domain. Each redirect must pass the
+URL guards and stay within the starting registrable domain before the collector
+contacts the destination. Instagram is outside web collection. Asset and policy
+pages do not reach the model.
 
 ### Information subpages and URL cooldowns
 
 Web runs select up to two information links per venue identity per invocation,
 shared across its initial URLs. Links are read from raw HTML, including navigation,
-only when the fetch outcome is `ok` and classification is `ready` or `empty_body`.
+only when an explicitly authorized first-party page returns `ok` and its
+classification is `ready` or `empty_body`.
 Keyword scores add together: price/hours and `sauna`, `사우나`, `찜질`, `찜질방`,
 `jjimjilbang` weigh 3; facilities/spa and `이용가이드`, `guide`, `floor-guide`,
 `층별` weigh 2; general information weighs 1. Ties sort by canonical URL.
@@ -124,9 +127,8 @@ original encoded path and trailing slash for the actual request.
 Fresh children run immediately after their parent, ahead of new roots. All
 children use the same fetcher, proxy, robots rules, locks and budgets. Children
 never recurse. A child under a block hold is noted as skipped without consuming
-one of the two subpage slots. A redirect landing URL that fails the safe-URL
-check, such as a homepage with `?sid=`, remains eligible for classification
-and extraction. It supplies no subpage links.
+one of the two subpage slots. Redirects with unsafe URL identities, including
+session parameters, are refused before the destination is contacted.
 Every non-`cap_reached` fetch attempt counts toward the existing 10-page run and
 20-page daily caps, including robots refusals and collateral domain stops. Link
 selection precedes extraction and receipt deduplication, so unchanged or
@@ -138,7 +140,6 @@ initial registrable domain. External redirects and downgrades are rejected
 before destination robots or body requests. Every permitted hop still passes
 URL denial checks and robots evaluation against its preserved path; a robots
 denial never requests the destination body. Automatic redirects stay disabled.
-Root/manual jobs and other callers retain the default fetch behavior.
 A shell the fetcher returns as `empty_body` without
 HTML cannot yield links; the classifier's `empty_body` fallback can when the
 fetcher returned `ok` with HTML.
@@ -149,9 +150,8 @@ receipts and claims under their own requested URLs, without automatic change
 observations or altered target fingerprints. An already queued explicit URL
 promoted into the child position retains its original URL, exact-URL
 authorization, and default fetch behavior, even at depth one.
-Ready children also pass through web watchlist inspection and may produce
-watchlist proposals under their own URL and the target's venue identity; this
-does not activate Instagram ingestion or update the live watchlist.
+Watchlist proposals require exact-URL authorization and a final URL on the
+same approved domain. A proposal is evidence for manual review.
 
 The external collector DB adds `web_target_blocks` without modifying historical
 rows. It stores only a SHA-256 hash of the safely canonicalized requested URL,
@@ -184,11 +184,15 @@ echoed into status. Other jobs in the same run proceed normally. If every job is
 unsafe, the run stops with reason `unsafe_url_skipped` before credential checks
 or proxy preflight.
 
-Block holds start with new genuine evaluations. The existing fetcher folds
-robots-unavailable (including transport failures and 5xx responses) into
-`robots_disallowed`, so these receive the same 14-day hold.
+Until the Korean-news robots helper from COLLX-01c is available, web collection
+uses the existing robots checks and spacing on all hosts. A robots refusal on
+a shared platform such as Naver can stop other targets on that registrable
+domain for the current run. Only an evaluated URL gets the 14-day hold.
+Robots transport errors and 5xx responses normally count as `robots_disallowed`.
+A confirmed proxy outage is recorded as a fetch error and leaves the robots
+cache and block holds alone.
 
-Tavily is optional. A target with no URL and a `tavily` venue/field pair may
+Tavily is optional. A target with no explicit official URL and a `tavily` venue/field pair may
 call the existing `discover_known_venue` hook, which already caps basic search
 at 30 requests per KST day. Only a lead whose domain is in that target's
 `official_domains` can be fetched, and at most one. Other leads are counted
@@ -277,11 +281,20 @@ Web targets:
 }
 ```
 
-Default web runs also derive venue-owned URLs from open/conflict priority gaps
-in a read-only active DB snapshot. Manual targets take precedence; disabled
-identity selectors suppress derivation, and invalid files block derivation.
-Missing/empty manual files permit derivation. Effective targets cap at 100;
-existing 10-page run / 20-page daily limits and all fetch guards are unchanged.
+Default web runs derive venue-owned URLs from open/conflict priority gaps and
+public URLs from the active seed freeze in a read-only DB snapshot. The next
+operator-initiated `seed --refreeze` can admit Naver and declined brands such as
+RUNPORT. Existing freeze rows stay in place. Manual targets take precedence,
+disabled identity selectors suppress derivation, and invalid files block
+derivation. Missing or empty manual files permit derivation.
+
+Each target has a fetch list (`urls`), a redirect scope (`scope_domains`), and
+an official subset (`official_urls` and `domains`). Public blog, portal, map,
+OTA and declined-brand seed pages can be fetched. They grant no official
+authority and supply no follow-up links. A canonical URL shared by a seed and
+a manual target is attributed to the manual target. Seed collection does not
+create venue listings. The 100-target and 10-page run / 20-page daily limits
+still apply. A plan that exceeds its 512 KB file bound fails as `plan_invalid`.
 See [GAP_PRIORITY.md](GAP_PRIORITY.md) for ownership/seed ties, identity
 resolution, count-only diagnostics, snapshot reuse and DB failure semantics.
 Planning/execution can fall back to manual targets on DB failure; change
@@ -339,15 +352,20 @@ python3 -m hanset_active collect status
 
 ## Optional web proxy recovery
 
-Only official-web fetches use `HANSET_WEB_PROXY`, a loopback SOCKS5 URL.
+Only collect-web fetches use `HANSET_WEB_PROXY`, a loopback SOCKS5 URL.
 When configured, preflight runs under the collector process lock, after
 planning/search and before the active fetch lock and `Fetcher` construction.
-Every retry probes the same configured proxy. Unavailable probes stop the run
-with `state=stopped`, `reason=proxy_unavailable`, `success=false`, and
-`collected=false`; a final wrong exit retains `proxy_exit_mismatch`. Invalid
-proxy configuration stops as `proxy_invalid` without invoking recovery.
-There is no direct fallback. DeepSeek, Qwen, Tavily and Instagram paths keep
-their existing routing.
+Every retry probes the same configured proxy. If the final probe reports
+`proxy_unavailable`, the run fetches directly. A wrong exit IP stops the run
+with `proxy_exit_mismatch`. Invalid proxy configuration stops it with
+`proxy_invalid`.
+
+A mid-run connection error switches subsequent jobs to direct egress only if
+the proxy is unreachable. The failed URL consumes its attempt and receives an
+`error` observation. It can be retried on a subsequent run. Domain stops,
+budgets, and robots cache entries carry over to direct egress. Site refusals
+leave routing alone. DeepSeek, Qwen, Tavily and Instagram use their existing
+routing.
 
 After an initial failed probe, an unset or blank
 `HANSET_WEB_PROXY_HEAL_CMD` causes two additional probes, after successive
@@ -361,8 +379,8 @@ shell, with a 30-second timeout and stdin/stdout/stderr discarded. Shell
 operators, variable expansion and pipelines are not interpreted. Configure
 an executable or an interpreter plus script arguments in the external runtime
 environment. Parsing errors, launch failures, timeout and nonzero exit remain
-quiet and still lead to the bounded probes. Only a successful probe permits
-fetching; a zero hook exit alone does not. Command arguments, environment
+quiet and still lead to the bounded probes. A successful probe restores proxy
+egress. Command arguments, environment
 values, subprocess output and exception text are never included in diagnostics.
 
 The optional example is `bash scripts/proxy_heal_example.sh 1080` when invoked
@@ -396,6 +414,9 @@ The values survive later successful, stopped, deferred and partial results.
 These diagnostics never enter `checkpoint.json`. Older status files remain
 readable, and Instagram results do not acquire this field. Public status only
 accepts the exact four fields with their declared types.
+
+Direct fallback adds `web_egress` with `mode: direct`, `reason: proxy_unavailable`
+and `phase: preflight` or `mid_run` to the result and public status.
 
 Preflight preserves its existing detection limit: without
 `HANSET_WEB_PROXY_EXIT_IP`, it checks only the TCP listener. Detecting a
@@ -495,7 +516,10 @@ HANSET_IG_DIR=/workspace/hanset-data/ig python3 -m hanset_active collect report
 ```
 
 The explicit `collect promote --policy /outside-checkout/policy.json` review
-gate can create internal fact candidates from independent official agreement.
+gate can create internal fact candidates from two agreeing independent source
+approvals. `review_only: true` admits third-party web evidence to this gate.
+Third-party claims and candidates supported entirely by third-party claims
+show `미확인`. Public facts require official-source confirmation.
 `--dry-run` is read-only; `collect report --policy ...` reassesses without
 persisting. Both retain conflicts and never publish. See
 [SOURCE_CLAIM_PROMOTION.md](SOURCE_CLAIM_PROMOTION.md) for source approvals,

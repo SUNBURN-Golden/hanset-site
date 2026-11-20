@@ -1,23 +1,23 @@
 # Source claims to internal fact candidates
 
 `hanset_active.collect` can assess stored evidence without collecting anything.
-Two independent approved official sources agreeing on a normalized value create
-an internal `fact_candidate`, never a published fact. Human/ops review and any
-subsequent site work remain separate. Every result declares
-`rights: internal_review_only` and `auto_publish_to_site: false`. There is no
-approval-to-publication command or automatic collection hook.
+Two independent approved sources agreeing on a normalized value create an
+internal `fact_candidate`. Third-party claims and candidates whose eligible
+support is entirely third-party show `미확인`. Every result declares
+`rights: internal_review_only` and `auto_publish_to_site: false`. Publication
+requires official-source confirmation.
 
 This feature uses only the external collector SQLite database under
 `HANSET_IG_DIR`. It does not use `crawler/`, the Chrome clipper, active-bot or
 twin data, site files, CSVs, or queues. It performs no network, model, browser,
-caption or photo work, needs no credentials, and installs no cron. Existing
-robots and denied-source restrictions remain in force for collection.
+caption or photo work, needs no credentials, and installs no cron.
 
 ## Local reviewed policy
 
 Store a JSON policy outside the checkout. Limit: 512,000 bytes and 1,000
 approvals. Unknown keys, malformed records, future approval dates, private
-hosts, HTTP web sources, and denied/excluded sources fail closed. The exact
+hosts, HTTP web sources, and Instagram URLs represented as web sources fail
+closed. The exact
 URL, venue identity, reviewed domain boundary, origin group and approval date
 must all be present. No trust is inferred from `source_type`.
 
@@ -52,9 +52,12 @@ Synthetic policy example; replace the sources only after operator review:
 }
 ```
 
-Approval means the operator checked that the exact document is official for
-that `(venue_id, venue_key)`, that the registrable boundary is correct, and
-that the origin group identifies the original document. Assign the **same
+Standard web approval means the operator checked that the exact document is
+official for that `(venue_id, venue_key)`. Set the optional `review_only`
+boolean to `true` for third-party web evidence such as a public blog or a
+declined brand's site. This field is available on web approvals only. For both
+classes the operator confirms the venue association, the registrable boundary
+and the original document's origin group. Assign the **same
 origin group** to mirror copies, translations, syndication and redirect
 aliases, including copies hosted on different domains. Different hashes or
 different short quotes do not establish independence. The program cannot
@@ -74,8 +77,7 @@ Instagram is the explicit local-intake exception to the HTTP denial rule;
 post/profile/reel URLs use the existing strict canonicalizer. `official_handle`
 is mandatory and must be operator-attested: existing claim rows do not retain
 the batch account handle, and post URLs cannot establish account ownership.
-No account lookup occurs. Instagram can contribute only alongside official
-non-Instagram web evidence. Instagram plus Instagram never qualifies.
+No account lookup occurs. An agreement pair must include a web source.
 
 ## Eligibility and comparison
 
@@ -84,7 +86,7 @@ exact policy approval and the channel's existing provenance tuple:
 
 | Channel | Origin / role / verbatim |
 | --- | --- |
-| Official web | `web_verbatim / page_span / 1` |
+| Web | `web_verbatim / page_span / 1` |
 | Instagram operator summary | `operator_summary / summary_span / 0` |
 | Legacy NULL provenance | Reportable, ineligible |
 

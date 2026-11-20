@@ -132,7 +132,7 @@ def test_promoted_explicit_job_keeps_authorization(tmp_path, monkeypatch, explic
     settings, path = setup_run(tmp_path, monkeypatch, [ROOT, ROOT + '/other', ROOT + explicit_path])
     calls, modes = [], []
 
-    def fetch(self, url, *, subpage=False):
+    def fetch(self, url, *, subpage=False, url_allowed=None):
         calls.append(url)
         modes.append(subpage)
         return FetchResult(url, 'ok', status=200, content=html(f'<a href="{anchor_path}">Price</a>'), content_type='text/html')
@@ -145,16 +145,14 @@ def test_promoted_explicit_job_keeps_authorization(tmp_path, monkeypatch, explic
     assert rows[1]['source_authorization']['source_identity'] == ROOT + '/price'
 
 
-@pytest.mark.parametrize('kind', ['blocked', 'excluded', 'policy', 'off_domain', 'asset'])
+@pytest.mark.parametrize('kind', ['blocked', 'policy', 'off_domain', 'asset'])
 def test_unguarded_pages_never_supply_children(tmp_path, monkeypatch, kind):
     settings, path = setup_run(tmp_path, monkeypatch)
     calls = []
 
-    def fetch(self, url):
+    def fetch(self, url, **kwargs):
         calls.append(url)
-        content = html('<a href="/price">Price</a>',
-                       {'blocked': 'security check required ' * 10,
-                        'excluded': 'runport ' * 20}.get(kind, TEXT))
+        content = html('<a href="/price">Price</a>', 'security check required ' * 10 if kind == 'blocked' else TEXT)
         if kind == 'policy':
             content = b'<title>Privacy policy</title>' + content
         return FetchResult('https://other.example' if kind == 'off_domain' else url,
@@ -202,7 +200,7 @@ def test_children_respect_caps(tmp_path, monkeypatch, limit):
         state.data['counts']['pages'] = 19
         state.save()
     else:
-        def capped(self, url, *, subpage=False):
+        def capped(self, url, *, subpage=False, url_allowed=None):
             calls.append(url)
             return FetchResult(url, 'ok', status=200, content=html('<a href="/price">Price</a>'), content_type='text/html') if url == ROOT else FetchResult(url, 'cap_reached')
         monkeypatch.setattr(service.Fetcher, 'fetch', capped)
@@ -370,24 +368,25 @@ def test_all_unsafe_leads_stop_before_credentials_and_fetch(tmp_path, monkeypatc
     assert result['rejections'] == {'unsafe_url_skipped': 1}
 
 
-def test_redirect_final_url_with_session_param_still_extracts(tmp_path, monkeypatch):
-    # The fetcher only canonicalizes redirect targets, so a ?sid= landing URL
-    # reaches selection and extraction; it must not abort the run mid-fetch.
+def test_redirect_with_session_param_skips_destination(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
     settings, path = setup_run(tmp_path, monkeypatch)
-    final = ROOT + '/main?sid=fixture'
     calls = []
 
-    def fetch(self, url):
+    def get(self, url, **kwargs):
         calls.append(url)
-        return FetchResult(url=final, outcome='ok', status=200,
-                           content=html('<a href="/price">Price</a>'), content_type='text/html')
+        if url == ROOT + '/robots.txt':
+            return SimpleNamespace(status_code=404, headers={}, iter_content=lambda size: (), close=lambda: None)
+        assert url == ROOT
+        return SimpleNamespace(status_code=302, headers={'Location': '/main?sid=fixture'},
+                               iter_content=lambda size: (), close=lambda: None)
 
-    monkeypatch.setattr(service.Fetcher, 'fetch', fetch)
+    monkeypatch.setattr('requests.sessions.Session.get', get)
     rows = capture_extraction(monkeypatch)
     result = service.run_web(settings, targets_path=path, clock=FakeClock(), testing=True)
-    assert result['success'] and result['reason'] != 'state_corrupt'
-    assert calls == [ROOT] and result['counts']['pages'] == 1
-    assert rows[0]['url'] == ROOT and rows[0]['final_url'] == final
+    assert result['success'] and result['pages'][-1] == {'url': ROOT, 'disposition': 'denied'}
+    assert calls == [ROOT + '/robots.txt', ROOT] and not rows
 
 
 def _defer_children(settings, clock, paths):
@@ -442,7 +441,7 @@ def test_deferred_explicit_child_promotion_preserves_tier_and_authorization(
     _defer_children(settings, clock, [anchor_path, '/hours'])
     calls, modes = [], []
 
-    def fetch(self, url, *, subpage=False):
+    def fetch(self, url, *, subpage=False, url_allowed=None):
         calls.append(url)
         modes.append(subpage)
         links = f'<a href="{anchor_path}">Price</a>' if url == ROOT else ''

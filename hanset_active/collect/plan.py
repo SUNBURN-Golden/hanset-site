@@ -57,8 +57,11 @@ def identity(row):
 
 
 def target_id(target):
-    return digest({'identity': identity(target), 'urls': target['urls'],
-                   'domains': sorted(target['domains']), 'tavily': target['tavily']})
+    fields = {'identity': identity(target), 'urls': target['urls'],
+              'domains': sorted(target['domains']), 'tavily': target['tavily']}
+    if target.get('official_urls', target['urls']) != target['urls']:
+        fields['official_urls'] = target['official_urls']
+    return digest(fields)
 
 
 def target_set_digest(targets):
@@ -462,7 +465,7 @@ def validate_plan(plan, day):
                     or not _ident(target) or not _hash(target['target_id']) or target['target_id'] in ids
                     or identity(target) not in identities or 'web' not in identities[identity(target)]['channels']
                     or type(target['occurrences']) is not int or not 1 <= target['occurrences'] <= 100
-                    or not isinstance(target['urls'], list) or len(target['urls']) > 3
+                    or not isinstance(target['urls'], list)
                     or not all(_text(url, 500) for url in target['urls'])):
                 return False
             ids.add(target['target_id'])
