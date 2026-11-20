@@ -1,13 +1,14 @@
 """손그림 스타일 SVG 헬퍼 (한셋 HANSET). 글자는 Gaegu Bold(OFL)를 윤곽선(path)으로 변환해 넣으므로
 SVG를 <img>·PNG·영상 어디에 써도 폰트 없이 똑같이 보입니다."""
 import random, math
+from pathlib import Path
 from fontTools.ttLib import TTFont
 from fontTools.pens.svgPathPen import SVGPathPen
 from fontTools.pens.transformPen import TransformPen
 
 INK = "#2e2a27"
 PAPER = "#f6efdc"
-FONT = TTFont("/workspace/fitness-hub/illustrations/_fonts/Gaegu-Bold.ttf")
+FONT = TTFont(Path(__file__).with_name("_fonts") / "Gaegu-Bold.ttf")
 GS = FONT.getGlyphSet(); CMAP = FONT.getBestCmap(); UPM = FONT["head"].unitsPerEm
 rnd = random.Random(7)
 _clip = [0]

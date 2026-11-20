@@ -51,6 +51,36 @@ rules and preview examples are documented in the [verified feeds runbook](../dat
 [`content/ads.json`](content/ads.json) must remain `{}`. The builder checks
 emitted text before reporting a successful release. [Leak validation](#emitted-output-leak-validation)
 
+### Price and schedule evidence
+
+The builder checks admission and service fees, operating hours, last entry,
+class times, and closures before publishing them. Dated citations must support
+the claim on an official source. Reply, mixed, third-party, and operator-profile
+citations stay pending. Uncited legacy fields can use the venue's check date
+when the venue has official-only verification and the field lacks conflicting
+provenance. An undated inline label that describes a legacy rate's scope, such
+as Paradise's parenthetical “official page” labels, uses that same fallback.
+
+Operations can supply a `price_hours_evidence` entry in `content/venues.json`
+for a single claim. Use the English fact label (for example, `Price` or
+`Hours`) or the visitor checklist field ID (for example, `full_price`,
+`last_entry`, or `closures`). The venue, field, and exact value form the
+scope of the entry. Split mixed or differently supported terms before adding
+evidence for them.
+
+| Field | Accepted value |
+| --- | --- |
+| `value` | Exact field text after CSV price substitution |
+| `source_kind` | `official_page` |
+| `source_url` | Public HTTP(S) URL supporting this value for the branch and service |
+| `checked_on` | Real `YYYY-MM-DD` date on or before the build's Seoul date |
+
+An unusable explicit citation or field entry leaves the claim pending.
+The evidence date controls the 90-day badge. The closed-days guide also
+accepts dated `Official page`, `Official closure notice`, `Official notice`,
+and `Official Instagram` records with public URLs. Temporary entries expire
+from the detail row and guide table. The month summary uses its calendar dates.
+
 ### Sunday evidence for Finder
 
 Operations may supply `sunday_evidence` on a published record in
@@ -75,10 +105,10 @@ text `Sundays and public holidays`, source label `Official page`, a qualifying
 public URL and check date, and no `until`.
 
 Legacy flags, class listings, and narrative hours carry no filter eligibility.
-Recognized legacy Sunday statements retain their wording and any explicit
-reply provenance. Missing, invalid, or conflicting evidence appears as pending
-in Finder. Migrate Sunday information embedded in other schedule wording to
-the structured field once operations can confirm it.
+Missing, invalid, or conflicting evidence appears as pending in Finder.
+Specific Sunday times require their own evidence. Migrate Sunday information
+embedded in other schedule wording to the structured field once operations
+can confirm it.
 
 ## Pages
 

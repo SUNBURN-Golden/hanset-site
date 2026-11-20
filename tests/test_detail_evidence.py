@@ -172,27 +172,26 @@ def test_warning_prose_survives_but_age_uses_evidence_date(venues):
     assert warning in B.fact_lines([('Facilities', warning)], v, today)
 
 
-@pytest.mark.parametrize('citation,checked_text', [
-    ('(venue reply 10/17)', '10/17'),
-    ('(hotel reply)', 'date not confirmed'),
-    ('— venue reply (inquiry sent 2026-10-18)', 'date not confirmed'),
-    ('(venue reply; inquiry sent 2026-10-18)', 'date not confirmed'),
-    ('(official page, checked 10/17)', '10/17'),
-    ('(official page, checked date pending)', 'date not confirmed'),
-    ('(venue reply 2026-01-01 or 2026-10-18)', '2026-01-01, 2026-10-18'),
-    ('(official page checked 2026-01-01; checked 2026-10-18)', '2026-01-01, 2026-10-18'),
-    ('(venue reply 2026-02-30)', '2026-02-30'),
+@pytest.mark.parametrize('citation', [
+    '(venue reply 10/17)',
+    '(hotel reply)',
+    '— venue reply (inquiry sent 2026-10-18)',
+    '(venue reply; inquiry sent 2026-10-18)',
+    '(official page, checked 10/17)',
+    '(official page, checked date pending)',
+    '— official page',
+    '(official page, checked 2026-02-30)',
+    '(venue reply 2026-01-01 or 2026-10-18)',
+    '(official page checked 2026-01-01; checked 2026-10-18)',
+    '(official page checked 2026-10-18; checked)',
+    '(official page checked 2026-10-18 or 2026-10-3)',
+    '(venue reply 2026-02-30)',
 ])
-def test_unknown_or_ambiguous_citation_dates_never_inherit_venue_age(venues, citation, checked_text):
+def test_unknown_or_ambiguous_citation_dates_never_inherit_venue_age(venues, citation):
     v = deepcopy(venues['orakai-cheonggyesan'])
     v['last_verified'] = dt.date(2020, 1, 1)
     value = 'Closed 2026-10-28 ' + citation
-    note = B.fact_provenance(v, value, dt.date(2026, 11, 3))
-    assert checked_text in note
-    assert 'date not confirmed' in note
-    assert '2026-10-28' not in note and '2020.01.01' not in note
-    assert B.OUTDATED not in note
-    assert B.E(value) in B.fact_lines([('Closed', value)], v, dt.date(2026, 11, 3))
+    assert B.fact_value_html(('Closed', value), v, dt.date(2026, 11, 3)) == B.UNKNOWN
 
 
 @pytest.mark.parametrize('date_text', ['2026-10-18', '2026.10.18', 'Oct 18, 2026', 'October 18, 2026'])
@@ -203,11 +202,14 @@ def test_unambiguous_citation_formats_use_only_the_evidence_date(venues, date_te
     value = 'Closed 2026-10-28 ' + marker.format(date=date_text)
     checked = dt.date(2026, 10, 18)
     for age in (90, 91, 0, -1):
-        note = B.fact_provenance(v, value, checked + dt.timedelta(days=age))
-        assert date_text in note and '2026-10-28' not in note
-        assert (B.OUTDATED in note) == (age > 90)
-        assert ('Venue reply' in note) == ('reply' in marker)
-        assert ('href=' in note) == ('reply' not in marker)
+        rendered = B.fact_value_html(('Closed', value), v, checked + dt.timedelta(days=age))
+        if age < 0 or 'reply' in marker:
+            assert rendered == B.UNKNOWN
+        else:
+            assert rendered.startswith(B.E(value))
+            assert f'Checked {date_text}' in rendered and 'Checked 2026-10-28' not in rendered
+            assert (B.OUTDATED in rendered) == (age > 90)
+            assert f'href="{B.E(v["source"])}"' in rendered
 
 
 @pytest.mark.parametrize('value', [
@@ -217,9 +219,7 @@ def test_unambiguous_citation_formats_use_only_the_evidence_date(venues, date_te
 def test_inquiry_check_dates_do_not_date_the_evidence(venues, value):
     v = deepcopy(venues['orakai-cheonggyesan'])
     v['last_verified'] = dt.date(2020, 1, 1)
-    note = B.fact_provenance(v, value, dt.date(2026, 11, 3))
-    assert '2026-01-01' not in note and '2026-10-28' not in note
-    assert 'date not confirmed' in note and B.OUTDATED not in note
+    assert B.fact_value_html(('Closed', value), v, dt.date(2026, 11, 3)) == B.UNKNOWN
 
 
 def numeric_price_part(v, today):
@@ -227,15 +227,27 @@ def numeric_price_part(v, today):
     return B.price_html(v, today).split('<div class="price price-context">')[0]
 
 
-def test_reply_derived_price_stays_pending_on_card_and_headline(venues):
-    today = dt.date(2026, 11, 3)
-    sisu = venues['sisu-house']
-    html = B.price_html(sisu, today)
-    card = B.venue_card(sisu, today)
-    assert numeric_price_part(sisu, today) == ''
-    assert 'data-price="0"' in card and '₩79,000' not in card
-    assert '₩79,000' in html and 'Official source' not in html
-    assert 'Venue reply · 2026-10-18' in html and 'Source claim' in html
+def test_current_sisu_reply_stays_pending_across_public_surfaces():
+    today = dt.date(2026, 10, 30)  # The November month summary already includes upcoming dates.
+    venues, events, *_ = B.load(today)
+    site = B.Site(today, True)
+    B.build(site, venues, events, today)
+    detail = site.pages['/finder/sisu-house/']
+    card = next(card for card in site.pages['/finder/'].split('</article>') if 'data-slug="sisu-house"' in card)
+    assert 'data-price="0"' in card and 'price-short' not in card
+    assert '<span class="unk">Price: Not confirmed yet</span>' in detail
+    for label in ('Price', 'Hours', 'Closed'):
+        assert f'<th>{label}</th><td>Not confirmed yet</td>' in detail
+    for label in ('Full admission rates', 'Last entry cutoff', 'Regular & temp closures'):
+        assert f'<strong>{B.E(label)}:</strong> Not confirmed yet' in detail
+        assert f'<th>{B.E(label)}</th><td class="unk">Not confirmed</td>' in detail
+    assert '<th>Closed on</th><td class="unk">Check before you go</td>' in detail
+    assert 'Finnish sauna' in detail and '14°C cold shower' in detail
+    guide = site.pages['/guides/closed-days-korea/']
+    assert 'closed-month' in guide and 'Sisu House' not in guide
+    aerial = (B.ROOT / 'static/img/aerial/aerial-sisu-house.svg').read_text(encoding='utf-8')
+    for value in ('₩79,000', '₩89,000', '₩109,000', '11:00–21:45', 'every Tuesday'):
+        assert value.lower() not in (detail + card + aerial).lower()
 
 
 def test_official_numeric_price_keeps_provenance_beside_a_reply_discount(venues):
@@ -250,20 +262,19 @@ def test_official_numeric_price_keeps_provenance_beside_a_reply_discount(venues)
     assert f'href="{B.E(paradise["source"])}"' in numeric
     card = B.venue_card(paradise, today)
     assert 'data-price="1"' in card and '₩55,000' in card
-    assert 'Venue reply · 2026-10-17' in html
-    discount = next(val for key, val in paradise['facts'] if key == 'Guest discount rate')
-    assert 'Official source' not in B.fact_provenance(paradise, discount, today)
+    assert 'Guest discount rate:</strong> Not confirmed yet' in html
+    assert '₩27,500' not in html and 'Venue reply' not in html
 
 
-def test_unmatched_price_stays_pending_and_keeps_its_dated_claim(venues):
+def test_operator_profile_price_stays_pending(venues):
     today = dt.date(2026, 11, 3)
     repo = venues['solo-sauna-repo-noryangjin']
     html = B.price_html(repo, today)
     card = B.venue_card(repo, today)
     assert numeric_price_part(repo, today) == ''
     assert 'data-price="0"' in card and '₩45,000' not in card
-    assert '₩45,000' in html and 'Source claim' in html
-    assert 'Checked Oct 22, 2026' in html and B.dot(repo['last_verified']) not in html
+    assert '₩45,000' not in html and B.UNKNOWN in html
+    assert 'Checked' not in html and B.OUTDATED not in html
 
 
 def test_signiel_guest_price_has_its_own_provenance(venues):
@@ -276,12 +287,16 @@ def test_signiel_guest_price_has_its_own_provenance(venues):
 
 @pytest.fixture
 def load_price_case(tmp_path, monkeypatch, venues):
-    def load(slug, terms, today, **csv_fields):
+    def load(slug, terms, today, *, field_evidence=None, **csv_fields):
         venue = venues[slug]
         content = tmp_path / 'content'
         content.mkdir()
-        for filename in ('ads.json', 'venues.json', 'events.json', 'events_en.json'):
+        for filename in ('ads.json', 'events.json', 'events_en.json'):
             copyfile(B.ROOT / 'content' / filename, content / filename)
+        korean = json.loads((B.ROOT / 'content/venues.json').read_text(encoding='utf-8'))
+        if field_evidence is not None:
+            korean[venue['name']]['price_hours_evidence'] = field_evidence
+        (content / 'venues.json').write_text(json.dumps(korean), encoding='utf-8')
         english = json.loads((B.ROOT / 'content/venues_en.json').read_text(encoding='utf-8'))
         english[slug]['facts'][:len(terms)] = terms
         (content / 'venues_en.json').write_text(json.dumps(english), encoding='utf-8')
@@ -315,7 +330,9 @@ def test_headline_date_and_evidence_are_independent_of_an_equal_reply_rate(load_
     assert '₩55,000' in numeric and 'Official source' in numeric
     assert f'Checked {checked}' in numeric and B.dot(v['last_verified']) not in numeric
     assert (B.OUTDATED in numeric) == (age > 90)
-    assert f'Venue reply · {today} · Source claim' in B.price_html(v, today)
+    html = B.price_html(v, today)
+    assert 'Guest discount rate:</strong> Not confirmed yet' in html
+    assert 'Venue reply' not in html
     assert 'data-price="1"' in B.venue_card(v, today)
 
 
@@ -361,6 +378,78 @@ def test_price_can_use_the_venue_check_date(venues):
     assert '₩55,000' in numeric and 'Official source' in numeric
     assert f'Checked {B.dot(v["last_verified"])}' in numeric
     assert 'data-price="1"' in B.venue_card(v, today)
+
+
+@pytest.mark.parametrize('age', [0, 90, 91, -1])
+def test_field_evidence_is_scoped_across_detail_and_checklist(load_price_case, monkeypatch, age):
+    today = dt.date(2026, 11, 3)
+    checked = today - dt.timedelta(days=age)
+    price_url = 'https://example.org/admission'
+    hours_url = 'https://example.org/hours'
+    terms = [('Price', 'Adult {price}'), ('Guest discount rate', 'Guest ₩55,000'),
+             ('Hours', '07:00–21:00'), ('Booking', 'Call ahead after 20:30 (venue reply 2026-10-18)')]
+    fields = {
+        'Price': dict(value='Adult ₩55,000', source_kind='official_page', source_url=price_url, checked_on=checked.isoformat()),
+        'Guest discount rate': dict(value='Guest ₩55,000', source_kind='venue_reply', source_url=price_url, checked_on='2026-10-18'),
+        'Hours': dict(value='07:00–21:00', source_kind='official_page', source_url=hours_url, checked_on=checked.isoformat()),
+        'last_entry': None,
+    }
+    v = load_price_case('grand-josun-busan', terms, today, field_evidence=fields)
+    monkeypatch.setitem(B.FOREIGNER, v['slug'], dict(public_access='Yes.', last_entry='20:30'))
+    site = B.Site(today, True)
+    B.build(site, [v], [], today)
+    page = site.pages[f'/finder/{v["slug"]}/']
+    assert 'Guest ₩55,000' not in page and '20:30' not in page
+    assert '<th>Last entry cutoff</th><td class="unk">Not confirmed</td>' in page
+    assert ('data-price="1"' in site.pages['/finder/']) == (age >= 0)
+    for key, url in (('Price', price_url), ('Hours', hours_url)):
+        cell = page.split(f'<th>{key}</th><td>', 1)[1].split('</td>', 1)[0]
+        if age < 0:
+            assert cell == B.UNKNOWN
+        else:
+            assert url in cell and B.dot(checked) in cell
+            assert (B.OUTDATED in cell) == (age == 91)
+    assert (price_url in numeric_price_part(v, today)) == (age >= 0)
+
+
+def test_changed_csv_price_invalidates_exact_field_evidence(load_price_case):
+    today = dt.date(2026, 11, 3)
+    v = load_price_case('grand-josun-busan', [('Price', 'Adult {price}')], today,
+                        price_krw='56000', field_evidence={'Price': dict(
+                            value='Adult ₩55,000', source_kind='official_page',
+                            source_url='https://example.org/rates', checked_on=today.isoformat())})
+    assert 'data-price="0"' in B.venue_card(v, today)
+    assert '₩56,000' not in B.price_html(v, today)
+    assert B.fact_value_html(v['facts'][0], v, today) == B.UNKNOWN
+
+
+@pytest.mark.parametrize('reply_marker', ['venue reply', 'hotel reply', '업장 회신', '회신'])
+def test_reply_confidence_blocks_only_price_and_schedule_fallback(venues, reply_marker):
+    today = dt.date(2026, 11, 3)
+    v = deepcopy(venues['orakai-cheonggyesan'])
+    v['confidence'] = f'high (official page + {reply_marker} 2026-10-18)'
+    assert B.fact_value_html(('Hours', '07:00–21:00'), v, today) == B.UNKNOWN
+    assert B.fact_value_html(('Price', 'Adult ₩24,000'), v, today) == B.UNKNOWN
+    assert 'Official source' in B.fact_value_html(('Facilities', 'Dry sauna'), v, today)
+    assert B.amenity_labels(v)
+    assert 'Official source' in B.fact_value_html(
+        ('Hours', f'07:00–21:00 — official page, checked {today}'), v, today)
+
+
+def test_only_independently_cited_clauses_survive(venues):
+    today = dt.date(2026, 11, 3)
+    v = venues['orakai-cheonggyesan']
+    official = f'Adult ₩24,000 (official page, checked {today}).'
+    reply = 'Discount ₩12,000 (hotel reply 2026-10-18)'
+    for separator in (' · ', ' '):
+        rendered = B.fact_value_html(('Price', official + separator + reply), v, today)
+        assert official in rendered and 'Official source' in rendered
+        assert B.UNKNOWN in rendered and '₩12,000' not in rendered
+    for ambiguous in ('Adult ₩24,000 · ' + reply, official + ' Discount ₩12,000'):
+        assert B.fact_value_html(('Price', ambiguous), v, today) == B.UNKNOWN
+    booking = f'Book on the venue website (official page, checked {today}).'
+    rendered = B.fact_value_html(('Booking', booking + ' Last entry 20:30 (venue reply 2026-10-18).'), v, today)
+    assert booking in rendered and B.UNKNOWN in rendered and '20:30' not in rendered
 
 
 SUNDAY_TODAY = dt.date(2026, 11, 19)
@@ -539,25 +628,26 @@ def test_sunday_legacy_copy_and_closure_provenance(tmp_path, monkeypatch):
         card, badge, rows = sunday_markup(pages, slug, label)
         assert 'data-sunday="unk"' in card and B.SUN_TXT['unk'] in badge
         for row in rows:
-            assert B.PENDING in row and claim in row
+            assert B.PENDING in row
+            if claim:
+                assert (claim in row) == (slug == 'fixture-conflict')
             assert 'href=' not in row and 'Checked' not in row
     compound = pages['/finder/fixture-compound/']
     assert compound.count(WEEKDAY_HOURS + '<small class="fact-source">Checked 2026.11.16') == 2
     assert WEEKDAY_HOURS + ' · Closed Sunday' not in compound
     _, _, branch_rows = sunday_markup(pages, 'fixture-branch')
     for row in branch_rows:
-        assert f'<strong>{B.E("Citizens' Forest branch")}:</strong> Closed Sat and Sun' in row
+        assert f'<strong>{B.E("Citizens' Forest branch")}:</strong> {B.UNKNOWN}' in row
     for slug, label in (('fixture-reply', 'Sunday status'), ('fixture-conflict', 'Sunday status')):
         page = pages[f'/finder/{slug}/']
         assert page.count('<strong>Sunday:</strong>') == page.count('<th>Sunday</th>') == 1
         _, _, rows = sunday_markup(pages, slug, label)
         assert all(B.PENDING in row for row in rows)
     reply = pages['/finder/fixture-reply/']
-    reply_note = REPLY_HOURS + '<small class="fact-source">Venue reply · 10/17 (date not confirmed)'
-    assert reply.count(reply_note) == 2 and 'Open Sunday (verified)' not in reply
+    assert '09:00' not in reply and '10/17' not in reply and 'Open Sunday (verified)' not in reply
     conflict = pages['/finder/fixture-conflict/']
-    assert conflict.count('Open Sunday<small class="fact-source">Not confirmed') == 2
-    assert conflict.count('Closed Sunday<small class="fact-source">Sunday sources disagree') == 2
+    assert 'Open Sunday' not in conflict and 'Closed Sunday' not in conflict
+    assert conflict.count('Sunday sources disagree') == 2
     assert SUNDAY_URL not in conflict
     card, _, rows = sunday_markup(pages, 'fixture-shim')
     assert 'data-sunday="no"' in card and SHIM_URL not in card
@@ -575,13 +665,11 @@ def test_opposing_compound_sunday_claims_keep_status_pending(tmp_path, monkeypat
     })
     card, _, rows = sunday_markup(pages, slug)
     assert 'data-sunday="unk"' in card
-    assert all(claim in row and 'href=' not in row and 'Checked' not in row for row in rows)
+    assert all(claim not in row and 'href=' not in row and 'Checked' not in row for row in rows)
 
 
 @pytest.mark.parametrize('age', [90, 91, 0, -1])
-def test_reply_price_terms_keep_source_and_age_boundary(venues, age):
-    # The price fact's dated evidence lives on the terms; the outdated label tracks
-    # the reply's own date at the exact 90/91-day boundary, not the venue's age.
+def test_reply_price_terms_stay_pending_at_any_age(venues, age):
     v = deepcopy(venues['sisu-house'])
     today = dt.date(2026, 11, 3)
     checked = today - dt.timedelta(days=age)
@@ -589,6 +677,5 @@ def test_reply_price_terms_keep_source_and_age_boundary(venues, age):
     v['facts'] = [(key, (f'Spa Basic ₩79,000 — venue reply, {checked.isoformat()}' if key == 'Price' else val))
                   for key, val in v['facts']]
     html = B.price_html(v, today)
-    assert 'Official source' not in html
-    assert f'Venue reply · {checked.isoformat()}' in html
-    assert (B.OUTDATED in html) == (age > 90)
+    assert B.UNKNOWN in html and '₩79,000' not in html
+    assert checked.isoformat() not in html and B.OUTDATED not in html
