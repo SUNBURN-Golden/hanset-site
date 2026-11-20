@@ -15,6 +15,7 @@ from . import gaps
 from .discover.search import queries, usable_providers, DiscoveryDeferred
 from .util.timeutil import kst_now
 from .util.pii import strip_pii
+from .util.urls import is_denied, is_excluded
 from .maintenance import (close_article_title_venues, prune_offsite_followups,
                           requeue_browser_aux_softfail_trials, requeue_robots_trials,
                           requeue_spa_shell_trials, scrub_portal_venue_domains)
@@ -57,7 +58,14 @@ def bootstrap(fetcher):
                 reopened=db.execute("UPDATE tasks SET state='pending',next_at=NULL WHERE task_id=? AND state='done'",(tid,)).rowcount
                 if reopened:
                     db.execute("DELETE FROM run_checkpoints WHERE task_id=? AND kind='discovery:osm'",(tid,))
-    for row in db.execute("SELECT s.* FROM seed_venues s JOIN run_checkpoints c ON c.checkpoint_id='seed_freeze' AND c.cursor=s.seed_id").fetchall():
+    seen_seeds = set()
+    for row in db.execute("SELECT s.* FROM seed_venues s JOIN run_checkpoints c ON c.checkpoint_id='seed_freeze' AND c.cursor=s.seed_id ORDER BY s.rowid").fetchall():
+        if is_excluded(row['name'], row['website']) or (row['website'] and is_denied(row['website'])):
+            continue
+        identity = (row['normalized_name'], row['domain'])
+        if identity in seen_seeds:
+            continue
+        seen_seeds.add(identity)
         if row['website'] and not is_article_title(row['name']):
             fetcher.register_candidate(row['website'])
     now = kst_now(clock)

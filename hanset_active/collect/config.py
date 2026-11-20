@@ -5,8 +5,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from hanset_active.config import REPO_ROOT
-from hanset_active.util.urls import is_denied, is_excluded, registrable_domain
+from hanset_active.config import REPO_ROOT, load_profile
+from hanset_active.util import followups
+from hanset_active.util.urls import is_collect_denied, is_denied, is_excluded, registrable_domain
 
 from . import CollectError
 
@@ -28,6 +29,10 @@ HANDLE_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9._]{0,29}')
 RESERVED_HANDLES = frozenset({
     'p', 'reel', 'reels', 'accounts', 'explore', 'direct', 'stories',
     'challenge', 'checkpoint', 'about', 'login',
+})
+SHARED_WEB_DOMAINS = frozenset({
+    'blogger.com', 'blogspot.com', 'daum.net', 'expedia.com', 'g.page', 'goo.gl',
+    'google.co.kr', 'google.com', 'hotels.com', 'kakao.com', 'openstreetmap.org',
 })
 
 
@@ -90,24 +95,40 @@ def canonical_instagram(value, *, handle=None):
         raise CollectError('invalid_source_url') from None
 
 
+def official_site(url, *, profile=None):
+    profile = load_profile() if profile is None else profile
+    host = urlsplit(url).hostname
+    if (not host or is_denied(url, profile['denied_domains']) or is_denied(url)
+            or is_excluded(url, terms=profile['exclusion_terms'])):
+        return False
+    shared = followups.portal_domains(profile) | SHARED_WEB_DOMAINS | set(profile['reservation_platform_domains'])
+    shared |= set(profile['sns_domains'])
+    return (registrable_domain(url) not in shared
+            and not any(host.startswith(pattern.removesuffix('*'))
+                        for pattern in profile['aggregator_domains'] if pattern.endswith('*')))
+
+
 def official_domains(entry):
     domains = set()
     for raw in entry.get('official_domains') or []:
         if not isinstance(raw, str) or not raw or len(raw) > 253:
             raise CollectError('targets_invalid')
         host = raw.lower().rstrip('.')
-        if is_denied('https://' + host) or is_excluded(host):
+        authority = f'[{host}]' if ':' in host else host
+        if not re.fullmatch(r'[a-z0-9.:-]+', host) or not official_site('https://' + authority):
             raise CollectError('targets_invalid')
         domains.add(host)
     return domains
 
 
 def domain_allowed(url, domains):
+    return scope_allowed(url, domains) and official_site(url)
+
+
+def scope_allowed(url, scope_domains):
     try:
-        if urlsplit(url).scheme != 'https' and urlsplit(url).scheme != 'http':
-            return False
-        if is_denied(url) or is_excluded(url):
-            return False
-        return registrable_domain(url) in domains
-    except (TypeError, ValueError):
+        parsed = urlsplit(url)
+        return (parsed.scheme in ('https', 'http') and parsed.hostname is not None and not is_collect_denied(url)
+                and parsed.username is None and parsed.password is None and registrable_domain(url) in scope_domains)
+    except (TypeError, ValueError, AttributeError):
         return False

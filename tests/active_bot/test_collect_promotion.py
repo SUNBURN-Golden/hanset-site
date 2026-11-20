@@ -48,14 +48,15 @@ def policy(settings, *rows):
     return path
 
 
-def add(settings, url, *, value=None, seen=SEEN, text_hash=None, field='hours', **identity):
+def add(settings, url, *, value=None, seen=SEEN, text_hash=None, field='hours', source_type=None, **identity):
     db = connect(settings.data_dir)
     try:
         _, ids = record(db, kind='instagram' if 'instagram.com' in url else 'web', url=url,
                         text_hash=text_hash or 'synthetic-' + url + json.dumps(value), disposition='applied',
                         claims=[{'field': field, 'value': value if value is not None else HOURS,
                                  'quote': 'SAMPLE minimal evidence', 'rule_id': 'sample.v1'}],
-                        venue_id=identity.get('venue_id', 'sample'), venue_key=identity.get('venue_key', 'sample'), seen_at=seen)
+                        venue_id=identity.get('venue_id', 'sample'), venue_key=identity.get('venue_key', 'sample'),
+                        seen_at=seen, source_type=source_type)
         return ids[0]
     finally:
         db.close()
@@ -108,6 +109,35 @@ def test_official_web_required(setup, urls, expected):
     path = policy(settings, *(approval(url) for url in urls))
     report = run_promote(settings, policy_path=path, clock=clock)
     assert report['state'] == 'ok' and len(report['fact_candidates']) == expected
+
+
+@pytest.mark.parametrize('kind', ['single', 'shared_host', 'mirror', 'same_origin', 'independent'])
+def test_review_only_web_approvals_require_independent_agreement(setup, kind):
+    settings, clock = setup
+    first = 'https://blog.naver.com/seed-spa-a'
+    second = 'https://blog.naver.com/box-b' if kind == 'shared_host' else 'https://runport.example.test/hours'
+    urls = [first] if kind == 'single' else [first, second]
+    for url in urls:
+        add(settings, url, source_type='third_party', text_hash='same-document' if kind == 'mirror' else None)
+    path = policy(settings, *(approval(url, review_only=True,
+                                       group='shared-origin' if kind == 'same_origin' else url)
+                              for url in urls))
+    report = run_promote(settings, policy_path=path, clock=clock)
+    assert report['state'] == 'ok' and report['auto_publish_to_site'] is False
+    assert all(claim['verification_label'] == '미확인' for claim in report['claims'])
+    assert len(report['fact_candidates']) == int(kind == 'independent')
+    if kind == 'independent':
+        assert report['fact_candidates'][0]['verification_label'] == '미확인'
+
+
+@pytest.mark.parametrize('row', [approval(IG_A, review_only=True), approval(IG_A, review_only=False),
+                                approval(A, review_only='true'),
+                                approval('https://naver.com/seed-spa-a'),
+                                approval('https://instagr.am/seed-spa-a', review_only=True)])
+def test_review_only_policy_rejects_invalid_approval_classes(setup, row):
+    settings, clock = setup
+    with pytest.raises(CollectError, match='promotion_policy_invalid'):
+        load_policy(policy(settings, row), today=clock.now().date())
 
 
 @pytest.mark.parametrize('variant', ['same_page', 'canonical_alias', 'subdomain', 'same_domain', 'mirror', 'translation', 'same_hash', 'ambiguous_approval', 'wrong_venue'])

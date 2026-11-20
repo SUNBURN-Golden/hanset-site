@@ -27,7 +27,7 @@ def inspect_page(job, fetched, *, observed_at, disposition):
     This function performs no I/O. Requested and final URLs must share one
     approved official domain. Invalid anchors are discarded, never guessed.
     """
-    if disposition != 'ready' or fetched.outcome != 'ok':
+    if disposition != 'ready' or fetched.outcome != 'ok' or not job.get('source_authorization'):
         return []
     requested, final = job['url'], fetched.url
     try:

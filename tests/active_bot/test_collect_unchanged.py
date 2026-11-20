@@ -263,9 +263,11 @@ def test_deferred_only_runs_keep_existing_gates(tmp_path, monkeypatch, gate):
     result = service.run_web(settings, targets_path=path, clock=clock, session=Model(), testing=True)
     assert result['reason'] == {
         'credentials': 'missing_credentials', 'daily_cap': 'daily_cap',
-        'model_budget': 'model_budget_exhausted', 'proxy': 'proxy_unavailable', 'fetch': 'ok',
+        'model_budget': 'model_budget_exhausted', 'proxy': 'ok', 'fetch': 'ok',
     }[gate]
-    assert calls == ([ROOT] if gate == 'fetch' else [])
+    assert calls == ([ROOT] if gate in ('fetch', 'proxy') else [])
+    if gate == 'proxy':
+        assert result['web_egress'] == {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'preflight'}
     assert result['rejections'] == {'recent_unchanged_deferred': 1}
 
 
@@ -448,15 +450,13 @@ def test_failed_fetch_replaces_previous_qualifying_outcome(tmp_path, monkeypatch
     seed_history(settings, ROOT, clock)
     clock.sleep(DAY)
 
-    def fetch(self, url):
-        if proxy_failed:
-            raise service.web_proxy.ProxyUnavailable('proxy_unavailable')
-        return FetchResult(url, 'error')
+    def fetch(self, url, **kwargs):
+        return FetchResult(url, 'error', reason='proxy_unavailable' if proxy_failed else 'ConnectionError')
 
     monkeypatch.setattr(service.Fetcher, 'fetch', fetch)
     result = service.run_web(settings, targets_path=path, clock=clock, testing=True)
     assert result['rejections'] == {'recent_unchanged_deferred': 1}
-    assert result['counts']['pages'] == (0 if proxy_failed else 1)
+    assert result['counts']['pages'] == 1
     assert observations(settings)[0][2:] == ('error', kst_now(clock).isoformat())
     clock.sleep(DAY)
     db = connect(settings.data_dir)

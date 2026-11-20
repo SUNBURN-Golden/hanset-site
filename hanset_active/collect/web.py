@@ -1,14 +1,14 @@
-"""Official-page classification after the existing guarded fetcher returns."""
+"""Public-page classification and first-party information link selection."""
 from urllib.parse import unquote, urljoin, urlsplit
 
 from bs4 import BeautifulSoup
 
 from hanset_active.extract import html as html_rules
-from hanset_active.util.urls import canonicalize, is_denied, is_excluded
+from hanset_active.util.urls import canonicalize, is_excluded
 
 from .ground import bounded_text
 from .safety import POLICY_RE, asset_type, looks_like_security
-from .config import SUBPAGE_MAX, domain_allowed
+from .config import SUBPAGE_MAX, official_site, scope_allowed
 from .targets import _https_or_test, canonical_requested_url
 
 _KEYWORDS = {
@@ -32,20 +32,15 @@ def select_subpages(content, parent_url, domains, *, testing=False, limit=SUBPAG
     cooling candidate never consumes a slot.
     """
     from hanset_active.config import load_profile
-    from hanset_active.util.followups import portal_domains
     from hanset_active.util.urls import registrable_domain
 
     try:
         parent = canonical_requested_url(parent_url, testing=testing)
     except (ValueError, TypeError, UnicodeError):
-        # Redirect targets only pass canonicalize(), not the requested-URL
-        # guard (e.g. a ?sid= landing page). The page itself fetched fine;
-        # without a safe parent identity it simply supplies no children.
         return []
     parent_domain = registrable_domain(parent)
     # One profile read per page, not per anchor on link-heavy homepages.
     profile = load_profile()
-    portals = portal_domains(profile)
     terms = profile['exclusion_terms']
     scores, fetch_urls = {}, {}
     soup = BeautifulSoup(content, 'lxml')
@@ -60,7 +55,7 @@ def select_subpages(content, parent_url, domains, *, testing=False, limit=SUBPAG
             url = canonical_requested_url(candidate, testing=testing)
             path = unquote(urlsplit(url).path).casefold()
             if (url == parent or registrable_domain(url) != parent_domain
-                    or registrable_domain(url) in portals or not domain_allowed(url, domains)
+                    or not scope_allowed(url, domains) or not official_site(url, profile=profile)
                     or POLICY_RE.search(path) or asset_type('', path)
                     or path.endswith(_DOWNLOAD_EXTENSIONS)):
                 continue
@@ -76,7 +71,7 @@ def select_subpages(content, parent_url, domains, *, testing=False, limit=SUBPAG
     return [fetch_urls[url] for url in sorted(scores, key=lambda url: (-scores[url], url))[:limit]]
 
 
-def classify_page(fetched, domains):
+def classify_page(fetched, scope_domains):
     """Return a disposition and transient main text. Text is None unless the page is usable."""
     url = fetched.url or ''
     if fetched.outcome == 'cap_reached':
@@ -89,7 +84,7 @@ def classify_page(fetched, domains):
         return outcome, None
     if asset_type(fetched.content_type, url):
         return 'asset_document', None
-    if is_denied(url) or is_excluded(url) or registrable_miss(url, domains):
+    if not scope_allowed(url, scope_domains):
         return 'off_domain', None
     path = urlsplit(url).path
     if POLICY_RE.search(path):
@@ -104,16 +99,6 @@ def classify_page(fetched, domains):
     text = bounded_text(document.get('text') or '')
     if looks_like_security(text):
         return 'blocked', None
-    if is_excluded(text, title):
-        return 'excluded', None
     if len(text) < 80:
         return 'empty_body', None
     return 'ready', text
-
-
-def registrable_miss(url, domains):
-    from hanset_active.util.urls import registrable_domain
-    try:
-        return registrable_domain(url) not in domains
-    except (TypeError, ValueError):
-        return True

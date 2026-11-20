@@ -11,6 +11,7 @@ from datetime import datetime
 from hanset_active.util.pii import strip_pii
 from hanset_active.util.timeutil import KST
 
+from .config import official_site
 from .ground import secrets
 from .normalize import VERSION as CLAIM_NORMALIZER, normalize_value, stable_json
 from .store import digest, read_claims
@@ -117,6 +118,7 @@ def insert_observation(db, row, claims):
         final = canonical_requested_url(row.get('final_url', row['url']), testing=testing)
         requested = canonical_requested_url(row['url'], testing=testing)
         if (requested != auth['requested_url'] or requested != auth['source_identity']
+                or not official_site(requested) or not official_site(final)
                 or not HEX.fullmatch(auth['target_fingerprint'])):
             return None
     except (ValueError, KeyError, TypeError):

@@ -11,11 +11,12 @@ from bs4 import BeautifulSoup
 from .config import Settings
 from .db import connect, consume_budget
 from .util.timeutil import Clock, kst_now, kst_day
-from .util.urls import canonicalize, registrable_domain, is_denied, is_excluded, literal_private
+from .util.urls import canonicalize, registrable_domain, is_collect_denied, is_denied, is_excluded, literal_private
 from .util.pii import strip_pii
 from .util.hashing import content_hash
 
 USER_AGENT='HansetActiveBot/1.0 (+mailto:hanset@soulbound.co.kr)'
+BLOCK_STATUSES = (401, 403, 429, 202)
 
 @dataclass
 class FetchResult:
@@ -39,8 +40,8 @@ class FetchResult:
         return self.outcome=='ok'
 
 
-def detect_outcome(content: bytes, content_type: str, status: int) -> str:
-    if status in (401,403,429,202):
+def detect_outcome(content: bytes, content_type: str, status: int, *, public_scope=False) -> str:
+    if status in BLOCK_STATUSES or (public_scope and status==402):
         return 'blocked'
     if status>=400:
         return 'error'
@@ -52,6 +53,10 @@ def detect_outcome(content: bytes, content_type: str, status: int) -> str:
         return 'blocked'
     if soup.select_one('input[type="password"]') or (len(text)<500 and re.search(r'로그인|sign in|log in|cookie (?:wall|consent)',text,re.I)):
         return 'login_wall'
+    if public_scope and re.search(r'\b(?:subscribe|subscription required|members only)\s+to (?:read|continue)|'
+                                  r'\b(?:this (?:content|article) is for subscribers only|subscription required to access)\b|'
+                                  r'구독자 전용|구독하시면.{0,24}(?:읽|볼 수)',text,re.I):
+        return 'blocked'
     from .extract.html import extract
     main=extract(content)['text']
     if len(main)<80 or re.search(r'\b(?:page not found|404 not found)\b|페이지를 찾을 수 없',main,re.I):
@@ -59,9 +64,10 @@ def detect_outcome(content: bytes, content_type: str, status: int) -> str:
     return 'ok'
 
 class Fetcher:
-    def __init__(self, settings: Settings | None = None, db=None, clock: Clock | None = None, proxy: str = ''):
+    def __init__(self, settings: Settings | None = None, db=None, clock: Clock | None = None, proxy: str = '', *, public_scope=False):
         self.settings=settings or Settings()
-        # Optional egress proxy (collect-web only). No direct fallback when set.
+        self.public_scope=public_scope
+        # Collect-web can continue directly after a confirmed transport outage.
         self.proxy=''
         self.proxy_failed=False
         if proxy:
@@ -85,11 +91,15 @@ class Fetcher:
     def _lock(self, domain):
         with self._guard:
             return self._locks.setdefault(domain,threading.RLock())
-    def _reason_denied(self,url):
-        if is_denied(url,self.settings.profile['denied_domains']) or is_denied(url):
-            return 'denied host'
-        if is_excluded(url):
-            return 'excluded'
+    def _reason_denied(self,url, *, registration=False):
+        if self.public_scope and not registration:
+            if is_collect_denied(url):
+                return 'denied host'
+        else:
+            if is_denied(url,self.settings.profile['denied_domains']) or is_denied(url):
+                return 'denied host'
+            if is_excluded(url):
+                return 'excluded'
         if literal_private(url):
             host=urlsplit(url).hostname
             if not (self.settings.testing and self.settings.allow_private_hosts and host in ('127.0.0.1','::1','localhost')):
@@ -120,7 +130,7 @@ class Fetcher:
             url=canonicalize(url)
         except ValueError:
             return False
-        if self._reason_denied(url):
+        if self._reason_denied(url,registration=True):
             return False
         with self._guard:
             # tasks' unique dedupe key makes registration and budget use atomic.
@@ -153,13 +163,16 @@ class Fetcher:
             response=None
             reason=''
             proxy_down=False
+            request_proxy=self.proxy
             try:
                 response=self.session.get(url,headers=headers,allow_redirects=False,timeout=(self.settings.timeout,self.settings.timeout),stream=True)
                 status=response.status_code
                 ct=response.headers.get('Content-Type','').lower()
                 limit=8*1024**2 if 'pdf' in ct else 4*1024**2 if ct.startswith('image/') else 2*1024**2
                 from .web_proxy import is_heavy
-                if self.proxy and is_heavy(ct):
+                if self.public_scope and (status in BLOCK_STATUSES or status==402):
+                    pass  # The response status already establishes the refusal.
+                elif request_proxy and is_heavy(ct):
                     reason='heavy resource'
                 elif int(response.headers.get('Content-Length','0'))>limit:
                     reason='size limit'
@@ -172,9 +185,9 @@ class Fetcher:
                             break
             except (requests.RequestException, ValueError) as exc:
                 reason=type(exc).__name__
-                if self.proxy and isinstance(exc,requests.ConnectionError):
+                if request_proxy and isinstance(exc,requests.ConnectionError):
                     from .web_proxy import reachable
-                    if not reachable(self.proxy):
+                    if not reachable(request_proxy):
                         proxy_down=True
             finally:
                 if response is not None:
@@ -184,9 +197,14 @@ class Fetcher:
                     self.db.execute('INSERT INTO request_log(url,domain,ts,status,kind,bytes) VALUES (?,?,?,?,?,?)',args)
                     self.db.execute('INSERT INTO fetch_log(url,domain,ts,status,kind,bytes) VALUES (?,?,?,?,?,?)',args)
             if proxy_down:
-                # Fail closed: never retry without the proxy, never cache robots.
+                with self._guard:
+                    self.proxy_failed=True
+                    if self.public_scope:
+                        self.session.proxies.clear()
+                        self.proxy=''
+                if self.public_scope:
+                    return None,b'','proxy_unavailable'
                 from .web_proxy import ProxyUnavailable
-                self.proxy_failed=True
                 raise ProxyUnavailable('proxy_unavailable')
             return response,body,reason
     def _robots_allowed(self,url, *, mark_inaccessible=True, url_allowed=None):
@@ -222,8 +240,8 @@ class Fetcher:
                         except (ValueError,UnicodeError): break
                         if registrable_domain(redirect)!=domain or urlsplit(redirect).path!='/robots.txt' or self._reason_denied(redirect): break
                         target=redirect
-                    if error=='cap_reached':
-                        return False,'cap_reached'
+                    if error in ('cap_reached','proxy_unavailable'):
+                        return False,error
                     allowed=not error and (status==200 or (status is not None and 400<=status<500 and status not in (401,403,429)))
                     decoded=strip_pii(raw.decode('utf-8',errors='replace'))
                     body=decoded if status==200 else ''
@@ -290,6 +308,8 @@ class Fetcher:
                 if not allowed:
                     if reason=='cap_reached':
                         return result('cap_reached',reason)
+                    if reason=='proxy_unavailable':
+                        return result('error',reason)
                     self._inaccessible(domain,'robots_disallowed')
                     return result('robots_disallowed','robots_disallowed')
                 response,body,error=self._request(url,kind,headers=api_headers if (urlsplit(url).scheme,urlsplit(url).netloc)==auth_origin else None)
@@ -311,7 +331,7 @@ class Fetcher:
                     url=redirect
                     continue
                 ct=response.headers.get('Content-Type','application/octet-stream').lower()
-                outcome=detect_outcome(body,ct,status)
+                outcome=detect_outcome(body,ct,status,public_scope=self.public_scope)
                 retry=None
                 if status==429:
                     raw=response.headers.get('Retry-After','')
@@ -328,8 +348,7 @@ class Fetcher:
                         with self._guard,self.db:
                             self.db.execute('UPDATE sources SET next_at=? WHERE domain=?',(retry,domain))
                 # Excluded response bodies never leave this boundary or enter logs.
-                decoded=body.decode('utf-8',errors='replace')
-                if is_excluded(url,decoded):
+                if not self.public_scope and is_excluded(url,body.decode('utf-8',errors='replace')):
                     return result('denied','excluded',status=status)
                 preserve_shell=False
                 if _browser_shell and outcome=='empty_body':

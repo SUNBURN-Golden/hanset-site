@@ -73,6 +73,8 @@ def assess(claims, existing, policy, *, now):
         item['promotion_eligible'] = not errors
         item['eligibility_reasons'] = errors
         item['approval'] = approval
+        if item.get('source_type') == 'third_party':
+            item['verification_label'] = '미확인'
         seen = timestamp(item.get('seen_at'))
         item['date_basis'] = 'seen_at'
         item['freshness'] = ('오래됨' if now - seen > timedelta(days=90) else 'fresh') if seen else 'unranked'
@@ -150,6 +152,9 @@ def assess(claims, existing, policy, *, now):
         item['conflict_state'] = '확인 필요' if item.get('conflict_id') else None
         item['eligible_supporting_claim_ids'] = [cid for cid in item['supporting_claim_ids']
                                                if cid in by_id and by_id[cid]['promotion_eligible']]
+        eligible_ids = item['eligible_supporting_claim_ids']
+        if eligible_ids and all(by_id[cid].get('source_type') == 'third_party' for cid in eligible_ids):
+            item['verification_label'] = '미확인'
         item['assessment_digest'] = deterministic_id(
             'collector-assessment', policy['fingerprint'], item['review_state'],
             item['supporting_claim_ids'], item['independence_rationale'],

@@ -15,11 +15,12 @@ from hanset_active.locks import AlreadyRunning as ActiveBusy
 from hanset_active.locks import RunLock
 from hanset_active.util.pii import strip_pii
 from hanset_active.util.timeutil import Clock, kst_now
+from hanset_active.util.urls import registrable_domain
 from hanset_twin.daemon import AlreadyRunning as CollectorBusy
 from hanset_twin.daemon import ProcessLock
 
 from . import CollectError
-from .config import IG_READ_MAX, PAGE_DAY_CAP, PAGE_RUN_CAP, SUBPAGE_MAX, CollectSettings
+from .config import IG_READ_MAX, PAGE_DAY_CAP, PAGE_RUN_CAP, SUBPAGE_MAX, CollectSettings, domain_allowed
 from .deepseek import OUTPUT_TOKENS, DeepSeek, credentials_present
 from .ground import INSTRUCTION, SUMMARY_INSTRUCTION, parse_items, payload_items, summary_items
 from .ingest import load_watchlist, parse_batch, security_flag, within_window
@@ -27,7 +28,7 @@ from .state import State
 from .store import connect as claim_connect
 from .store import (digest, record, prune_web_target_blocks, recent_web_target_block,
                     remember_web_target_block, remember_web_target_observation, web_target_history)
-from .targets import canonical_requested_url, resolve_jobs, seed_url_allowed
+from .targets import canonical_requested_url, fetch_url_allowed, resolve_jobs
 from .web import classify_page, select_subpages
 from .plan import assemble_targets, ensure_daily_plan, load_targets, local_target_order, order_targets
 from .watchlist_proposals import inspect_page, write_proposals
@@ -95,6 +96,11 @@ def public_result(result):
             type(heal['retries']) is int and 0 <= heal['retries'] <= 3):
         out['proxy_heal'] = {key: heal[key] for key in (
             'attempted', 'heal_exit', 'retries', 'recovered')}
+    egress = result.get('web_egress')
+    if (out['mode'] in ('web', 'status') and isinstance(egress, dict)
+            and set(egress) == {'mode', 'reason', 'phase'} and egress['mode'] == 'direct'
+            and egress['reason'] == 'proxy_unavailable' and egress['phase'] in ('preflight', 'mid_run')):
+        out['web_egress'] = dict(egress)
     blob = json.dumps(out, ensure_ascii=False)
     from .ground import secrets
     for secret in secrets():
@@ -151,7 +157,7 @@ def _store_batch(db, rows, parsed, *, kind, clock, state):
             disposition, ids = record(
                 db, kind=kind, url=row['url'], text_hash=text_hash, disposition='applied',
                 claims=claims, venue_id=row['venue_id'], venue_key=row['venue_key'],
-                seen_at=row['seen_at'], clock=clock)
+                seen_at=row['seen_at'], clock=clock, source_type=row.get('source_type'))
         if kind == 'web':
             _observe_stored(db, row, text_hash, disposition)
             state.complete(row['url'], disposition)
@@ -306,6 +312,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
     skipped = {}
     deferred_urls = set()
     unsafe = 0
+    egress = None
 
     def finish_web(body):
         # Fetch/extraction results take precedence over cooldown notes in the
@@ -320,6 +327,8 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
             rejections['recent_unchanged_deferred'] = len(deferred_urls)
         if rejections:
             body['rejections'] = rejections
+        if egress:
+            body['web_egress'] = egress
         return _finish(state, body, clock)
 
     def cooling(url):
@@ -331,7 +340,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
     try:
         history = claim_connect(settings.data_dir)
         prune_web_target_blocks(history, clock=clock)
-        needs_search = any(item['tavily'] and not item['urls'] for item in targets)
+        needs_search = any(item['tavily'] and not item['official_urls'] for item in targets)
         jobs, notes = resolve_jobs(
             targets,
             search=search if search is not None or not needs_search else _default_search(),
@@ -401,15 +410,17 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
             return finish_web(_base('stopped', 'proxy_invalid', success=False, collected=False, mode='web', pages=notes))
         if proxy:
             blocked, state.proxy_heal = web_proxy.preflight_with_retry(proxy, clock=clock)
-            if blocked:
-                # Fail closed: skip every web fetch; never use the box IP.
+            if blocked == 'proxy_unavailable':
+                proxy = ''
+                egress = {'mode': 'direct', 'reason': blocked, 'phase': 'preflight'}
+            elif blocked:
                 return finish_web(_base('stopped', blocked, success=False, collected=False, mode='web', pages=notes))
         ready, pages = [], list(notes)
         proposal_evidence = []
         stop_reason = None
         try:
             with RunLock(active, active_settings.data_dir, 'collect-web', clock=clock):
-                fetcher = Fetcher(active_settings, active, clock, proxy=proxy)
+                fetcher = Fetcher(active_settings, active, clock, proxy=proxy, public_scope=True)
                 try:
                     run_pages = 0
                     attempted, children = set(), {}
@@ -424,17 +435,13 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                             stop_reason = 'run_cap'
                             break
                         attempted.add(job_key)
-                        try:
-                            fetch_options = {'subpage': True} if job.get('discovered_subpage') else {}
-                            if job['seed_url']:
-                                fetch_options['url_allowed'] = partial(seed_url_allowed, domains=job['domains'])
-                            fetched = fetcher.fetch(job['url'], **fetch_options)
-                        except web_proxy.ProxyUnavailable:
-                            remember_web_target_observation(
-                                history, job['url'], 'error',
-                                observed_at=kst_now(clock).isoformat(), testing=testing)
-                            stop_reason = 'proxy_unavailable'
-                            break
+                        scope = job['scope_domains'] & {registrable_domain(job_key)}
+                        url_allowed = partial(fetch_url_allowed, scope_domains=scope, testing=testing)
+                        fetched = fetcher.fetch(job['url'], subpage=bool(job.get('discovered_subpage')),
+                                                url_allowed=url_allowed)
+                        proxy_outage = fetched.outcome == 'error' and fetched.reason == 'proxy_unavailable'
+                        if proxy_outage:
+                            egress = {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'mid_run'}
                         if fetched.outcome == 'cap_reached':
                             stop_reason = 'active_body_cap'
                             break
@@ -442,7 +449,18 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                         state.data['counts']['pages'] += 1
                         run_pages += 1
                         state.save()
-                        disposition, text = classify_page(fetched, job['domains'])
+                        disposition, text = classify_page(fetched, scope)
+                        final = fetched.url or job['url']
+                        authorization = job['source_authorization']
+                        if authorization:
+                            try:
+                                final_key = canonical_requested_url(final, testing=testing)
+                            except (ValueError, TypeError):
+                                authorization = None
+                            else:
+                                authorization = ({**authorization, 'final_url': final_key}
+                                                 if registrable_domain(final_key) in scope
+                                                 and domain_allowed(final_key, job['domains']) else None)
                         remember_web_target_block(history, job['url'], disposition,
                                                   status=fetched.status, clock=clock, testing=testing)
                         # A failed extraction must leave a retryable latest outcome,
@@ -452,7 +470,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                             content_hash=digest(text) if text is not None else (fetched.content_hash or None),
                             observed_at=seen_at, testing=testing)
                         target_key = (job['venue_id'], job['venue_key'])
-                        if (job['depth'] == 0 and fetched.outcome == 'ok'
+                        if (job['depth'] == 0 and authorization and fetched.outcome == 'ok'
                                 and disposition in ('ready', 'empty_body')
                                 and children.get(target_key, 0) < SUBPAGE_MAX):
                             fresh_children, deferred_children = [], []
@@ -487,13 +505,16 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                                 pending.move_to_end(child_key, last=False)
                             children[target_key] = children.get(target_key, 0) + len(selected)
                         if disposition != 'ready':
-                            state.complete(job['url'], disposition)
+                            if not proxy_outage:
+                                state.complete(job['url'], disposition)
                             pages.append({'url': job['url'], 'disposition': disposition})
                             continue
+                        row = {**job, 'source_authorization': authorization,
+                               'source_type': 'own_site' if authorization else 'third_party',
+                               'text': text, 'seen_at': seen_at, 'final_url': final, '_testing': testing}
                         proposal_evidence.extend(inspect_page(
-                            job, fetched, observed_at=seen_at, disposition=disposition))
-                        ready.append({**job, 'text': text, 'seen_at': seen_at,
-                                      'final_url': fetched.url or job['url'], '_testing': testing})
+                            row, fetched, observed_at=seen_at, disposition=disposition))
+                        ready.append(row)
                 finally:
                     fetcher.close()
         except ActiveBusy:

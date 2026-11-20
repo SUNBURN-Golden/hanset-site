@@ -168,6 +168,8 @@ class State:
         }
         if 'proxy_heal' in result:
             body['proxy_heal'] = dict(result['proxy_heal'])
+        if 'web_egress' in result:
+            body['web_egress'] = dict(result['web_egress'])
         if result.get('primary_skipped') == 'insufficient_balance':
             body['primary_skipped'] = 'insufficient_balance'
         atomic_json(self.directory / 'status.json', body)

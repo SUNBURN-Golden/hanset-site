@@ -9,7 +9,7 @@ from pathlib import Path
 from .db import deterministic_id
 from .util.pii import strip_pii
 from .util.timeutil import kst_now
-from .util.urls import canonicalize, registrable_domain, is_excluded, is_denied
+from .util.urls import canonicalize, registrable_domain, is_collect_denied, is_excluded, is_denied
 from .util.followups import portal_domains
 
 def normalize_name(name):
@@ -40,7 +40,7 @@ def seed(db, records=(), *, paths=(), approved_sources=None, refreeze=False, clo
         entries=data if isinstance(data,list) else data.get('sources',data.get('origins',[]))
         for item in entries:
             url=item if isinstance(item,str) else item.get('url',item.get('origin',''))
-            if url and not is_denied(url) and not is_excluded(url): domains.append(registrable_domain(url))
+            if url and not is_collect_denied(url): domains.append(registrable_domain(url))
     safe=[]
     for row in rows:
         name=strip_pii(row.get('name','')); website=strip_pii(row.get('website',''))
@@ -49,13 +49,13 @@ def seed(db, records=(), *, paths=(), approved_sources=None, refreeze=False, clo
             if website: website=canonicalize(website)
         except ValueError:
             website=''
-        if is_excluded(name,website) or (website and is_denied(website)): continue
+        if website and is_collect_denied(website): continue
         safe.append((name,normalize_name(name),registrable_domain(website) if website else '',website))
     sid=deterministic_id(safe,sorted(domains),kst_now(clock).isoformat() if refreeze else 'initial')
     now=kst_now(clock).isoformat()
     with db:
         for name,norm,domain,url in safe:
-            db.execute('INSERT OR IGNORE INTO seed_venues VALUES (?,?,?,?,?,?,?)',(deterministic_id(sid,norm,domain),sid,name,norm,domain,url,now))
+            db.execute('INSERT OR IGNORE INTO seed_venues VALUES (?,?,?,?,?,?,?)',(deterministic_id(sid,norm,domain,url),sid,name,norm,domain,url,now))
             if domain: domains.append(domain)
         for domain in set(domains): db.execute('INSERT OR IGNORE INTO seed_domains VALUES (?,?,?,?)',(deterministic_id(sid,domain),sid,domain,now))
         db.execute("INSERT INTO run_checkpoints(checkpoint_id,cursor,updated_at) VALUES ('seed_freeze',?,?) ON CONFLICT(checkpoint_id) DO UPDATE SET cursor=excluded.cursor,updated_at=excluded.updated_at",(sid,now))

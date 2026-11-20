@@ -9,6 +9,7 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from .changes import DETECTOR_VERSION, FIELDS, HEX, closure_state, has_schema, put_meta, review_holds, safe_text, source_conflicts
+from .config import official_site
 from .normalize import stable_json
 from .targets import canonical_requested_url
 
@@ -96,7 +97,7 @@ def _safe_event(event):
         return False
     try:
         for key in ('requested_url', 'final_url'):
-            if canonical_requested_url(event[key]) != event[key]:
+            if canonical_requested_url(event[key]) != event[key] or not official_site(event[key]):
                 return False
         for key in ('venue_id', 'venue_key', 'qualifier_key'):
             if not safe_text(event[key]):

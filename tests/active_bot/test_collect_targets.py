@@ -24,6 +24,10 @@ def eligible(db, n, *, website=None, domains=(), kind='sauna', state='active', f
     return target
 
 
+def first_party(target):
+    return {**target, 'official_urls': target['urls'], 'scope_domains': target['domains']}
+
+
 def assembly(env, **kwargs):
     settings, clock, _ = env
     return assemble_targets(settings, now=kst_now(clock), testing=True, **kwargs)
@@ -46,7 +50,7 @@ def test_derived_candidates_and_plan_are_read_only(env, monkeypatch):
     monkeypatch.setattr('hanset_active.gaps.reopen', forbidden)
     result = assembly(env)
     assert result['targets_status'] == 'missing' and result['db_status'] == 'ok'
-    assert result['targets'] == [target]
+    assert result['targets'] == [first_party(target)]
     assert result['snapshot'][0][0]['channels'] == ['web']
     outcome = run_plan(settings, clock=clock, ranking='local', testing=True)
     plan = json.loads((settings.data_dir / 'plans' / (outcome['day'] + '.json')).read_text())
@@ -164,12 +168,7 @@ def test_seed_only_targets_are_stable_web_only_and_read_only(env):
 
 
 @pytest.mark.parametrize('name,domain,website,approved', [
-    ('Seed Spa A', 'portal.example.test', 'https://portal.example.test/venue', True),
-    ('Seed Spa A', 'naver.me', None, True),
-    ('Seed Spa A', 'naver.com', 'https://map.naver.com/venue', True),
     ('Seed Spa A', 'instagram.com', 'https://instagram.com/venue', True),
-    ('RUNPORT Box B', 'box.example.test', None, True),
-    ('Seed Spa A', 'spa.example.test', 'https://spa.example.test/RUNPORT', True),
     ('Seed Spa A 추천', 'spa.example.test', None, True),
     ('Seed Spa A', 'spa.example.test', 'http://spa.example.test/venue', True),
     ('Seed Spa A', 'spa.example.test', None, False),
@@ -177,10 +176,8 @@ def test_seed_only_targets_are_stable_web_only_and_read_only(env):
     ('Seed Spa A', 'spa.example.test', 'https://localhost/venue', True),
     ('Seed Spa A', 'spa.example.test', 'https://spa.example.test:invalid/', True),
 ])
-def test_seed_url_guards_also_apply_to_gap_augmentation(env, monkeypatch, name, domain, website, approved):
+def test_seed_url_guards_also_apply_to_gap_augmentation(env, name, domain, website, approved):
     _, _, db = env
-    if domain == 'portal.example.test':
-        monkeypatch.setattr('hanset_active.util.followups.portal_domains', lambda: {'example.test'})
     seed_rows(db, name=name, domain=domain, website=website, approved=approved)
     assert assembly(env)['targets'] == []
     target = eligible(db, 1)
@@ -214,24 +211,24 @@ def test_manual_or_disabled_seed_selector_never_extends_authorization(env, match
               'tavily': {'venue_id': target['venue_id'], 'field': 'hours'}}
     path = settings.data_dir / 'web_targets.json'
     save_targets(path, [manual])
-    assert assembly(env)['targets'] == [manual]
+    assert assembly(env)['targets'] == [first_party(manual)]
     path.write_text(json.dumps({'schema_version': 1, 'targets': [
         {'enabled': False, 'venue_id': 'old-id', 'venue_key': 'Seed Spa A'},
     ]}))
     assert assembly(env)['targets'] == []
 
 
-def test_gap_then_seed_fallbacks_fill_target_and_url_caps(env):
+def test_gap_then_seed_fallbacks_fill_target_cap_with_all_urls(env):
     _, _, db = env
     gap_target = eligible(db, 1, website='https://gap.example.test/hours')
-    # A seed-backed existing identity with no gaps may receive up to three URLs.
+    # A seed-backed existing identity with no gaps keeps every distinct URL.
     existing = venue(db, 2)
     for n in range(5):
         seed_rows(db, existing, domain=f'branch{n}.example.test',
                   website=f'https://branch{n}.example.test/location{n}')
     result = assembly(env)['targets']
     assert [t['venue_id'] for t in result] == [gap_target['venue_id'], existing['venue_id']]
-    assert len(result[1]['urls']) == 3 and len(set(result[1]['urls'])) == 3
+    assert len(result[1]['urls']) == 5 and len(set(result[1]['urls'])) == 5
     for n in range(MAX_TARGETS):
         seed_rows(db, name=f'Seed Spa A {n}', domain=f'box{n}.example.test',
                   website=f'https://box{n}.example.test/location{n}')
@@ -379,12 +376,12 @@ def test_snapshot_reuse_and_mid_snapshot_failure_discards_partial_derivation(env
         return original(db, *args, **kwargs)
     monkeypatch.setattr(planning, '_snapshot_rows', failed)
     result = assembly(env)
-    assert result['db_status'] == 'unreadable' and result['targets'] == [manual]
+    assert result['db_status'] == 'unreadable' and result['targets'] == [first_party(manual)]
     assert codes(result)['active_db_unreadable'] == 1
     assert result['snapshot'][0][0]['identity_status'] == 'unknown'
     assert _change_targets(settings) is None
     # Ad-hoc authorization never consults the failed active DB.
-    assert _change_targets(settings, settings.data_dir / 'web_targets.json') == [manual]
+    assert _change_targets(settings, settings.data_dir / 'web_targets.json') == [first_party(manual)]
 
 
 def test_ownership_fingerprint_changes_and_no_venues_is_a_noop(env):

@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from hanset_active.util.urls import canonicalize, is_denied, is_excluded, literal_private, registrable_domain
+from hanset_active.util.urls import canonicalize, is_collect_denied, is_denied, is_excluded, literal_private, registrable_domain
 
 from . import CollectError
 from .config import canonical_instagram, handle_valid, outside
@@ -15,15 +15,17 @@ from .normalize import stable_json
 MAX_POLICY_BYTES = 512_000
 MAX_APPROVALS = 1000
 _KEYS = {'venue_id', 'venue_key', 'source_url', 'source_kind', 'registrable_domain',
-         'domain_boundary_reviewed', 'document_origin_group', 'approved_at', 'official_handle'}
+         'domain_boundary_reviewed', 'document_origin_group', 'approved_at', 'official_handle', 'review_only'}
 
 
-def source_identity(url, kind):
+def source_identity(url, kind, *, review_only=False):
     if not isinstance(url, str) or len(url) > 2000:
         raise ValueError
     if kind == 'instagram':
+        if review_only:
+            raise ValueError
         return canonical_instagram(url)[0]
-    if kind != 'web' or is_denied(url) or is_excluded(url) or literal_private(url):
+    if kind != 'web':
         raise ValueError
     parsed = urlsplit(url)
     # Reject credentials and sensitive query content rather than sanitizing it
@@ -31,8 +33,11 @@ def source_identity(url, kind):
     canonical = canonicalize(url)
     if parsed.scheme != 'https' or parsed.username or parsed.password or '[token]' in canonical or '[email]' in canonical or '[phone]' in canonical:
         raise ValueError
-    if is_denied(canonical) or is_excluded(canonical) or literal_private(canonical):
-        raise ValueError
+    for identity in (url, canonical):
+        if literal_private(identity) or is_collect_denied(identity):
+            raise ValueError
+        if not review_only and (is_denied(identity) or is_excluded(identity)):
+            raise ValueError
     return canonical
 
 
@@ -74,7 +79,7 @@ def load_policy(path=None, *, today=None):
             raise ValueError
         approvals = []
         for row in rows:
-            required = _KEYS - {'official_handle'}
+            required = _KEYS - {'official_handle', 'review_only'}
             if not isinstance(row, dict) or set(row) - _KEYS or not required <= set(row):
                 raise ValueError
             if not all(isinstance(row[key], str) and 0 < len(row[key]) <= 200 for key in ('venue_id', 'venue_key', 'document_origin_group', 'approved_at')):
@@ -82,7 +87,10 @@ def load_policy(path=None, *, today=None):
             approved = date.fromisoformat(row['approved_at'])
             if approved.isoformat() != row['approved_at'] or (today and approved > today):
                 raise ValueError
-            url = source_identity(row['source_url'], row['source_kind'])
+            review_only = row.get('review_only', False)
+            if type(review_only) is not bool or ('review_only' in row and row['source_kind'] != 'web'):
+                raise ValueError
+            url = source_identity(row['source_url'], row['source_kind'], review_only=review_only)
             if row['domain_boundary_reviewed'] is not True or not _reviewed_domain(url, row['registrable_domain']):
                 raise ValueError
             if row['source_kind'] == 'instagram':
@@ -100,7 +108,8 @@ def load_policy(path=None, *, today=None):
 
 def approval_for(claim, policy):
     try:
-        url = source_identity(claim['source_url'], claim['source_kind'])
+        kind = claim['source_kind']
+        url = source_identity(claim['source_url'], kind, review_only=kind == 'web')
     except (ValueError, TypeError, CollectError):
         return None, 'invalid_source_url'
     matches = [row for row in policy['approvals'] if row['source_url'] == url]
@@ -128,6 +137,9 @@ def independence(left, right):
         return None
     return {'claim_ids': sorted([left['claim_id'], right['claim_id']]),
             'source_urls': sorted([a['source_url'], b['source_url']]),
+            'source_approvals': [
+                {'source_url': row['source_url'], 'authority': 'review_only' if row.get('review_only') else 'official'}
+                for row in sorted((a, b), key=lambda row: row['source_url'])],
             'registrable_domains': sorted([da, db]),
             'document_origin_groups': sorted([a['document_origin_group'], b['document_origin_group']]),
             'official_web_required': True}

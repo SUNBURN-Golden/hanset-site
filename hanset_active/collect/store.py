@@ -352,11 +352,15 @@ def _clean(value):
     return not any(secret and secret in blob for secret in secrets())
 
 
-def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key, seen_at, clock=None):
+def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key, seen_at,
+           clock=None, source_type=None):
     """Insert one receipt and its grounded claims, or return the existing receipt."""
     if kind not in ('web', 'instagram'):
         raise CollectError('runtime_error')
-    source_type = 'own_site' if kind == 'web' else 'sns'
+    if source_type is None:
+        source_type = 'own_site' if kind == 'web' else 'sns'
+    if source_type not in ({'own_site', 'third_party'} if kind == 'web' else {'sns'}):
+        raise CollectError('runtime_error')
     db.execute('BEGIN IMMEDIATE')
     try:
         existing = db.execute(
