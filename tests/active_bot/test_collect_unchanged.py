@@ -2,6 +2,7 @@
 import json
 import sqlite3
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,7 +22,7 @@ from tests.active_bot.test_collect_deepseek import (
 )
 from tests.active_bot.test_collect_plan import env, save_targets
 from tests.active_bot.test_collect_subpages import ROOT, fake_pages, html, setup_run
-from tests.active_bot.test_collect_targets import eligible
+from tests.active_bot.test_collect_targets import eligible, seed_rows
 
 DAY = 86400
 TEXT = (HOURS + ' Official guest information. ' * 8).strip()
@@ -150,6 +151,93 @@ def test_deferred_child_yields_to_real_gap_derived_target(env, monkeypatch):
     result = service.run_web(settings, clock=clock, session=Model(empty=True), testing=True)
     assert result['success'] and calls == [ROOT, other]
     assert result['rejections'] == {'recent_unchanged_deferred': 1}
+
+
+def test_new_seed_yields_to_fresh_gap_but_runs_before_deferred_gap(env, monkeypatch):
+    settings, clock, active = env
+    recent, gap, new_seed = ('https://example.test/hours', 'https://example.test/pricing',
+                             'https://spa.example.test/visit')
+    established = eligible(active, 1, website=recent)
+    eligible(active, 2, website=gap)
+    seed_rows(active, name='Seed Spa A', website=new_seed, domain='example.test')
+    seed_history(settings, recent, clock)
+    clock.sleep(DAY)
+    calls = fake_pages(monkeypatch, {url: html() for url in (recent, gap, new_seed)})
+    monkeypatch.setattr(service, 'PAGE_RUN_CAP', 1)
+    first = service.run_web(settings, clock=clock, session=Model(empty=True), testing=True)
+    assert first['success'] and calls == [gap]
+    second = service.run_web(settings, clock=clock, session=Model(empty=True), testing=True)
+    assert second['success'] and second['counts']['pages'] == 2 and calls == [gap, new_seed]
+    day = kst_now(clock).date().isoformat()
+    plan = json.loads((settings.data_dir / 'plans' / (day + '.json')).read_text())
+    assert plan['web_targets'][0]['venue_id'] == established['venue_id']
+    assert second['rejections'] == {'recent_unchanged_deferred': 1}
+
+    clock.sleep(DAY)
+    later_seed = 'https://box.example.test/visit'
+    seed_rows(active, name='Box B', website=later_seed, domain='example.test')
+    calls = fake_pages(monkeypatch, {url: html() for url in (recent, gap, new_seed, later_seed)})
+    monkeypatch.setattr(service, 'PAGE_RUN_CAP', 4)
+    later = service.run_web(settings, clock=clock, session=Model(empty=True), testing=True)
+    assert later['success'] and calls == [later_seed, recent, gap, new_seed]
+    assert later['rejections'] == {'recent_unchanged_deferred': 3}
+
+
+def test_seed_revisits_rotate_oldest_first_after_unseen_work(env, monkeypatch):
+    settings, clock, active = env
+    urls = [f'https://example.test/venue/{index}' for index in range(3)]
+    for index, url in enumerate(urls):
+        seed_rows(active, name=f'Seed Spa A {index}', website=url, domain='example.test')
+    assembled = service.assemble_targets(settings, now=kst_now(clock))
+    plan_run = service.ensure_daily_plan(
+        settings, State(settings.data_dir, clock), assembled['targets'], assembled['targets_status'],
+        clock=clock, testing=True, ranking='local', assembled=assembled,
+    )
+    recent, oldest, unseen = [target['urls'][0] for target in plan_run['web_targets']]
+    seed_history(settings, oldest, clock, disposition='error')
+    clock.sleep(DAY)
+    seed_history(settings, recent, clock, disposition='error')
+    calls = fake_pages(monkeypatch, {url: html() for url in urls})
+    result = service.run_web(settings, clock=clock, session=Model(empty=True), testing=True)
+    assert result['success'] and calls == [unseen, oldest, recent]
+
+
+def test_seed_duplicate_uses_gap_identity_once(env, monkeypatch):
+    settings, clock, active = env
+    url = 'https://example.test/visit'
+    target = eligible(active, 1, website=url)
+    seed_rows(active, name='Seed Spa A', website=url + '#official', domain='example.test')
+    calls = fake_pages(monkeypatch, {url: html()})
+    result = service.run_web(settings, clock=clock, session=Model(empty=True), testing=True)
+    assert result['success'] and calls == [url]
+    with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
+        assert db.execute('SELECT venue_id FROM web_change_observations').fetchall() == [(target['venue_id'],)]
+
+
+@pytest.mark.parametrize('destination,robots_redirect', [
+    ('https://example.invalid/visit', False),
+    ('http://example.test/visit', False),
+    ('https://example.test/visit?sid=fixture', False),
+    ('https://naver.me/venue', False),
+    ('http://example.test/robots.txt', True),
+])
+def test_seed_redirect_rejected_before_destination_request(env, monkeypatch, destination, robots_redirect):
+    settings, clock, active = env
+    url, robots = 'https://example.test/entry', 'https://example.test/robots.txt'
+    seed_rows(active, name='Seed Spa A', website=url, domain='example.test')
+    calls = []
+
+    def request(self, requested, kind, headers=None):
+        calls.append(requested)
+        if requested == (robots if robots_redirect else url):
+            return SimpleNamespace(status_code=302, headers={'Location': destination}), b'', ''
+        assert requested == robots
+        return SimpleNamespace(status_code=200, headers={}), b'User-agent: *\nDisallow:', ''
+
+    monkeypatch.setattr(service.Fetcher, '_request', request)
+    result = service.run_web(settings, clock=clock, session=Model(empty=True), testing=True)
+    assert result['success'] and calls == ([robots] if robots_redirect else [robots, url])
+    assert result['pages'][-1]['disposition'] == ('robots_disallowed' if robots_redirect else 'denied')
 
 
 @pytest.mark.parametrize('gate', ['credentials', 'daily_cap', 'model_budget', 'proxy', 'fetch'])

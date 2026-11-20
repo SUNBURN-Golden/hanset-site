@@ -15,7 +15,10 @@ from . import gaps
 from .discover.search import queries, usable_providers, DiscoveryDeferred
 from .util.timeutil import kst_now
 from .util.pii import strip_pii
-from .maintenance import prune_offsite_followups, requeue_browser_aux_softfail_trials, requeue_robots_trials, requeue_spa_shell_trials, scrub_portal_venue_domains
+from .maintenance import (close_article_title_venues, prune_offsite_followups,
+                          requeue_browser_aux_softfail_trials, requeue_robots_trials,
+                          requeue_spa_shell_trials, scrub_portal_venue_domains)
+from .venues import is_article_title
 
 BACKOFF_SECONDS = (600, 3600, 21600)
 
@@ -55,7 +58,8 @@ def bootstrap(fetcher):
                 if reopened:
                     db.execute("DELETE FROM run_checkpoints WHERE task_id=? AND kind='discovery:osm'",(tid,))
     for row in db.execute("SELECT s.* FROM seed_venues s JOIN run_checkpoints c ON c.checkpoint_id='seed_freeze' AND c.cursor=s.seed_id").fetchall():
-        if row['website']: fetcher.register_candidate(row['website'])
+        if row['website'] and not is_article_title(row['name']):
+            fetcher.register_candidate(row['website'])
     now = kst_now(clock)
     for gap in db.execute('SELECT * FROM gaps WHERE next_at<=?',(now.isoformat(),)).fetchall():
         gaps.reopen(db,gap['gap_id'],clock=clock)
@@ -105,6 +109,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
         with RunLock(db,fetcher.settings.data_dir,run_id,clock=clock) as lock:
             if dry_run:
                 return {'state':'dry_run','tasks':[dict(r) for r in db.execute("SELECT * FROM tasks WHERE state='pending'") if r['task_class'] in selected], 'requests':0}
+            close_article_title_venues(db, clock=clock)
             scrub_portal_venue_domains(db,clock=clock)
             prune_offsite_followups(db,clock=clock,apply=True)
             for domain in requeue_robots_trials(db,clock=clock):

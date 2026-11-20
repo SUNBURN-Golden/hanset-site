@@ -3,12 +3,40 @@ import json
 import pytest
 from hanset_active.cli import main
 from hanset_active.db import deterministic_id
-from hanset_active.maintenance import prune_offsite_followups, requeue_browser_aux_softfail_trials, requeue_robots_trials, requeue_spa_shell_trials
+from hanset_active.maintenance import (close_article_title_venues, prune_offsite_followups,
+                                       requeue_browser_aux_softfail_trials, requeue_robots_trials,
+                                       requeue_spa_shell_trials)
 from hanset_active.runner import run, fail_task
 from hanset_active.executor import TaskFailure
 from hanset_active.scheduler import enqueue
 from hanset_active.util.timeutil import kst_now
 from hanset_active.venues import upsert_venue
+
+
+def test_article_title_maintenance_runs_once_and_preserves_evidence(bot):
+    db = bot.db
+    with db:
+        db.executemany('INSERT INTO venues(venue_id,venue_key,name,state) VALUES (?,?,?,?)', [
+            ('legacy', 'legacy', 'Seed Spa A 추천!', 'active'),
+            ('already-closed', 'already-closed', 'Box B TOP 5', 'closed'),
+            ('keep', 'keep', 'Seed Spa A', 'unknown'),
+        ])
+        db.execute('INSERT INTO observations(obs_id,venue_key,field,value_hash,label_status) VALUES (?,?,?,?,?)',
+                   ('legacy-obs', 'legacy', 'hours', 'fixture', 'source_claim'))
+    before = list(db.iterdump())
+    assert run(bot, dry_run=True, initialize=False)['state'] == 'dry_run'
+    assert list(db.iterdump()) == before
+    assert run(bot, max_requests=0, initialize=False)['state'] == 'budget_reached'
+    assert dict(db.execute('SELECT venue_id,state FROM venues').fetchall()) == {
+        'legacy': 'closed', 'already-closed': 'closed', 'keep': 'unknown',
+    }
+    assert [tuple(row) for row in db.execute('SELECT kind,venue_id,details FROM review_queue')] == [
+        ('article_title', 'legacy', '{"reason": "article_title"}'),
+    ]
+    assert db.execute('SELECT label_status FROM observations').fetchone()[0] == 'source_claim'
+    changes = db.total_changes
+    assert close_article_title_venues(db, clock=bot.clock) == 0
+    assert db.total_changes == changes
 
 def test_prune_followups(bot):
     vid=upsert_venue(bot.db,'Example Sauna',website='https://example.com')

@@ -293,12 +293,8 @@ def remember_web_target_observation(db, url, disposition, *, observed_at, conten
                    (key, content_hash, disposition, at.isoformat()))
 
 
-def recent_unchanged_web_targets(db, *, clock=None, testing=False):
-    """Canonical URL hashes eligible for soft deferral, including legacy history.
-
-    A scheduling row takes precedence over legacy history even after expiry.
-    An unmatched legacy change observation gives no evidence for deferral.
-    """
+def web_target_history(db, *, clock=None, testing=False):
+    """Return last fetch times and unchanged deferrals by canonical URL hash."""
     from .targets import canonical_requested_url
     @cache
     def safe_key(url):
@@ -339,10 +335,16 @@ def recent_unchanged_web_targets(db, *, clock=None, testing=False):
             latest(key, row['content_hash'], disposition, at)
     history.update(scheduling)
     now = kst_now(clock)
-    return {key for key, (content_hash, disposition, at) in history.items()
-            if at is not None and timedelta(0) <= now - at < timedelta(days=UNCHANGED_COOLDOWN_DAYS)
-            and (disposition in {'duplicate', 'empty_extraction'}
-                 or (disposition == 'applied' and (key, content_hash) in applied))}
+    last_fetched = {key: at for key, (_, _, at) in history.items() if at is not None and at <= now}
+    unchanged = {key for key, (content_hash, disposition, _) in history.items()
+                 if key in last_fetched and now - last_fetched[key] < timedelta(days=UNCHANGED_COOLDOWN_DAYS)
+                 and (disposition in {'duplicate', 'empty_extraction'}
+                      or (disposition == 'applied' and (key, content_hash) in applied))}
+    return last_fetched, unchanged
+
+
+def recent_unchanged_web_targets(db, *, clock=None, testing=False):
+    return web_target_history(db, clock=clock, testing=testing)[1]
 
 
 def _clean(value):

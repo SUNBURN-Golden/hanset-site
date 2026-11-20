@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import csv
 import json
 import re
+import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
 from .db import deterministic_id
@@ -13,6 +14,15 @@ from .util.followups import portal_domains
 
 def normalize_name(name):
     return re.sub(r'[^a-z0-9가-힣]', '', re.sub(r'본점|지점|branch|main branch','',name.casefold()))
+
+_ARTICLE_TITLE = re.compile(r'추천|어디|총정리|후기|[?!]|\bbest\b|\btop\s*\d+|^\d+\s*(?:곳|선)')
+
+
+def is_article_title(name):
+    """Detect article markers in a would-be venue name."""
+    normalized = unicodedata.normalize('NFKC', name or '').strip().casefold()
+    return bool(_ARTICLE_TITLE.search(normalized))
+
 
 def seed(db, records=(), *, paths=(), approved_sources=None, refreeze=False, clock=None):
     previous=db.execute('SELECT seed_id FROM seed_venues UNION SELECT seed_id FROM seed_domains LIMIT 1').fetchone()
@@ -34,6 +44,7 @@ def seed(db, records=(), *, paths=(), approved_sources=None, refreeze=False, clo
     safe=[]
     for row in rows:
         name=strip_pii(row.get('name','')); website=strip_pii(row.get('website',''))
+        if is_article_title(name): continue
         try:
             if website: website=canonicalize(website)
         except ValueError:
@@ -80,7 +91,7 @@ def upsert_venue(db, name, *, website='', city='', region='', venue_type='sauna'
     # context=None => trusted seed/legacy path (no gate); any string (even empty) => discovered venue, gated.
     if context is not None and not venue_relevant(name, context): return None
     name,website,city,region,discovered_via=map(strip_pii,(name,website,city,region,discovered_via))
-    if not name or is_excluded(name,website) or (website and is_denied(website)): return None
+    if not name or is_article_title(name) or is_excluded(name,website) or (website and is_denied(website)): return None
     website=canonicalize(website) if website else ''
     if website and registrable_domain(website) in portal_domains(): website=''  # a portal is never a venue's own site
     norm=normalize_name(name); domain=registrable_domain(website) if website else ''

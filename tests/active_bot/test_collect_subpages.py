@@ -36,7 +36,8 @@ def setup_run(tmp_path, monkeypatch, urls=None):
 def fake_pages(monkeypatch, documents):
     calls = []
 
-    def fetch(self, url, *, subpage=False):
+    def fetch(self, url, *, subpage=False, url_allowed=None):
+        assert url_allowed is None or url_allowed(url)
         calls.append(url)
         return FetchResult(url=url, outcome='ok', status=200, content=documents[url], content_type='text/html')
 

@@ -91,29 +91,34 @@ def test_http_only_is_not_rewritten_but_independent_domain_can_be_used(env):
     assert '/sauna/hours' not in result['targets'][0]['urls'][0]
 
 
-def seed_rows(db, target, *, seed_id='frozen', domain='seed.example', name=None):
+def seed_rows(db, target=None, *, seed_id='frozen', domain='seed.example.test', name=None,
+              website=None, approved=True):
     name = name or target['name']
+    norm = normalize_name(name)
     with db:
         db.execute("INSERT OR REPLACE INTO run_checkpoints(checkpoint_id,cursor) VALUES ('seed_freeze','frozen')")
-        db.execute('INSERT INTO seed_domains(seed_domain_id,seed_id,domain) VALUES (?,?,?)',
-                   ('domain-' + seed_id + domain, seed_id, domain))
-        db.execute('INSERT INTO seed_venues(seed_venue_id,seed_id,name,normalized_name,domain) VALUES (?,?,?,?,?)',
-                   ('venue-' + seed_id + domain, seed_id, name, normalize_name(name), domain))
+        if approved:
+            db.execute('INSERT OR IGNORE INTO seed_domains(seed_domain_id,seed_id,domain) VALUES (?,?,?)',
+                       ('domain-' + seed_id + domain, seed_id, domain))
+        db.execute('INSERT INTO seed_venues(seed_venue_id,seed_id,name,normalized_name,domain,website) VALUES (?,?,?,?,?,?)',
+                   ('venue-' + seed_id + domain + norm, seed_id, name, norm, domain, website))
 
 
 def test_frozen_seed_requires_unique_exact_name_and_domain_tie(env):
     _, _, db = env
     target = eligible(db, 1)
     seed_rows(db, target)
-    seed_rows(db, target, seed_id='obsolete', domain='obsolete.example')
-    seed_rows(db, target, domain='unrelated.example', name='Unrelated Venue')
+    seed_rows(db, target, seed_id='obsolete', domain='obsolete.example.test')
+    seed_rows(db, domain='unrelated.example.test', name='Box B')
     with db:
         db.execute("UPDATE venues SET seed_match='frozen_seed'")
-    assert assembly(env)['targets'][0]['urls'] == ['https://seed.example']
+    assert [(t['name'], t['urls']) for t in assembly(env)['targets']] == [
+        (target['name'], ['https://seed.example.test']), ('Box B', ['https://unrelated.example.test']),
+    ]
     other = eligible(db, 2)
     with db:
         db.execute('UPDATE venues SET name=? WHERE venue_id=?', (target['name'], other['venue_id']))
-    assert assembly(env)['targets'] == []
+    assert [t['name'] for t in assembly(env)['targets']] == ['Box B']
 
 
 def test_seed_alias_tie_and_missing_domain_or_marker_do_not_attach(env):
@@ -123,14 +128,117 @@ def test_seed_alias_tie_and_missing_domain_or_marker_do_not_attach(env):
         db.execute('INSERT INTO venue_aliases(alias_id,venue_id,alias,normalized_name) VALUES (?,?,?,?)',
                    ('alias', target['venue_id'], 'Old Fixture', normalize_name('Old Fixture')))
     seed_rows(db, target, name='Old Fixture')
-    assert assembly(env)['targets'][0]['urls'] == ['https://seed.example']
+    assert assembly(env)['targets'][0]['urls'] == ['https://seed.example.test']
     with db:
         db.execute('DELETE FROM seed_domains')
     assert assembly(env)['targets'] == []
     with db:
-        db.execute("INSERT INTO seed_domains(seed_domain_id,seed_id,domain) VALUES ('sd','frozen','seed.example')")
+        db.execute("INSERT INTO seed_domains(seed_domain_id,seed_id,domain) VALUES ('sd','frozen','seed.example.test')")
         db.execute('DELETE FROM run_checkpoints')
     assert assembly(env)['targets'] == []
+
+
+def test_seed_only_targets_are_stable_web_only_and_read_only(env):
+    settings, clock, db = env
+    domain = 'spa.example.test'
+    url = f'https://{domain}/official/hours'
+    for freeze in ('old', 'frozen'):
+        seed_rows(db, name='Seed Spa A', domain=domain, website=url, seed_id=freeze, approved=False)
+    seed_rows(db, name='Box B', domain='box.example.test')
+    before = list(db.iterdump())
+    result = assembly(env)
+    by_name = {t['name']: t for t in result['targets']}
+    assert set(by_name) == {'Seed Spa A', 'Box B'}
+    assert by_name['Seed Spa A']['urls'] == [url]
+    assert by_name['Box B']['urls'] == ['https://box.example.test']
+    assert all(t['venue_id'].startswith('seed:') and t['tavily'] is None for t in by_name.values())
+    assert {tuple(r['channels']) for r in result['snapshot'][0]} == {('web',)}
+    outcome = run_plan(settings, clock=clock, ranking='local', testing=True)
+    plan = json.loads((settings.data_dir / 'plans' / (outcome['day'] + '.json')).read_text())
+    assert validate_plan(plan, outcome['day']) and len(plan['web_targets']) == 2
+    assert plan['ig_read_list'] == []
+    assert list(db.iterdump()) == before
+    with db:
+        db.execute("UPDATE run_checkpoints SET cursor='old' WHERE checkpoint_id='seed_freeze'")
+    assert assembly(env)['targets'] == [by_name['Seed Spa A']]
+
+
+@pytest.mark.parametrize('name,domain,website,approved', [
+    ('Seed Spa A', 'portal.example.test', 'https://portal.example.test/venue', True),
+    ('Seed Spa A', 'naver.me', None, True),
+    ('Seed Spa A', 'naver.com', 'https://map.naver.com/venue', True),
+    ('Seed Spa A', 'instagram.com', 'https://instagram.com/venue', True),
+    ('RUNPORT Box B', 'box.example.test', None, True),
+    ('Seed Spa A', 'spa.example.test', 'https://spa.example.test/RUNPORT', True),
+    ('Seed Spa A 추천', 'spa.example.test', None, True),
+    ('Seed Spa A', 'spa.example.test', 'http://spa.example.test/venue', True),
+    ('Seed Spa A', 'spa.example.test', None, False),
+    ('Seed Spa A', 'spa.example.test', 'https://spa.example.test/?sid=fixture', True),
+    ('Seed Spa A', 'spa.example.test', 'https://localhost/venue', True),
+    ('Seed Spa A', 'spa.example.test', 'https://spa.example.test:invalid/', True),
+])
+def test_seed_url_guards_also_apply_to_gap_augmentation(env, monkeypatch, name, domain, website, approved):
+    _, _, db = env
+    if domain == 'portal.example.test':
+        monkeypatch.setattr('hanset_active.util.followups.portal_domains', lambda: {'example.test'})
+    seed_rows(db, name=name, domain=domain, website=website, approved=approved)
+    assert assembly(env)['targets'] == []
+    target = eligible(db, 1)
+    with db:
+        db.execute('UPDATE venues SET name=? WHERE venue_id=?', (name, target['venue_id']))
+    assert assembly(env)['targets'] == []
+
+
+def test_seed_same_host_is_not_identity_and_closed_match_is_skipped(env):
+    _, _, db = env
+    gap_target = eligible(db, 1, website='https://spa.example.test/gap')
+    closed = venue(db, 2, state='closed')
+    seed_rows(db, name='Seed Spa A', domain='spa.example.test', website='https://spa.example.test/seed')
+    seed_rows(db, closed, domain='closed.example.test')
+    gap_result, seed_result = assembly(env)['targets']
+    assert gap_result['venue_id'] == gap_target['venue_id'] and gap_result['urls'] == ['https://spa.example.test/gap']
+    assert seed_result['name'] == 'Seed Spa A' and seed_result['venue_id'].startswith('seed:')
+
+
+@pytest.mark.parametrize('matched', [False, True])
+def test_manual_or_disabled_seed_selector_never_extends_authorization(env, matched):
+    settings, _, db = env
+    seed_rows(db, name='Seed Spa A', domain='spa.example.test')
+    if matched:
+        target = eligible(db, 1)
+        with db:
+            db.execute("UPDATE venues SET name='Seed Spa A'")
+    else:
+        target = {'venue_id': 'operator-id', 'venue_key': 'operator-key'}
+    manual = {**target, 'name': 'Seed Spa A', 'urls': [], 'domains': {'spa.example.test'},
+              'tavily': {'venue_id': target['venue_id'], 'field': 'hours'}}
+    path = settings.data_dir / 'web_targets.json'
+    save_targets(path, [manual])
+    assert assembly(env)['targets'] == [manual]
+    path.write_text(json.dumps({'schema_version': 1, 'targets': [
+        {'enabled': False, 'venue_id': 'old-id', 'venue_key': 'Seed Spa A'},
+    ]}))
+    assert assembly(env)['targets'] == []
+
+
+def test_gap_then_seed_fallbacks_fill_target_and_url_caps(env):
+    _, _, db = env
+    gap_target = eligible(db, 1, website='https://gap.example.test/hours')
+    # A seed-backed existing identity with no gaps may receive up to three URLs.
+    existing = venue(db, 2)
+    for n in range(5):
+        seed_rows(db, existing, domain=f'branch{n}.example.test',
+                  website=f'https://branch{n}.example.test/location{n}')
+    result = assembly(env)['targets']
+    assert [t['venue_id'] for t in result] == [gap_target['venue_id'], existing['venue_id']]
+    assert len(result[1]['urls']) == 3 and len(set(result[1]['urls'])) == 3
+    for n in range(MAX_TARGETS):
+        seed_rows(db, name=f'Seed Spa A {n}', domain=f'box{n}.example.test',
+                  website=f'https://box{n}.example.test/location{n}')
+    result = assembly(env)
+    assert len(result['targets']) == MAX_TARGETS
+    assert result['targets'][0]['venue_id'] == gap_target['venue_id']
+    assert codes(result)['derived_truncated'] >= 1
 
 
 @pytest.mark.parametrize('signal', ['alias', 'name', 'domain'])
