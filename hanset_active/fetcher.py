@@ -189,7 +189,7 @@ class Fetcher:
                 self.proxy_failed=True
                 raise ProxyUnavailable('proxy_unavailable')
             return response,body,reason
-    def _robots_allowed(self,url, *, mark_inaccessible=True):
+    def _robots_allowed(self,url, *, mark_inaccessible=True, url_allowed=None):
         # fetch() defers the domain stop while considering one HTTPS origin.
         p=urlsplit(url)
         origin=p.scheme+'://'+p.netloc
@@ -215,7 +215,10 @@ class Fetcher:
                         if error or status not in (301,302,303,307,308): break
                         location=response.headers.get('Location')
                         if hop==5 or not location: break
-                        try: redirect=canonicalize(urljoin(target,location))
+                        try:
+                            destination=urljoin(target,location)
+                            if url_allowed and not url_allowed(destination): break
+                            redirect=canonicalize(destination)
                         except (ValueError,UnicodeError): break
                         if registrable_domain(redirect)!=domain or urlsplit(redirect).path!='/robots.txt' or self._reason_denied(redirect): break
                         target=redirect
@@ -241,8 +244,8 @@ class Fetcher:
                     return False,'robots_unavailable'
                 return False,'robots_disallowed'
             return True,''
-    def fetch(self,url: str, *, kind: str = 'body', parent_url: str | None = None, task_id: str | None = None, discovered_via: str | None = None, _browser_shell: bool = False, api_headers: dict | None = None, subpage: bool = False) -> FetchResult:
-        """Discovered subpages retain paths and allow two same-domain HTTPS redirects."""
+    def fetch(self,url: str, *, kind: str = 'body', parent_url: str | None = None, task_id: str | None = None, discovered_via: str | None = None, _browser_shell: bool = False, api_headers: dict | None = None, subpage: bool = False, url_allowed=None) -> FetchResult:
+        """Guard each request and apply any caller-supplied URL scope before redirects."""
         if kind not in ('body','robots','sitemap','feed','api','browser_aux'):
             raise ValueError('Unsupported request kind')
         ref=dict(parent_url=strip_pii(parent_url) if parent_url else None,task_id=task_id if task_id and self.db.execute('SELECT 1 FROM tasks WHERE task_id=?',(task_id,)).fetchone() else None,discovered_via=strip_pii(discovered_via) if discovered_via else None)
@@ -255,6 +258,8 @@ class Fetcher:
                         (deterministic_id(safe_url,ref['task_id'],outcome),ref['task_id'],safe_url,registrable_domain(url),outcome,'dead' if outcome in ('blocked','login_wall','robots_disallowed') else 'pending',kst_now(self.clock).isoformat()))
             return FetchResult(safe_url,outcome,reason=reason,fetched_at=kst_now(self.clock).isoformat(),source_ref=ref,**kw)
         try:
+            if url_allowed and not url_allowed(url):
+                return result('denied','outside requested URL scope')
             url=canonicalize(url,preserve_path=subpage)
         except (ValueError,UnicodeError):
             return result('denied','invalid URL')
@@ -272,7 +277,7 @@ class Fetcher:
             with self._lock(domain):
                 if domain in self._stopped:
                     return result('blocked',self._stopped[domain])
-                allowed,reason=self._robots_allowed(url,mark_inaccessible=False)
+                allowed,reason=self._robots_allowed(url,mark_inaccessible=False,url_allowed=url_allowed)
                 if not allowed and reason=='robots_unavailable' and urlsplit(url).scheme=='http' and not https_probed:
                     https_probed=True
                     upgraded=canonicalize(urlsplit(url)._replace(scheme='https').geturl(),preserve_path=subpage)
@@ -295,7 +300,10 @@ class Fetcher:
                     if hop==redirect_limit or not response.headers.get('Location'):
                         return result('error','redirect limit',status=status)
                     try:
-                        redirect=canonicalize(urljoin(url,response.headers['Location']),preserve_path=subpage)
+                        destination=urljoin(url,response.headers['Location'])
+                        if url_allowed and not url_allowed(destination):
+                            return result('denied','unsafe redirect',status=status)
+                        redirect=canonicalize(destination,preserve_path=subpage)
                     except (ValueError,UnicodeError):
                         return result('denied','invalid redirect')
                     if subpage and (urlsplit(redirect).scheme!='https' or registrable_domain(redirect)!=initial_domain):

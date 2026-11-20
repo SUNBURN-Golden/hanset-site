@@ -197,6 +197,20 @@ def requeue_browser_aux_softfail_trials(db, clock=None):
             reopened.append(domain)
     return reopened
 
+def close_article_title_venues(db, clock=None):
+    """Close invalid identities and record the correction without touching evidence."""
+    from .venues import is_article_title, review
+
+    changed = 0
+    with db:
+        for row in db.execute("SELECT venue_id, name FROM venues WHERE state IS NOT 'closed'").fetchall():
+            if is_article_title(row['name']):
+                db.execute("UPDATE venues SET state='closed' WHERE venue_id=?", (row['venue_id'],))
+                review(db, 'article_title', row['venue_id'], {'reason': 'article_title'}, clock)
+                changed += 1
+    return changed
+
+
 def scrub_portal_venue_domains(db, clock=None):
     """Drop portal registrable domains from venues.domains/website; audited via review_queue."""
     from .venues import review

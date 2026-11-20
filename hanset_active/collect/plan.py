@@ -4,13 +4,14 @@ import json
 import os
 import re
 import sqlite3
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from typing import Protocol
 
 from hanset_active.gaps import KEY_FIELDS, NEED_REASONS, project_needs
 from hanset_active.util.timeutil import Clock, kst_now
 from hanset_active.util.urls import is_excluded
+from hanset_active.venues import is_article_title
 from hanset_twin.daemon import AlreadyRunning, ProcessLock
 
 from . import CollectError
@@ -20,7 +21,7 @@ from .deepseek import DeepSeek, INPUT_LIMIT, OUTPUT_TOKENS, credentials_present
 from .ground import redact
 from .ingest import load_watchlist
 from .state import State, atomic_json
-from .targets import derive_target, merge_targets, ownership_index, parse_targets
+from .targets import derive_seed_targets, derive_target, merge_targets, ownership_index, parse_targets
 
 POLICY = 'gap-priority-v1'
 MAX_PLAN_BYTES = 512_000
@@ -191,11 +192,16 @@ def assemble_targets(settings, *, now, testing=False, include_watchlist=True):
             'SELECT * FROM seed_venues WHERE seed_id=? ORDER BY seed_venue_id', (seed_id,))]
         seed_domains = [dict(r) for r in db.execute(
             'SELECT * FROM seed_domains WHERE seed_id=? ORDER BY seed_domain_id', (seed_id,))]
-        ownership = ownership_index(venues, aliases, seeds, seed_domains)
+        ownership = ownership_index(venues, aliases)
         derived = []
         if status != 'invalid':
+            seed_targets = derive_seed_targets(seeds, seed_domains, ownership, notes)
+            seeds_by_identity = defaultdict(list)
+            for target in seed_targets:
+                seeds_by_identity[identity(target)].append(target)
             for venue in venues:
-                if venue['state'] == 'closed' or is_excluded(venue['name'], venue['venue_key']):
+                if (venue['state'] == 'closed' or is_article_title(venue['name'])
+                        or is_excluded(venue['name'], venue['venue_key'])):
                     continue
                 gaps = {r['field'] for r in db.execute(
                     "SELECT field FROM gaps WHERE venue_id=? AND state IN ('open','conflict')",
@@ -206,12 +212,13 @@ def assemble_targets(settings, *, now, testing=False, include_watchlist=True):
                 # Missing unrelated fields must not revive stale-satisfied gaps.
                 if not gaps.intersection(f['field_id'] for f in projected['fields']):
                     continue
-                target = derive_target(venue, ownership[2][venue['venue_id']], notes)
+                target = derive_target(venue, ownership[2][venue['venue_id']], notes,
+                                       seeds=seeds_by_identity.get(identity(venue), ()))
                 if target:
                     derived.append((target, {**venue, **projected}))
             derived.sort(key=lambda pair: _local_key(pair[1]))
             targets = merge_targets(manual, [t for t, _ in derived], disabled,
-                                    ownership, notes, testing=testing)
+                                    ownership, notes, seeds=seed_targets, testing=testing)
         materialized = _snapshot_rows(db, targets, watchlist, now=now,
                                       ownership=[venues, aliases, seed_id, seeds, seed_domains])
     except (OSError, sqlite3.Error, ValueError, TypeError):

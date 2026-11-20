@@ -1,5 +1,8 @@
 import json
-from hanset_active.venues import seed, is_new, upsert_venue, apply_observation, normalize_name
+
+import pytest
+
+from hanset_active.venues import seed, is_article_title, is_new, upsert_venue, apply_observation, normalize_name
 from hanset_active.labeling import store_observation
 from hanset_active.extract.fields import extract
 
@@ -17,6 +20,33 @@ def test_seed_freeze(bot):
 def test_empty_seed_freeze(bot):
     assert seed(bot.db)==seed(bot.db,[{'name':'Late Sauna'}])
     assert is_new(bot.db,'Late Sauna')
+
+
+@pytest.mark.parametrize('name', [
+    'Seed Spa A 추천', 'Seed Spa A ＢＥＳＴ', 'Seed Spa A top １０', 'Seed Spa A 어디',
+    'Seed Spa A 총정리', 'Seed Spa A 후기', 'Seed Spa A？', 'Seed Spa A!',
+    '  ３ 곳 Seed Spa A', '5선 Box B', 'Seed Spa A ' * 4 + '후기',
+])
+def test_article_title_rejected_before_venue_alias_or_seed_writes(bot, name):
+    db = bot.db
+    site = 'https://example.test/visit'
+    assert is_article_title(name)
+    assert upsert_venue(db, 'Seed Spa A', website=site)
+    assert upsert_venue(db, 'Box B')
+    before = list(db.iterdump())
+    assert upsert_venue(db, name, website=site) is None
+    assert upsert_venue(db, name) is None
+    assert list(db.iterdump()) == before
+    seed(db, [{'name': name, 'website': site}, {'name': 'Box B'}])
+    assert [row['name'] for row in db.execute('SELECT name FROM seed_venues')] == ['Box B']
+    assert db.execute('SELECT count(*) FROM seed_domains').fetchone()[0] == 0
+
+
+@pytest.mark.parametrize('name', ['Seed Spa A', 'Box B', 'Seed Spa A Wellness and Recreation Center',
+                                 'Bestwood Sauna', 'Top Floor Sauna', '24 Hours Spa'])
+def test_venue_name_without_article_markers_is_kept(bot, name):
+    assert not is_article_title(name)
+    assert upsert_venue(bot.db, name)
 
 def test_identity_and_review(bot):
     a=upsert_venue(bot.db,'Silver Sauna',website='https://silver.example',city='Seoul')

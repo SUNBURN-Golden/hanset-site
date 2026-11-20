@@ -1,9 +1,11 @@
 """Broad discovery uses the shared private client; every POST is mocked."""
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import closing
 from datetime import timedelta
 import json
 import os
 from pathlib import Path
+import sqlite3
 import traceback
 from unittest.mock import Mock
 
@@ -150,15 +152,23 @@ def test_shared_collector_and_discovery_allow_exactly_thirty(bot, private_client
 
 
 def test_concurrent_broad_and_collector_share_cap(bot, private_client):
-    gap = known_gap(bot)
+    vid = upsert_venue(bot.db, 'Seed Spa A', website='https://spa.example.test', city='Seoul')
+    ensure_gaps(bot.db, vid, clock=bot.clock)
+    bot.db.commit()
+    db_uri = (bot.settings.data_dir / 'test.sqlite3').as_uri() + '?mode=ro'
+
     def search(index):
         if index % 2:
             return tavily.discover_query('Seoul sauna', clock=bot.clock)
-        return discover_known_venue(bot.db, *gap, clock=bot.clock)
+        with closing(sqlite3.connect(db_uri, uri=True)) as db:
+            db.row_factory = sqlite3.Row
+            return discover_known_venue(db, vid, 'price_day_pass', clock=bot.clock)
+
     with ThreadPoolExecutor(4) as pool:
         outcomes = list(pool.map(search, range(40)))
     assert sum(o.status == 'ok' for o in outcomes) == private_client.call_count == 30
-    assert sum(o.reason == 'tavily_budget_exhausted' for o in outcomes) == 10
+    assert sum(o.status != 'ok' and o.reason == 'tavily_budget_exhausted' for o in outcomes) == 10
+    assert json.loads(usage_path().read_text())['budgets']['tavily']['days']['2026-01-01']['used'] == 30
 
 
 def test_availability_is_non_reserving_and_cooldown_recovers(bot, private_client):

@@ -2,8 +2,12 @@
 import json
 import re
 from urllib.parse import urlsplit, unquote, parse_qsl
+from uuid import NAMESPACE_URL, uuid5
 
+from hanset_active.config import load_profile
+from hanset_active.util import followups
 from hanset_active.util.urls import is_denied, is_excluded, literal_private, registrable_domain
+from hanset_active.venues import is_article_title, normalize_name
 
 from . import CollectError
 from .config import MAX_TARGETS, domain_allowed, official_domains
@@ -145,10 +149,9 @@ def _recorded_domains(value):
             and re.fullmatch(r'[A-Za-z0-9.-]{1,253}', d)}
 
 
-def ownership_index(venues, aliases, seed_venues, seed_domains):
-    """Materialized ownership only; a frozen-seed marker is never a join key."""
+def ownership_index(venues, aliases):
+    """Index recorded venue identity and domain ownership."""
     from collections import defaultdict
-    from hanset_active.venues import normalize_name
     names, domains, resolution_domains, by_id = defaultdict(set), {}, {}, {}
     for venue in venues:
         vid = venue['venue_id']
@@ -166,18 +169,11 @@ def ownership_index(venues, aliases, seed_venues, seed_domains):
     for alias in aliases:
         if alias['venue_id'] in by_id and alias['normalized_name']:
             names[alias['normalized_name']].add(alias['venue_id'])
-    allowed_seeds = {r['domain'] for r in seed_domains}
-    for seed in seed_venues:
-        matches = names.get(seed['normalized_name'], set())
-        if seed['domain'] in allowed_seeds and len(matches) == 1:
-            domains[next(iter(matches))].update(_recorded_domains([seed['domain']]))
-    # Manual resolution uses the venue's website/domains, never inferred seeds.
     return by_id, names, domains, resolution_domains
 
 
 def resolve_identity(target, ownership):
     """Exact identity first, otherwise the union of exact names and domains."""
-    from hanset_active.venues import normalize_name
     by_id, names, _, domains = ownership
     exact = by_id.get(target['venue_id'])
     if exact and exact['venue_key'] == target['venue_key']:
@@ -197,12 +193,38 @@ def resolve_identity(target, ownership):
     return target, 'manual_identity_ambiguous' if matches else 'manual_identity_unmatched'
 
 
-def derive_target(venue, domains, notes):
-    """No discovery or HTTP upgrade; roots require independently owned domains."""
-    from hanset_active.util.followups import portal_domains
-    portals = portal_domains()
+def _canonical_derived_url(url, portals, denied):
+    canonical = canonical_requested_url(url)
+    host = urlsplit(canonical).hostname
+    domain = registrable_domain(canonical)
+    if (not _https_or_test(canonical, testing=False) or re.search(r'[^a-z0-9.:-]', host)
+            or domain in portals or is_denied(canonical, denied)):
+        raise ValueError('unsafe_url')
+    return canonical, domain
+
+
+def seed_url_allowed(url, domains):
+    """Apply the derived URL guard before contacting a seed redirect."""
+    try:
+        _, domain = _canonical_derived_url(url, followups.portal_domains(), load_profile()['denied_domains'])
+        return domain in domains
+    except (ValueError, TypeError, UnicodeError):
+        return False
+
+
+def _add_seed_urls(target, seeds):
+    for seed in seeds:
+        for url in seed['urls']:
+            if url not in target['urls'] and len(target['urls']) < 3:
+                target['urls'].append(url)
+                target['domains'].add(registrable_domain(url))
+                target.setdefault('seed_urls', set()).add(url)
+
+
+def _derive_urls(website, domains, notes):
+    portals = followups.portal_domains()
+    denied = load_profile()['denied_domains']
     urls, approved = [], set()
-    website = venue.get('website') or ''
     candidates = ([website] if website else []) + ['https://' + d + '/' for d in sorted(domains)]
     if website.lower().startswith('http://'):
         notes['derived_http_only'] += 1
@@ -210,25 +232,60 @@ def derive_target(venue, domains, notes):
         if url.lower().startswith('http://'):
             continue
         try:
-            canonical = canonical_requested_url(url)
-            domain = registrable_domain(canonical)
-            permitted = official_domains({'official_domains': [domain]})
-            if domain in portals or not domain_allowed(canonical, permitted):
-                raise ValueError
-        except (CollectError, ValueError, TypeError, UnicodeError):
+            canonical, domain = _canonical_derived_url(url, portals, denied)
+        except (ValueError, TypeError, UnicodeError):
             notes['derived_domain_denied'] += 1
             continue
         if canonical not in urls and len(urls) < 3:
             urls.append(canonical)
             approved.add(domain)
-    if not urls:
-        return None
-    return {'venue_id': venue['venue_id'], 'venue_key': venue['venue_key'],
-            'name': venue.get('name') or venue['venue_key'], 'urls': urls,
-            'domains': approved, 'tavily': None}
+    return urls, approved
 
 
-def merge_targets(manual, derived, disabled, ownership, notes, *, testing=False):
+def derive_target(venue, domains, notes, *, seeds=()):
+    """No discovery or HTTP upgrade; roots require independently owned domains."""
+    urls, approved = _derive_urls(venue.get('website') or '', domains, notes)
+    target = {'venue_id': venue['venue_id'], 'venue_key': venue['venue_key'],
+              'name': venue.get('name') or venue['venue_key'], 'urls': urls,
+              'domains': approved, 'tavily': None}
+    _add_seed_urls(target, seeds)
+    return target if urls else None
+
+
+def derive_seed_targets(seeds, seed_domains, ownership, notes):
+    by_id, names, _, _ = ownership
+    frozen_domains = {row['domain'] for row in seed_domains}
+    targets = []
+    for seed in seeds:
+        name, website, domain = seed['name'] or '', seed['website'] or '', seed['domain'] or ''
+        norm = normalize_name(name)
+        if not norm or is_article_title(name) or is_excluded(name, website):
+            continue
+        matches = names.get(norm, ())
+        if len(matches) > 1:
+            continue
+        venue = by_id[next(iter(matches))] if matches else None
+        if venue and (venue['state'] == 'closed' or is_article_title(venue['name'])
+                      or is_excluded(venue['name'], venue['venue_key'])):
+            continue
+        # A website copied into seed_domains cannot turn HTTP into HTTPS.
+        roots = {domain} if (not website and domain in frozen_domains
+                             and _recorded_domains([domain])) else set()
+        urls, approved = _derive_urls(website, roots, notes)
+        if not urls:
+            continue
+        if venue:
+            venue_id, venue_key, name = venue['venue_id'], venue['venue_key'], venue['name']
+        else:
+            domain = registrable_domain(urls[0])
+            seed_id = uuid5(NAMESPACE_URL, f'hanset-collector-seed:{norm}:{domain}')
+            venue_id = venue_key = f'seed:{seed_id}'
+        targets.append({'venue_id': venue_id, 'venue_key': venue_key, 'name': name,
+                        'urls': urls, 'domains': approved, 'tavily': None, 'seed_urls': set(urls)})
+    return targets
+
+
+def merge_targets(manual, derived, disabled, ownership, notes, *, seeds=(), testing=False):
     """Manual authorization wins; capacity is filled in the supplied local order."""
     def ident(t):
         return t['venue_id'], t['venue_key']
@@ -252,13 +309,14 @@ def merge_targets(manual, derived, disabled, ownership, notes, *, testing=False)
             if (canonical not in {canonical_requested_url(u, testing=testing) for u in base['urls']}
                     and domain_allowed(url, base['domains']) and len(base['urls']) < 3):
                 base['urls'].append(url)
+    manual_keys = set(effective)
     suppressed = {ident(resolve_identity(t, ownership)[0]) for t in disabled}
     for target in derived:
         key = ident(target)
         if key in effective:
             base = effective[key]
             for url in target['urls']:
-                if not domain_allowed(url, base['domains']):
+                if url in target.get('seed_urls', ()) or not domain_allowed(url, base['domains']):
                     notes['derived_domain_denied'] += 1
                 elif (canonical_requested_url(url) not in
                       {canonical_requested_url(u, testing=testing) for u in base['urls']}
@@ -270,6 +328,24 @@ def merge_targets(manual, derived, disabled, ownership, notes, *, testing=False)
             notes['derived_truncated'] += 1
         else:
             effective[key] = target
+    gap_keys = {ident(t) for t in derived}
+    manual_names = {normalize_name(t[k]) for t in manual for k in ('name', 'venue_key')}
+    disabled_names = {normalize_name(t['venue_key']) for t in disabled}
+    for target in seeds:
+        key = ident(target)
+        seed_only = key[0] not in ownership[0]
+        name = normalize_name(target['name'])
+        if key in gap_keys or key in manual_keys or (seed_only and name in manual_names):
+            continue
+        if key in suppressed or (seed_only and name in disabled_names):
+            notes['derived_suppressed'] += 1
+        elif key in effective:
+            _add_seed_urls(effective[key], [target])
+        elif len(effective) >= MAX_TARGETS:
+            notes['derived_truncated'] += 1
+        else:
+            effective[key] = {**target, 'urls': list(target['urls']), 'domains': set(target['domains']),
+                              'seed_urls': set(target['seed_urls'])}
     return list(effective.values())
 
 
@@ -315,5 +391,6 @@ def resolve_jobs(targets, *, search, db, clock, testing):
                 'url': url,
                 'domains': target['domains'],
                 'source_authorization': source_authorization(target, url, testing=testing),
+                'seed_url': url in target.get('seed_urls', ()),
             })
     return jobs, notes

@@ -3,6 +3,7 @@ import json
 import re
 import sqlite3
 from collections import OrderedDict
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -25,9 +26,8 @@ from .ingest import load_watchlist, parse_batch, security_flag, within_window
 from .state import State
 from .store import connect as claim_connect
 from .store import (digest, record, prune_web_target_blocks, recent_web_target_block,
-                    remember_web_target_block, recent_unchanged_web_targets,
-                    remember_web_target_observation)
-from .targets import canonical_requested_url, resolve_jobs
+                    remember_web_target_block, remember_web_target_observation, web_target_history)
+from .targets import canonical_requested_url, resolve_jobs, seed_url_allowed
 from .web import classify_page, select_subpages
 from .plan import assemble_targets, ensure_daily_plan, load_targets, local_target_order, order_targets
 from .watchlist_proposals import inspect_page, write_proposals
@@ -252,6 +252,24 @@ def run_web(settings, *, targets_path=None, clock=None, session=None, search=Non
         return public_result(_base('error', error.reason, success=False, collected=False, mode=mode))
 
 
+def _rotate_seed_jobs(pending, last_fetched):
+    """Use seed history within the normal queue while retaining plan ties."""
+    if not any(job['seed_url'] for job in pending.values()):
+        return pending
+    fresh, fresh_seeds, revisits = [], [], []
+    for url, job in pending.items():
+        item = (url, job)
+        if digest(url) in last_fetched:
+            revisits.append(item)
+        else:
+            (fresh_seeds if job['seed_url'] else fresh).append(item)
+    # Keep nonseed revisit positions and fill seed positions oldest first.
+    seed_revisits = iter(sorted((item for item in revisits if item[1]['seed_url']),
+                                key=lambda item: last_fetched[digest(item[0])]))
+    return OrderedDict(fresh + fresh_seeds + [next(seed_revisits) if job['seed_url'] else (url, job)
+                                             for url, job in revisits])
+
+
 def _run_web(settings, *, targets_path, clock, session, search, testing, planner=None, planner_session=None):
     state = State(settings.data_dir, clock)
     state.proxy_heal = web_proxy.new_heal_status()
@@ -321,7 +339,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
             clock=clock,
             testing=testing,
         )
-        unchanged = recent_unchanged_web_targets(history, clock=clock, testing=testing)
+        last_fetched, unchanged = web_target_history(history, clock=clock, testing=testing)
         notes.extend({'url': '', 'disposition': note['code']} for note in planning_notes)
         completed = set()
         for url in state.data['completed']:
@@ -332,7 +350,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 completed.add(canonical_requested_url(url, testing=testing))
             except (ValueError, TypeError):
                 continue
-        pending, deferred = OrderedDict(), OrderedDict()
+        scheduled = {}
         for job in jobs:
             try:
                 url = canonical_requested_url(job['url'], testing=testing)
@@ -344,15 +362,24 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 unsafe += 1
                 notes.append({'url': '', 'disposition': 'unsafe_url_skipped'})
                 continue
-            if cooling(url) or url in completed or url in pending or url in deferred:
+            if cooling(url) or url in completed:
                 continue
+            if url in scheduled:
+                if job['seed_url'] or not scheduled[url]['seed_url']:
+                    continue
+                # A manual or gap URL owns this fetch even if the seed ranked first.
+                del scheduled[url]
+            scheduled[url] = {**job, 'depth': 0}
+        pending, deferred = OrderedDict(), OrderedDict()
+        for url, job in scheduled.items():
             # Canonical keys deduplicate work; explicit receipt URLs retain
             # their existing identity (including a trailing slash).
             queue = pending
             if digest(url) in unchanged:
                 deferred_urls.add(url)
                 queue = deferred
-            queue[url] = {**job, 'depth': 0}
+            queue[url] = job
+        pending = _rotate_seed_jobs(pending, last_fetched)
         if not pending and not deferred and skipped:
             return finish_web(_base('done', 'recent_block_skipped', success=True, collected=False, mode='web', pages=notes))
         if not pending and not deferred and jobs and unsafe == len(jobs):
@@ -398,8 +425,10 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                             break
                         attempted.add(job_key)
                         try:
-                            fetched = (fetcher.fetch(job['url'], subpage=True) if job.get('discovered_subpage')
-                                       else fetcher.fetch(job['url']))
+                            fetch_options = {'subpage': True} if job.get('discovered_subpage') else {}
+                            if job['seed_url']:
+                                fetch_options['url_allowed'] = partial(seed_url_allowed, domains=job['domains'])
+                            fetched = fetcher.fetch(job['url'], **fetch_options)
                         except web_proxy.ProxyUnavailable:
                             remember_web_target_observation(
                                 history, job['url'], 'error',
