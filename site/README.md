@@ -76,10 +76,42 @@ evidence for them.
 | `checked_on` | Real `YYYY-MM-DD` date on or before the build's Seoul date |
 
 An unusable explicit citation or field entry leaves the claim pending.
-The evidence date controls the 90-day badge. The closed-days guide also
-accepts dated `Official page`, `Official closure notice`, `Official notice`,
-and `Official Instagram` records with public URLs. Temporary entries expire
-from the detail row and guide table. The month summary uses its calendar dates.
+The evidence date controls the 90-day badge.
+
+### Closure records
+
+The detail row, closed-days table, and monthly block use the same closure
+evidence gate. The source needs a public HTTP(S) URL and a valid check date on
+or before the Seoul build date. The builder currently accepts `Official page`,
+`Official closure notice`, `Official notice`, and `Official Instagram`. Venue
+replies, operator-run profiles, and third-party sources are ineligible.
+
+An optional `until` date is inclusive. Detail and table rows remain eligible
+through that build date. A monthly entry also needs its occurrence to fall on
+or before `until`. A missing, null, or empty `until` is open-ended. A malformed
+date, including whitespace-only text, makes the record ineligible. Monthly
+rows use the same Sunday precedence as the detail row and table.
+
+The builder matches closure facts and visitor checklist values to the venue's
+record by normalized wording or an overlapping occurrence date. Month and day
+must match, as must the year when both sides provide one. Citation dates are
+excluded from the comparison. A fully covered value uses the active record's
+source and check date. A value citing an ineligible source stays pending under
+the record gate. A mixed value with uncovered dates needs an active record and
+its own valid inline citation to publish as a unit. An explicit
+`price_hours_evidence` entry takes precedence for its exact field value.
+
+Operations sign-off is pending. Please confirm the four source labels above
+and the requirement for `Official Instagram` to link to a venue-authored post
+that supports the specific closure. The `_doc` in `closed_days.json` still
+mentions operator profiles and venue replies under the older policy described
+in `HANDOVER.md`.
+Choice by Vantt's closure record currently links to an Instagram profile.
+The builder currently validates the public URL and source label.
+
+Operations data follow-ups include splitting Park Hyatt's sauna and pool
+closures and supplying dated evidence for the pool notice, and splitting
+Termeden's Clean Day and outdoor pool notices with separate dated citations.
 
 ### Sunday evidence for Finder
 

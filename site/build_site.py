@@ -81,9 +81,13 @@ def eligible_closure(c, today):
             and official_check_date(c.get("url"), c.get("checked"), today) is not None)
 
 
-def closure_is_active(c, today):
-    return (eligible_closure(c, today) and
-            (c.get("until") in (None, "") or (parse_evidence_date(c["until"]) or dt.date.min) >= today))
+def closure_is_active(c, today, *, occurrence=None):
+    if not eligible_closure(c, today):
+        return False
+    if c.get("until") in (None, ""):
+        return True
+    until = parse_evidence_date(c["until"])
+    return until is not None and until >= today and (occurrence is None or until >= occurrence)
 
 def active_closed(today):
     return {k: c for k, c in CLOSED_ALL.items() if closure_is_active(c, today)}
@@ -116,7 +120,8 @@ def closed_month_block(today, by_slug):
         links = []
         for slug in it["slugs"]:
             v, c = by_slug.get(slug), CLOSED_ALL.get(slug)
-            if not v or not eligible_closure(c, today): continue
+            if not v or not closure_is_active(c, today, occurrence=d) or not venue_closure_applies(v, c):
+                continue
             note = (" (may change around holidays)" if "may change" in c["closed"] else "") + (" (maintenance)" if it.get("note") == "maintenance" else "")
             links.append(f'<span class="closure-entry"><a href="{E(c["url"])}" rel="noopener noreferrer">{E(v["title"])}</a>{note}'
                          f'<small class="fact-source">{closure_provenance(c, today)}</small></span>')
@@ -837,6 +842,8 @@ class PublicationClaim(NamedTuple):
     value: str
     source_url: str
     checked_on: dt.date
+    source_label: str = "Official source"
+    from_record: bool = False
 
 
 PRICE_AMOUNT = re.compile(r"(?:[₩$€£]\s*\d[\d,]*|\b(?:KRW|USD)\s*\d[\d,]*|\b\d[\d,]*\s*(?:won\b|KRW\b|원)|\b\d+\s*%\s*(?:off|discount)\b)", re.I)
@@ -904,13 +911,56 @@ def claim_scope(key, value):
     return label
 
 
+CLAIM_CITATION_START = re.compile(r"\s*(?:—|--)|\((?:official|venue reply|hotel reply)", re.I)
+CLOSURE_OCCURRENCE_DATE = re.compile(
+    r"\b(?:(?P<year>\d{4})(?P<sep>[-.])(?P<month>\d{2})(?P=sep)(?P<day>\d{2})"
+    r"|(?P<name>Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|"
+    r"Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)"
+    r"\s+(?P<name_day>\d{1,2})(?:,?\s+(?P<name_year>\d{4}))?"
+    r"|(?<!\d/)(?P<slash_month>\d{1,2})/(?P<slash_day>\d{1,2})(?!/\d))\b", re.I)
+
+
 def claim_tokens(value, scope):
-    text = re.split(r"\s*(?:—|--)|\((?:official|venue reply|hotel reply)", value.lower(), maxsplit=1)[0]
+    text = CLAIM_CITATION_START.split(value.lower(), maxsplit=1)[0]
     if scope == "closure":
         return frozenset(re.findall(r"\w+", text)) - {"closed", "closure", "on", "every", "each", "of", "the", "month"}
     if scope == "hours":
         return frozenset(re.findall(r"\b\d{1,2}:\d{2}\b", text))
     return frozenset(re.sub(r"[^\d%$€£]", "", token) for token in PRICE_AMOUNT.findall(text))
+
+
+def closure_occurrence_dates(value):
+    head = CLAIM_CITATION_START.split(value, maxsplit=1)[0]
+    years = set(re.findall(r"\b\d{4}\b", head))
+    default_year = int(years.pop()) if len(years) == 1 else None
+    dates = set()
+    for match in CLOSURE_OCCURRENCE_DATE.finditer(head):
+        explicit_year = match["year"] or match["name_year"]
+        year = int(explicit_year) if explicit_year else default_year
+        month = (MON.index(match["name"][:3].title()) if match["name"]
+                 else int(match["month"] or match["slash_month"]))
+        day = int(match["day"] or match["name_day"] or match["slash_day"])
+        try:
+            dt.date(year if year is not None else 2000, month, day)
+        except ValueError:
+            continue
+        dates.add((year, month, day))
+    return dates
+
+
+def closure_record_coverage(record, value):
+    """Return True for full coverage, False for partial coverage, or None for no match."""
+    if not isinstance(record, dict) or not isinstance(record.get("closed"), str):
+        return None
+    closed = record["closed"]
+    if claim_tokens(value, "closure") == claim_tokens(closed, "closure"):
+        return True
+    dates = closure_occurrence_dates(value)
+    record_dates = closure_occurrence_dates(closed)
+    covered = {(year, month, day) for year, month, day in dates if any(
+        (month, day) == (record_month, record_day) and (year is None or record_year is None or year == record_year)
+        for record_year, record_month, record_day in record_dates)}
+    return covered == dates if covered else None
 
 
 def restates_nonofficial(v, key, value):
@@ -928,12 +978,29 @@ def restates_nonofficial(v, key, value):
 
 
 def resolve_publication(v, key, value, today, *, visitor=False, sunday_scope=False):
-    """Resolve one price or schedule claim in citation, field, record, venue order."""
+    """Resolve a price or schedule claim, giving closure-specific evidence precedence."""
     if PENDING_CLAIM.search(value) or not value.strip() or "{price}" in value:
         return None
     if sunday_scope and v["sunday"] == "unk" and v["sunday_evidence"]:
         return None
-    if has_citation(value):
+    fields = v.get("c", {}).get("price_hours_evidence", {})
+    has_field = isinstance(fields, dict) and key in fields
+    closure_scope = not sunday_scope and claim_scope(key, value) == "closure"
+    citation = has_citation(value)
+    record = None
+    if closure_scope and not has_field:
+        record = CLOSED_ALL.get(v.get("slug"))
+        coverage = closure_record_coverage(record, value)
+        if coverage is not None:
+            if NON_OFFICIAL.search(value) or not closure_is_active(record, today):
+                return None
+            if coverage:
+                return PublicationClaim(value, record["url"], parse_evidence_date(record["checked"]),
+                                        source_label=record["source"], from_record=True)
+            if not citation:
+                return None
+
+    if citation and not (closure_scope and has_field):
         if NON_OFFICIAL.search(value) or not re.search(OFFICIAL_MARKER, value, re.I):
             return None
         if has_uncited_tail(key, value):
@@ -953,10 +1020,9 @@ def resolve_publication(v, key, value, today, *, visitor=False, sunday_scope=Fal
         checked = official_check_date(source, raw_date, today)
         return PublicationClaim(value, source, checked) if checked else None
 
-    fields = v.get("c", {}).get("price_hours_evidence", {})
     if not isinstance(fields, dict):
         return None
-    if key in fields:
+    if has_field:
         entry = fields[key]
         if not isinstance(entry, dict) or entry.get("source_kind") != "official_page" or entry.get("value") != value:
             return None
@@ -972,15 +1038,8 @@ def resolve_publication(v, key, value, today, *, visitor=False, sunday_scope=Fal
             return PublicationClaim(value, evidence.source_url, evidence.checked_on)
         return None
 
-    if claim_scope(key, value) == "closure":
-        record = CLOSED_ALL.get(v.get("slug"))
-        if record is not None:
-            if not eligible_closure(record, today):
-                return None
-            if claim_tokens(value, "closure") == claim_tokens(record["closed"], "closure"):
-                if not closure_is_active(record, today):
-                    return None
-                return PublicationClaim(value, record["url"], parse_evidence_date(record["checked"]))
+    if record is not None and not eligible_closure(record, today):
+        return None
 
     confidence = v.get("confidence", v.get("status", ""))
     if NON_OFFICIAL.search(confidence) or evidence_status(v, "Venue information") != "fact":
@@ -1030,6 +1089,10 @@ def venue_field_parts(v, key, value, today, *, visitor=False, sunday_scope=False
     if not value.strip():
         return []
     clauses = publication_clauses(key, value) if sunday_scope or price_or_schedule(key, value) else [value]
+    fields = v.get("c", {}).get("price_hours_evidence", {})
+    if (len(clauses) > 1 and not sunday_scope and claim_scope(key, value) == "closure"
+            and isinstance(fields, dict) and key in fields):
+        clauses = [value]
     parts = []
     for part in clauses:
         if not sunday_scope and not price_or_schedule(key, part):
@@ -1054,10 +1117,14 @@ def venue_notes_html(v, key, heading, values, today, *, unconfirmed=False):
 def fact_provenance(v, value, today, *, link_claims=False, publication=None):
     """A venue reply is not evidence available at the representative website."""
     if publication is not None:
-        checked_text = explicit_check_date(value)[0] if has_citation(value) else dot(publication.checked_on)
+        checked_text = dot(publication.checked_on)
+        if not publication.from_record and has_citation(value):
+            inline_text, inline_date = explicit_check_date(value)
+            if inline_date == publication.checked_on:
+                checked_text = inline_text
         url = publication.source_url
         return (f'<small class="fact-source">Checked {E(checked_text)} · '
-                f'<a href="{E(url)}" rel="noopener noreferrer">Official source · {E(host(url))}</a> '
+                f'<a href="{E(url)}" rel="noopener noreferrer">{E(publication.source_label)} · {E(host(url))}</a> '
                 f'{freshness(publication.checked_on, today)}</small>')
     if not value or value.startswith(UNKNOWN) or value.lower() in ("pending", "not confirmed", "not yet announced"):
         return ""

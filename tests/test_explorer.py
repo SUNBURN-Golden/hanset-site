@@ -321,6 +321,7 @@ class Explorer(unittest.TestCase):
                     group = 'Hours & Closed' if key in ('last_entry', 'closures') else 'Visitor / Tattoo rules' if key in ('scrub_fee', 'age_tattoo_attire') else 'Access / Booking'
                     self.assertIn((label, value), groups[group])
                     pending = {
+                        'park-hyatt-seoul': {'closures'},
                         'sisu-house': {'full_price', 'last_entry', 'closures'},
                         'solo-sauna-repo-noryangjin': {'full_price', 'last_entry', 'closures'},
                     }
