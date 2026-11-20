@@ -62,6 +62,7 @@ def test_genuine_holds_skip_before_credentials_and_proxy_then_expire(tmp_path, m
     routes = {ROOT + '/robots.txt': (200, b'User-agent: *\nAllow: /\n'),
               ROOT: (200, html())}
     if kind == 'robots_disallowed':
+        monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
         routes[ROOT + '/robots.txt'] = (200, b'User-agent: *\nDisallow: /\n')
     elif kind == 'login_wall':
         routes[ROOT] = (200, b'<main>Sign in<input type="password"></main>')
@@ -102,6 +103,7 @@ def test_collateral_domain_stop_never_creates_child_hold(tmp_path, monkeypatch, 
     settings, path = setup_run(tmp_path, monkeypatch, initial)
     clock = FakeClock()
     if first == 'robots':
+        monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
         routes = {ROOT + '/robots.txt': (200, b'User-agent: *\nDisallow: /\n'),
                   ROOT + '/sauna': (200, html())}
         blocked_url, collateral = ROOT, ROOT + '/sauna'
@@ -128,6 +130,7 @@ def test_collateral_domain_stop_never_creates_child_hold(tmp_path, monkeypatch, 
 
 
 def test_subpage_robots_denial_does_not_request_body(tmp_path, monkeypatch):
+    monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
     settings, path = setup_run(tmp_path, monkeypatch)
     routes = {ROOT + '/robots.txt': (200, b'User-agent: *\nDisallow: /price\n'),
               ROOT: (200, html('<a href="/price">Price</a><a href="/about">About</a>'))}
@@ -152,7 +155,7 @@ def test_real_active_body_budget_includes_subpages(tmp_path, monkeypatch):
     capture_extraction(monkeypatch)
     result = service.run_web(settings, targets_path=path, clock=FakeClock(), testing=True)
     assert result['reason'] == 'active_body_cap' and result['counts']['pages'] == 2
-    assert requests == [ROOT + '/robots.txt', ROOT, ROOT + '/price']
+    assert requests == [ROOT, ROOT + '/price']
     assert evaluations[-1] == (ROOT + '/about', 'cap_reached', None)
     with sqlite3.connect(settings.active_dir / 'active.sqlite3') as db:
         assert db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0] == 2

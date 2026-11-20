@@ -166,7 +166,7 @@ def test_run_web_continues_direct_when_proxy_down(tmp_path, monkeypatch):
     assert result['state'] == 'done' and result['success'] and result['collected']
     assert result['proxy_heal'] == {**web_proxy.new_heal_status(), 'retries': 2}
     assert result['web_egress'] == {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'preflight'}
-    assert probe.call_count == 3 and calls == ['https://spa.example.test/robots.txt', url]
+    assert probe.call_count == 3 and calls == [url]
     assert session.calls and 'proxies' not in session.calls[0]
 
 
@@ -197,7 +197,7 @@ def test_healthy_proxy_site_refusal_does_not_change_egress(tmp_path, monkeypatch
     result = run_web(settings, clock=FakeClock(), session=model, testing=True)
     assert result['success'] and 'web_egress' not in result and not model.calls
     assert result['pages'][-1]['disposition'] in ('blocked', 'login_wall')
-    assert calls == ['https://spa.example.test/robots.txt', url]
+    assert calls == [url]
 
 
 def test_mid_run_outage_preserves_blocks_and_continues_without_retry(tmp_path, monkeypatch):
@@ -234,8 +234,7 @@ def test_mid_run_outage_preserves_blocks_and_continues_without_retry(tmp_path, m
     result = run_web(settings, clock=clock, session=model, testing=True)
     assert result['success'] and result['collected'] and result['counts']['pages'] == 4
     assert result['web_egress'] == {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'mid_run'}
-    assert calls == [('https://spa.example.test/robots.txt', True), (blocked, True),
-                     ('https://box.test/robots.txt', True), (failed, True), (next_url, False)]
+    assert calls == [(blocked, True), (failed, True), (next_url, False)]
     assert failed not in State(settings.data_dir, clock).data['completed']
     with closing(connect_receipts(settings.data_dir)) as receipts:
         assert receipts.execute('SELECT disposition FROM web_target_observations WHERE url_hash=?',

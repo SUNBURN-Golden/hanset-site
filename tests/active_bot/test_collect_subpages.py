@@ -261,12 +261,12 @@ def test_fake_http_slash_children_produce_grounded_sauna_claim(tmp_path, monkeyp
     clock = FakeClock()
     first = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
     assert first['success'] and first['collected'] and first['counts']['pages'] == 3
-    assert calls == [ROOT + '/robots.txt', ROOT, ROOT + '/sauna/', ROOT + '/facilities/']
+    assert calls == [ROOT, ROOT + '/sauna/', ROOT + '/facilities/']
     with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
         assert db.execute('SELECT source_url,status,rights,evidence_origin FROM claims').fetchone() == (
             ROOT + '/sauna/', 'source_claim', 'internal_review_only', 'web_verbatim')
     again = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
-    assert again['reason'] == 'already_complete' and len(calls) == 4
+    assert again['reason'] == 'already_complete' and len(calls) == 3
     clock.sleep(86400)
     tomorrow = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
     assert tomorrow['success'] and tomorrow['counts']['pages'] == 3
@@ -386,7 +386,7 @@ def test_redirect_with_session_param_skips_destination(tmp_path, monkeypatch):
     rows = capture_extraction(monkeypatch)
     result = service.run_web(settings, targets_path=path, clock=FakeClock(), testing=True)
     assert result['success'] and result['pages'][-1] == {'url': ROOT, 'disposition': 'denied'}
-    assert calls == [ROOT + '/robots.txt', ROOT] and not rows
+    assert calls == [ROOT] and not rows
 
 
 def _defer_children(settings, clock, paths):

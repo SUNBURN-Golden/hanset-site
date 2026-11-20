@@ -63,7 +63,7 @@ def discover(context, directory):
     return tasks
 
 
-def detail(content, url, profile):
+def detail(content, url, profile, *, public_source=False):
     """Parse an explicitly configured directory detail; return sanitized identity."""
     import re
     from bs4 import BeautifulSoup
@@ -85,7 +85,12 @@ def detail(content, url, profile):
     doc=html.extract(content,url)
     external=[];portals=portal_domains(profile)|{registrable_domain(url)}
     for link in doc['links']:
-        if link['kind']!='external' or is_denied(link['url']) or is_excluded(link['url'],link['text']): continue
+        if public_source:
+            from .candidates import public_url
+            if not public_url(link['url']) or link['kind'] in ('image','image_notice','attachment'):
+                continue
+        elif link['kind']!='external' or is_denied(link['url']) or is_excluded(link['url'],link['text']):
+            continue
         if urlsplit(link['url']).hostname==urlsplit(url).hostname: continue
         # The portal's own sub-sites (e.g. other-language hosts) are never the venue website.
         if registrable_domain(link['url']) in portals: continue
@@ -97,7 +102,7 @@ def detail(content, url, profile):
             try: labelled.add(canonicalize(urljoin(url,anchor['href'])))
             except ValueError: pass
     external.sort(key=lambda link:0 if canonicalize(link['url']) in labelled else 1)
-    website=canonicalize(external[0]['url']) if external else ''
+    website=canonicalize(external[0]['url'], preserve_path=public_source) if external else ''
     address=''
     for node in soup.select('tr,dl,p,address,li'):
         text=node.get_text(' ',strip=True)
@@ -107,3 +112,41 @@ def detail(content, url, profile):
         if node.name=='address':
             address=strip_pii(text)[:180];break
     return dict(name=strip_pii(name),website=website,address=address,directory_id=directory['id'],low_prior=directory.get('low_prior',False),document=doc)
+
+
+def public_listing(get, origin, validate):
+    """Yield same-directory pages and their public detail links and entities."""
+    from collections import deque
+    from urllib.parse import urljoin
+    from .web_seeds import page_identity
+    from ..extract import html
+    from ..util.urls import registrable_domain
+    import re
+
+    domain = registrable_domain(origin)
+    queue, visited, hashes = deque([origin]), set(), set()
+
+    def allowed(target):
+        return bool(validate(target)) and registrable_domain(target) == domain
+
+    while queue:
+        url = queue.popleft()
+        if url in visited:
+            continue
+        visited.add(url)
+        result = get(url, url_allowed=allowed)
+        if not result.ok or 'html' not in result.content_type or result.content_hash in hashes:
+            continue
+        hashes.add(result.content_hash)
+        listing = page_identity(result.content, result.url)
+        links = []
+        for link in html.extract(result.content, result.url)['links']:
+            target = validate(urljoin(result.url, link['url']))
+            if not target or target == url:
+                continue
+            if link['kind']=='next_page' or re.search(r'[?&]page=\d+|/page/\d+', target):
+                if allowed(target) and target not in visited:
+                    queue.append(target)
+            elif link['kind'] not in ('image', 'image_notice', 'attachment'):
+                links.append((target, link['text']))
+        yield result.url, {'objects': listing['objects'], 'links': links}

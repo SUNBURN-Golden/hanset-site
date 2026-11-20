@@ -13,6 +13,13 @@ from .util.pii import strip_pii
 from .maintenance import prune_offsite_followups
 
 
+
+def _nonnegative(value):
+    number = int(value)
+    if number < 0:
+        raise argparse.ArgumentTypeError('must be nonnegative')
+    return number
+
 def parser():
     p = argparse.ArgumentParser(prog='python -m hanset_active')
     p.add_argument('--data-dir',type=Path)
@@ -23,6 +30,11 @@ def parser():
     seed.add_argument('--refreeze',action='store_true')
     seed.add_argument('--csv',action='append',default=[],type=Path)
     seed.add_argument('--approved-sources',type=Path,default=Path('/workspace/hanset-collector/approved_sources.json'))
+    from .discover.seeds import SOURCES, SOURCE_ALIASES
+    seeds = commands.add_parser('seeds')
+    discover = seeds.add_subparsers(dest='seeds_command', required=True).add_parser('discover')
+    discover.add_argument('--source', action='append', choices=(*SOURCES, *SOURCE_ALIASES))
+    discover.add_argument('--max-calls', type=_nonnegative)
     r = commands.add_parser('run')
     r.add_argument('--max-minutes',type=float)
     r.add_argument('--max-requests',type=int)
@@ -72,6 +84,11 @@ def main(argv=None):
             elif command=='seed':
                 paths = args.csv or [p for name in ('saunas.csv','boxes.csv') if (p:=Path(__file__).resolve().parents[1]/name).is_file()]
                 result = {'seed_id':venues.seed(db,paths=paths,approved_sources=args.approved_sources,refreeze=args.refreeze)}
+            elif command=='seeds':
+                from .discover.seeds import discover
+                result = discover(settings, db, sources=args.source, max_calls=args.max_calls)
+                print(json.dumps(result, ensure_ascii=False))
+                return 0
             elif command=='run':
                 fetcher = Fetcher(settings,db)
                 try: result = run(fetcher,max_minutes=args.max_minutes,max_requests=args.max_requests,classes=args.classes,dry_run=args.dry_run)

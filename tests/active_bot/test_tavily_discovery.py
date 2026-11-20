@@ -7,7 +7,6 @@ import pytest
 from hanset_active.gaps import ensure_gaps
 from hanset_active.search import discover_known_venue
 from hanset_active.search import tavily
-from hanset_active.search.budget import locked_budget
 from hanset_active.util.urls import is_denied
 from hanset_active.venues import upsert_venue
 
@@ -84,15 +83,11 @@ def test_ig_leads_leave_denylist_and_all_database_state_unchanged(bot, eligible)
     assert '\n'.join(bot.db.iterdump()) == before
 
 
-@pytest.mark.parametrize('condition,reason', [('missing', 'tavily_key_missing'), ('exhausted', 'tavily_budget_exhausted')])
+@pytest.mark.parametrize('condition,reason', [('missing', 'tavily_key_missing'), ('exhausted', 'tavily_provider_quota')])
 def test_simulated_daemon_continues_other_work(bot, eligible, monkeypatch, condition, reason):
     if condition == 'missing':
         monkeypatch.delenv('TAVILY_API_KEY')
-    else:
-        for _ in range(30):
-            with locked_budget(clock=bot.clock) as reservation:
-                assert reservation.reserve()
-    post = Mock()
+    post = Mock(return_value=Mock(status_code=432))
     statuses = []
     unrelated = []
     def daemon_tick():
@@ -102,4 +97,7 @@ def test_simulated_daemon_continues_other_work(bot, eligible, monkeypatch, condi
     daemon_tick()
     assert statuses == [reason] and unrelated == ['completed-unrelated-step']
     assert bot.db.execute('SELECT state FROM gaps WHERE venue_id=? AND field=?', eligible).fetchone()[0] == 'open'
-    post.assert_not_called()
+    if condition == 'missing':
+        post.assert_not_called()
+    else:
+        post.assert_called_once()

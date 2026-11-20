@@ -6,12 +6,12 @@ import os
 from .tavily import MAX_QUERY, SearchOutcome, _search
 from ..config import load_profile
 from ..util.pii import strip_pii
-from ..util.urls import is_denied, is_excluded
+from ..util.urls import is_collect_denied, is_denied, is_excluded, literal_private
 
 _TARGET_TERMS = {'official_page': '공식 홈페이지', 'instagram_handle': '공식 인스타그램 site:instagram.com'}
 
 
-def discover_known_venue(db, venue_id, gap_field, *, target='official_page', clock=None, transport=None):
+def discover_known_venue(db, venue_id, gap_field, *, target='official_page', clock=None, transport=None, public_source=False, dispatch_guard=None, on_dispatch=None, host_dir=None):
     """Read-only against the active DB. Never creates a venue, task, fact or grant.
 
     `transport` is an offline test seam with requests.Session.post's signature.
@@ -34,7 +34,9 @@ def discover_known_venue(db, venue_id, gap_field, *, target='official_page', clo
         return SearchOutcome('skipped', 'tavily_gap_resolved')
     if not isinstance(target, str) or target not in _TARGET_TERMS:
         return SearchOutcome('skipped', 'tavily_unsupported_target')
-    if is_excluded(venue['name'] or '', venue['website'] or '') or (venue['website'] and is_denied(venue['website'])):
+    website = venue['website'] or ''
+    if ((not public_source and (is_excluded(venue['name'] or '', website) or (website and is_denied(website))))
+            or (public_source and website and (is_collect_denied(website) or literal_private(website)))):
         return SearchOutcome('skipped', 'tavily_venue_excluded')
     name = venue['name'] or ''
     city = venue['city'] or ''
@@ -43,7 +45,8 @@ def discover_known_venue(db, venue_id, gap_field, *, target='official_page', clo
     if not name.strip() or len(identity) > MAX_QUERY - 50 or strip_pii(identity) != identity:
         return SearchOutcome('skipped', 'tavily_invalid_identity')
     query = identity + ' ' + _TARGET_TERMS[target]
-    outcome = _search(query, target, clock=clock, transport=transport)
+    outcome = _search(query, target, clock=clock, transport=transport, public_source=public_source,
+                      dispatch_guard=dispatch_guard, on_dispatch=on_dispatch, host_dir=host_dir)
     # Normal IDs are deterministic hashes, but still minimize externally supplied IDs.
     secret = os.environ.get('TAVILY_API_KEY', '').strip()
     safe_id = venue_id.replace(secret, '[redacted]') if secret else venue_id

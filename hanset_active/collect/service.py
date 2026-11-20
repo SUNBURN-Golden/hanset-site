@@ -20,7 +20,7 @@ from hanset_twin.daemon import AlreadyRunning as CollectorBusy
 from hanset_twin.daemon import ProcessLock
 
 from . import CollectError
-from .config import IG_READ_MAX, PAGE_DAY_CAP, PAGE_RUN_CAP, SUBPAGE_MAX, CollectSettings, domain_allowed
+from .config import IG_READ_MAX, MAX_TARGETS, PAGE_DAY_CAP, PAGE_RUN_CAP, SUBPAGE_MAX, CollectSettings, domain_allowed
 from .deepseek import OUTPUT_TOKENS, DeepSeek, credentials_present
 from .ground import INSTRUCTION, SUMMARY_INSTRUCTION, parse_items, payload_items, summary_items
 from .ingest import load_watchlist, parse_batch, security_flag, within_window
@@ -30,6 +30,7 @@ from .store import (digest, record, prune_web_target_blocks, recent_web_target_b
                     remember_web_target_block, remember_web_target_observation, web_target_history)
 from .targets import canonical_requested_url, fetch_url_allowed, resolve_jobs
 from .web import classify_page, select_subpages
+from ..crawl_policy import COLLECTION
 from .plan import assemble_targets, ensure_daily_plan, load_targets, local_target_order, order_targets
 from .watchlist_proposals import inspect_page, write_proposals
 
@@ -177,6 +178,11 @@ def _observe_stored(db, row, text_hash, disposition):
     remember_web_target_observation(
         db, row['url'], disposition, content_hash=text_hash, observed_at=row['seen_at'],
         testing=row.get('_testing', False))
+    from hanset_active.util.urls import is_excluded
+    # Keep evidence for declined venues out of the change feeds used by
+    # publication and outreach workflows.
+    if is_excluded(row.get('name', ''), row['url'], row.get('final_url', '')):
+        return
     claims = [claim for claim in read_claims(db) if claim['content_hash'] == text_hash
               and claim['source_url'] == row['url'] and claim['venue_id'] == row['venue_id']
               and claim['venue_key'] == row['venue_key']]
@@ -222,9 +228,19 @@ def _extract(rows, *, kind, settings, state, session, clock):
     return pages, claims
 
 
-def _default_search():
+def _default_search(host_dir):
     from hanset_active.search import discover_known_venue
-    return discover_known_venue
+    from hanset_active.discover.seeds import TavilyRun
+
+    run = TavilyRun()
+
+    def search(*args, **kwargs):
+        outcome = discover_known_venue(*args, dispatch_guard=run.search_allowed, host_dir=host_dir, **kwargs)
+        if outcome.reason in ('tavily_provider_quota', 'tavily_access_blocked', 'tavily_rate_limited'):
+            run.stop_on(outcome.reason)
+        return outcome
+
+    return search
 
 
 def run_web(settings, *, targets_path=None, clock=None, session=None, search=None, testing=False,
@@ -295,7 +311,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                                  planner=planner, planner_session=planner_session, testing=testing,
                                  assembled=assembled)
         targets, planning_notes = order_targets(
-            local_target_order(settings, targets, now=kst_now(clock), materialized=assembled['snapshot']), plan)
+            local_target_order(settings, assembled['authorization'], now=kst_now(clock), materialized=assembled['snapshot']), plan)
     if targets_status == 'invalid':
         return _finish(state, _base('error', 'targets_invalid', success=False, collected=False, mode='web'), clock)
     if not targets:
@@ -343,7 +359,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
         needs_search = any(item['tavily'] and not item['official_urls'] for item in targets)
         jobs, notes = resolve_jobs(
             targets,
-            search=search if search is not None or not needs_search else _default_search(),
+            search=search if search is not None or not needs_search else _default_search(active_settings.data_dir),
             db=active,
             clock=clock,
             testing=testing,
@@ -389,6 +405,16 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 queue = deferred
             queue[url] = job
         pending = _rotate_seed_jobs(pending, last_fetched)
+        deferred = _rotate_seed_jobs(deferred, last_fetched)
+        # Apply the target window after cooldown filtering and fair rotation.
+        selected = set()
+        for queue in (pending, deferred):
+            for url, job in list(queue.items()):
+                key = (job['venue_id'], job['venue_key'])
+                if key not in selected and len(selected) >= MAX_TARGETS:
+                    del queue[url]
+                else:
+                    selected.add(key)
         if not pending and not deferred and skipped:
             return finish_web(_base('done', 'recent_block_skipped', success=True, collected=False, mode='web', pages=notes))
         if not pending and not deferred and jobs and unsafe == len(jobs):
@@ -420,7 +446,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
         stop_reason = None
         try:
             with RunLock(active, active_settings.data_dir, 'collect-web', clock=clock):
-                fetcher = Fetcher(active_settings, active, clock, proxy=proxy, public_scope=True)
+                fetcher = Fetcher(active_settings, active, clock, proxy=proxy, public_scope=True, policy=COLLECTION)
                 try:
                     run_pages = 0
                     attempted, children = set(), {}
@@ -437,8 +463,9 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                         attempted.add(job_key)
                         scope = job['scope_domains'] & {registrable_domain(job_key)}
                         url_allowed = partial(fetch_url_allowed, scope_domains=scope, testing=testing)
+                        fetch_options = {'preserve_path': True} if job['discovery_url'] else {}
                         fetched = fetcher.fetch(job['url'], subpage=bool(job.get('discovered_subpage')),
-                                                url_allowed=url_allowed)
+                                                url_allowed=url_allowed, **fetch_options)
                         proxy_outage = fetched.outcome == 'error' and fetched.reason == 'proxy_unavailable'
                         if proxy_outage:
                             egress = {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'mid_run'}
@@ -762,7 +789,7 @@ def _change_targets(settings, targets_path=None, *, testing=False, clock=None):
         assembled = assemble_targets(settings, now=kst_now(clock), testing=testing, include_watchlist=False)
         if assembled['targets_status'] == 'invalid' or assembled['db_status'] != 'ok':
             return None
-        return assembled['targets']
+        return assembled['authorization']
     try:
         return parse_targets(Path(targets_path), testing=testing)
     except CollectError:

@@ -247,6 +247,7 @@ def test_primary_402_extraction_reports_skip_without_network(tmp_path, monkeypat
 
 
 def test_robots_naver_cap_and_locks(server, tmp_path, monkeypatch):
+    monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
     monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
     server.add('/private', _page())
     server.add('/go', '', status=302, headers={'Location': server.base + '/hours', 'Content-Type': 'text/plain'})
@@ -370,6 +371,7 @@ def test_daily_duplicate_receipts_produce_distinct_transitions(server, tmp_path,
 
 @pytest.mark.parametrize('kind', ['robots', 'blocked', 'empty', 'login'])
 def test_unusable_pages_cannot_change_stored_baseline(server, tmp_path, monkeypatch, kind):
+    monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
     from hanset_active.collect.store import connect_readonly
     monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
     settings = _settings(tmp_path)

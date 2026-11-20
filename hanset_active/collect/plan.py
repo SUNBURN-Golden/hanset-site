@@ -8,6 +8,7 @@ from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from typing import Protocol
 
+from hanset_active.discover.candidates import promoted_rows
 from hanset_active.gaps import KEY_FIELDS, NEED_REASONS, project_needs
 from hanset_active.util.timeutil import Clock, kst_now
 from hanset_active.util.urls import is_excluded
@@ -15,13 +16,13 @@ from hanset_active.venues import is_article_title
 from hanset_twin.daemon import AlreadyRunning, ProcessLock
 
 from . import CollectError
-from .config import (IG_READ_MAX, MODEL_CALL_CAP, MODEL_INPUT_CAP, MODEL_OUTPUT_CAP,
+from .config import (IG_READ_MAX, MAX_TARGETS, MODEL_CALL_CAP, MODEL_INPUT_CAP, MODEL_OUTPUT_CAP,
                      configured_model, handle_valid, outside)
 from .deepseek import DeepSeek, INPUT_LIMIT, OUTPUT_TOKENS, credentials_present
 from .ground import redact
 from .ingest import load_watchlist
 from .state import State, atomic_json
-from .targets import derive_seed_targets, derive_target, merge_targets, ownership_index, parse_targets
+from .targets import derive_promoted_targets, derive_seed_targets, derive_target, merge_targets, ownership_index, parse_targets
 
 POLICY = 'gap-priority-v1'
 MAX_PLAN_BYTES = 512_000
@@ -184,7 +185,7 @@ def assemble_targets(settings, *, now, testing=False, include_watchlist=True):
     manual, status = load_targets(settings.data_dir / 'web_targets.json',
                                   testing=testing, disabled=disabled)
     watchlist = _watchlist(settings, notes) if include_watchlist else []
-    targets, db_status, db = manual, 'ok', None
+    targets, authorization, db_status, db = manual, manual, 'ok', None
     try:
         db = _readonly(settings)
         venues = [dict(r) for r in db.execute('SELECT * FROM venues ORDER BY venue_id')]
@@ -220,8 +221,12 @@ def assemble_targets(settings, *, now, testing=False, include_watchlist=True):
                 if target:
                     derived.append((target, {**venue, **projected}))
             derived.sort(key=lambda pair: _local_key(pair[1]))
-            targets = merge_targets(manual, [t for t, _ in derived], disabled,
-                                    ownership, notes, seeds=seed_targets, testing=testing)
+            authorization = merge_targets(
+                manual, [t for t, _ in derived], disabled, ownership, notes, seeds=seed_targets,
+                promoted=derive_promoted_targets(promoted_rows(db), testing=testing),
+                testing=testing, complete=True)
+            notes['derived_truncated'] += max(0, len(authorization) - MAX_TARGETS)
+            targets = authorization[:MAX_TARGETS]
         materialized = _snapshot_rows(db, targets, watchlist, now=now,
                                       ownership=[venues, aliases, seed_id, seeds, seed_domains])
     except (OSError, sqlite3.Error, ValueError, TypeError):
@@ -229,14 +234,14 @@ def assemble_targets(settings, *, now, testing=False, include_watchlist=True):
         db_status = 'missing' if not (settings.active_dir / 'active.sqlite3').is_file() else 'unreadable'
         notes = Counter({k: v for k, v in notes.items() if k.startswith('watchlist_')})
         notes['active_db_' + db_status] += 1
-        targets = manual
+        targets = authorization = manual
         materialized = _snapshot_rows(None, targets, watchlist, now=now)
     finally:
         if db is not None:
             db.close()
     rows, fingerprint, snapshot_notes = materialized
     notes.update(snapshot_notes)
-    return {'targets': targets, 'targets_status': status, 'db_status': db_status,
+    return {'targets': targets, 'authorization': authorization, 'targets_status': status, 'db_status': db_status,
             'watchlist': watchlist, 'snapshot': (rows, fingerprint, notes)}
 
 
@@ -665,7 +670,7 @@ def order_targets(targets, plan):
 def local_target_order(settings, targets, *, now, materialized=None):
     rows, _, _ = materialized if materialized is not None else snapshot(settings, targets, [], now=now)
     positions = {identity(row): index for index, row in enumerate(rows)}
-    return sorted(targets, key=lambda t: (positions[identity(t)], target_id(t)))
+    return sorted(targets, key=lambda t: (positions.get(identity(t), len(positions)), target_id(t)))
 
 
 def run_plan(settings, *, ranking='model', clock=None, planner=None, planner_session=None, testing=False):

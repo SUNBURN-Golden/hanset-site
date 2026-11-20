@@ -33,35 +33,24 @@ def reserve(clock=None):
         return allowed, reservation.reason, reservation.snapshot
 
 
-def test_first_thirty_then_exhaustion_and_restart():
-    for used in range(1, 31):
-        allowed, reason, snapshot = reserve()
-        assert allowed and reason == 'ok' and snapshot.used == used
-    assert reserve()[1] == 'tavily_budget_exhausted'
-    result = subprocess.run([sys.executable, '-c', '''
-from hanset_active.search.budget import locked_budget
-from hanset_active.util.timeutil import FakeClock
-with locked_budget(clock=FakeClock()) as r:
-    assert not r.reserve()
-    print(r.reason)
-'''], capture_output=True, text=True, check=True)
-    assert result.stdout.strip() == 'tavily_budget_exhausted'
-    state = json.loads(state_path().read_text())['budgets']['tavily']
-    assert state['days']['2026-01-01']['used'] == 30
-    assert state['last_reason'] == 'tavily_budget_exhausted'
-    assert state_path().stat().st_mode & 0o777 == 0o600
-
-
-def test_thirty_dispatches_then_zero_even_after_fresh_call():
+def test_legacy_thirty_migrates_preserving_history_then_dispatches():
+    path = state_path()
+    path.parent.mkdir(mode=0o700)
+    path.write_text(json.dumps({'schema_version': 1, 'budgets': {'tavily': {
+        'daily_limit': 30, 'days': {'2025-12-31': {'used': 2}, '2026-01-01': {'used': 30}},
+        'last_reason': 'tavily_budget_exhausted'}}}))
+    path.chmod(0o600)
     response = Mock(status_code=200)
-    response.iter_content.return_value = [b'{"results":[]}']
+    response.iter_content.return_value = [b'{"results":[],"usage":{"credits":1}}']
     post = Mock(return_value=response)
-    for used in range(1, 31):
-        result = tavily._search('Known Sauna', 'official_page', clock=FakeClock(), transport=post)
-        assert result.status == 'ok' and result.budget.used == used
-    for _ in range(2):
-        assert tavily._search('Known Sauna', 'official_page', clock=FakeClock(), transport=post).reason == 'tavily_budget_exhausted'
-    assert post.call_count == 30
+    result = tavily._search('Seed Spa A', 'official_page', clock=FakeClock(), transport=post)
+    assert result.status == 'ok' and result.budget.used == 31 and result.budget.reported_credits == 1
+    post.assert_called_once()
+    state = json.loads(path.read_text())
+    assert state['schema_version'] == 2
+    assert state['budgets']['tavily']['days'] == {
+        '2025-12-31': {'used': 2}, '2026-01-01': {'used': 31, 'reported_credits': 1}}
+    assert path.stat().st_mode & 0o777 == 0o600
 
 
 def _contend(directory):
@@ -77,27 +66,27 @@ def _contend(directory):
     return successes
 
 
-def test_processes_cannot_exceed_thirty():
+def test_processes_share_uncapped_usage():
     directory = os.environ['HANSET_IG_DIR']
     with ProcessPoolExecutor(4, mp_context=multiprocessing.get_context('spawn')) as pool:
         counts = list(pool.map(_contend, [directory] * 4))
-    assert sum(counts) == 30
-    assert len((Path(directory) / 'dispatches').read_text().splitlines()) == 30
-    assert json.loads(state_path().read_text())['budgets']['tavily']['days']['2026-01-01']['used'] == 30
+    assert sum(counts) == 48
+    assert len((Path(directory) / 'dispatches').read_text().splitlines()) == 48
+    assert json.loads(state_path().read_text())['budgets']['tavily']['days']['2026-01-01']['used'] == 48
 
 
 def test_kst_midnight_resets_but_utc_midnight_does_not_and_rollback_retains():
     clock = FakeClock(datetime(2026, 11, 5, 14, 59, 59, tzinfo=timezone.utc))
     for _ in range(30):
         assert reserve(clock)[0]
-    assert reserve(clock)[1] == 'tavily_budget_exhausted'
+    assert reserve(clock)[2].used == 31
     clock.sleep(1)
     assert reserve(clock)[2].day == '2026-11-06'
     assert reserve(clock)[2].used == 2
     clock.sleep(9 * 3600)
     assert reserve(clock)[2].used == 3  # UTC midnight is still the same KST day.
     rollback = FakeClock(datetime(2026, 11, 5, 14, tzinfo=timezone.utc))
-    assert reserve(rollback)[1] == 'tavily_budget_exhausted'
+    assert reserve(rollback)[2].used == 32
 
 
 def test_rollover_between_reservation_and_dispatch():

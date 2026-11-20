@@ -222,12 +222,14 @@ def test_seed_duplicate_uses_gap_identity_once(env, monkeypatch):
     ('http://example.test/robots.txt', True),
 ])
 def test_seed_redirect_rejected_before_destination_request(env, monkeypatch, destination, robots_redirect):
+    if robots_redirect:
+        monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
     settings, clock, active = env
     url, robots = 'https://example.test/entry', 'https://example.test/robots.txt'
     seed_rows(active, name='Seed Spa A', website=url, domain='example.test')
     calls = []
 
-    def request(self, requested, kind, headers=None):
+    def request(self, requested, kind, **kwargs):
         calls.append(requested)
         if requested == (robots if robots_redirect else url):
             return SimpleNamespace(status_code=302, headers={'Location': destination}), b'', ''
@@ -236,7 +238,7 @@ def test_seed_redirect_rejected_before_destination_request(env, monkeypatch, des
 
     monkeypatch.setattr(service.Fetcher, '_request', request)
     result = service.run_web(settings, clock=clock, session=Model(empty=True), testing=True)
-    assert result['success'] and calls == ([robots] if robots_redirect else [robots, url])
+    assert result['success'] and calls == ([robots] if robots_redirect else [url])
     assert result['pages'][-1]['disposition'] == ('robots_disallowed' if robots_redirect else 'denied')
 
 

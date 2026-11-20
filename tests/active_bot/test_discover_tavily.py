@@ -130,28 +130,23 @@ def test_bad_queries_do_not_load_credentials_or_reserve(bot, monkeypatch, privat
     assert not usage_path().exists()
 
 
-def test_shared_collector_and_discovery_allow_exactly_thirty(bot, private_client):
+def test_shared_collector_and_discovery_account_for_all_calls(bot, private_client):
     gap = known_gap(bot)
     p = provider(bot)
-    for index in range(30):
+    for index in range(32):
         if index % 2:
             assert p.search('Seoul sauna') == [] and p.completed
         else:
             assert discover_known_venue(bot.db, *gap, clock=bot.clock).status == 'ok'
-    assert private_client.call_count == 30
-    assert not provider(bot).search('Seoul sauna')
-    assert discover_known_venue(bot.db, *gap, clock=bot.clock).reason == 'tavily_budget_exhausted'
-    assert private_client.call_count == 30
-    assert json.loads(usage_path().read_text())['budgets']['tavily']['days']['2026-01-01']['used'] == 30
-    available = budget.availability(clock=bot.clock)
-    assert available.reason == 'tavily_budget_exhausted'
+    assert private_client.call_count == 32
+    assert json.loads(usage_path().read_text())['budgets']['tavily']['days']['2026-01-01']['used'] == 32
     bot.clock.sleep(24 * 3600)
     assert budget.availability(clock=bot.clock).snapshot.used == 0
     assert provider(bot).search('Seoul sauna') == []
-    assert private_client.call_count == 31
+    assert private_client.call_count == 33
 
 
-def test_concurrent_broad_and_collector_share_cap(bot, private_client):
+def test_concurrent_broad_and_collector_share_ledger(bot, private_client):
     vid = upsert_venue(bot.db, 'Seed Spa A', website='https://spa.example.test', city='Seoul')
     ensure_gaps(bot.db, vid, clock=bot.clock)
     bot.db.commit()
@@ -166,9 +161,8 @@ def test_concurrent_broad_and_collector_share_cap(bot, private_client):
 
     with ThreadPoolExecutor(4) as pool:
         outcomes = list(pool.map(search, range(40)))
-    assert sum(o.status == 'ok' for o in outcomes) == private_client.call_count == 30
-    assert sum(o.status != 'ok' and o.reason == 'tavily_budget_exhausted' for o in outcomes) == 10
-    assert json.loads(usage_path().read_text())['budgets']['tavily']['days']['2026-01-01']['used'] == 30
+    assert sum(o.status == 'ok' for o in outcomes) == private_client.call_count == 40
+    assert json.loads(usage_path().read_text())['budgets']['tavily']['days']['2026-01-01']['used'] == 40
 
 
 def test_availability_is_non_reserving_and_cooldown_recovers(bot, private_client):
@@ -326,43 +320,42 @@ def test_runner_counts_empty_or_failed_dispatch_once(bot, private_client, status
     assert row['url'] == tavily.ENDPOINT and row['run_id'] == outcome['run_id']
 
 
-def test_budget_race_defers_pending_job_without_failure(bot, monkeypatch, private_client):
+def test_cooldown_race_defers_pending_job_without_failure(bot, monkeypatch, private_client):
     block_others(bot)
     tid = enqueue(bot.db, kind='search', payload={'query': 'Seoul sauna'})
     original = tavily.discover_query
     def race(*args, **kwargs):
-        for _ in range(30):
-            with budget.locked_budget(clock=bot.clock) as reservation:
-                assert reservation.reserve()
+        with budget.locked_budget(clock=bot.clock) as reservation:
+            assert reservation.reserve()
+            reservation.finish('tavily_rate_limited', 120)
         return original(*args, **kwargs)
     monkeypatch.setattr(tavily, 'discover_query', race)
     outcome = run(bot, initialize=False, max_requests=3)
     assert outcome['requests'] == 0 and outcome['completed'] == 0
     row = task(bot, tid)
     assert row['state'] == 'pending' and row['attempts'] == 0 and row['lease_until'] is None
-    assert row['next_at'] == (kst_now(bot.clock) + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat()
+    assert row['next_at'] == (kst_now(bot.clock) + timedelta(seconds=120)).isoformat()
     assert not bot.db.execute('SELECT 1 FROM failures').fetchone()
     private_client.assert_not_called()
 
 
-@pytest.mark.parametrize('interruption', ['daily', 'run'])
+@pytest.mark.parametrize('interruption', ['cooldown', 'run'])
 def test_osm_checkpoint_resumes_at_next_combination(bot, private_client, interruption):
     block_others(bot)
     profile_for_directory(bot)
     tid = enqueue(bot.db, kind='directory', payload={'kind': 'osm_search', 'url': 'https://unused.example/search'})
-    if interruption == 'daily':
-        for _ in range(29):
-            with budget.locked_budget(clock=bot.clock) as reservation: assert reservation.reserve()
+    if interruption == 'cooldown':
+        private_client.side_effect = [response(), response(status=429, headers={'Retry-After': '120'}), response()]
     first = run(bot, initialize=False, max_requests=1 if interruption == 'run' else 10)
-    assert first['requests'] == 1 and first['completed'] == 0
+    assert first['requests'] == (1 if interruption == 'run' else 2) and first['completed'] == 0
     assert task(bot, tid)['state'] == 'pending' and task(bot, tid)['attempts'] == 0
     assert bot.db.execute("SELECT cursor FROM run_checkpoints WHERE kind='discovery:osm'").fetchone()[0] == '1'
-    if interruption == 'daily': bot.clock.sleep(24 * 3600)
+    if interruption == 'cooldown': bot.clock.sleep(120)
     second = run(bot, initialize=False, max_requests=10)
     assert second['requests'] == 1 and second['completed'] == 1
-    assert private_client.call_count == 2 and task(bot, tid)['state'] == 'done'
+    assert private_client.call_count == (2 if interruption == 'run' else 3) and task(bot, tid)['state'] == 'done'
     queries = [call.kwargs['json']['query'] for call in private_client.call_args_list]
-    assert 'Seoul' in queries[0] and 'Busan' in queries[1]
+    assert 'Seoul' in queries[0] and all('Busan' in query for query in queries[1:])
 
 
 def test_provider_recovery_clears_only_provider_deferrals(bot, monkeypatch):

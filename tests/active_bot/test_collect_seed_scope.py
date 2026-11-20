@@ -197,7 +197,7 @@ def test_seed_redirect_scope_rejects_destination_before_requests(env, monkeypatc
     model = Model()
     result = service.run_web(settings, clock=clock, session=model, testing=True)
     assert result['pages'][-1] == {'url': NAVER, 'disposition': 'denied'} and not model.calls
-    assert calls == ['https://blog.naver.com/robots.txt', NAVER]
+    assert calls == [NAVER]
     if 'instagram.com' in destination or 'instagr.am' in destination:
         with pytest.raises(ValueError):
             targets.canonical_requested_url(destination)

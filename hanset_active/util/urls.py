@@ -1,10 +1,12 @@
 """Deterministic URL identity without DNS resolution or network access."""
 import ipaddress
 import re
+import socket
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, unquote
 from .pii import strip_pii
 
 DENIED = ('naver.com', 'naver.me', 'pstatic.net', 'naver.net', 'instagram.com', 'instagr.am', 'cdninstagram.com')
+DECLINED_LISTING_TERMS = ('runport', '런포트')
 COLLECT_DENIED = ('instagram.com', 'instagr.am', 'cdninstagram.com')
 
 def canonicalize(url: str, base: str | None = None, *, preserve_path: bool = False) -> str:
@@ -53,7 +55,7 @@ def is_collect_denied(url: str) -> bool:
 def is_excluded(*values: str, terms=()) -> bool:
     if not terms:
         from ..config import load_profile
-        terms = load_profile()['exclusion_terms']
+        terms = (*load_profile()['exclusion_terms'], *DECLINED_LISTING_TERMS)
     return any(t.casefold() in v.casefold() for t in terms for v in values if v)
 
 def literal_private(url: str) -> bool:
@@ -62,8 +64,12 @@ def literal_private(url: str) -> bool:
         return True
     try:
         ip = ipaddress.ip_address(host)
-        if ip.version == 4 and ip in ipaddress.ip_network('198.18.0.0/15'):
-            return False
-        return not ip.is_global
     except ValueError:
+        # libc also interprets short, octal and hexadecimal IPv4 spellings.
+        try:
+            ip = ipaddress.IPv4Address(socket.inet_aton(host))
+        except (OSError, ValueError):
+            return False
+    if ip.version == 4 and ip in ipaddress.ip_network('198.18.0.0/15'):
         return False
+    return not ip.is_global

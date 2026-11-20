@@ -114,7 +114,7 @@ def test_web_proposals_do_not_request_instagram(env, server, monkeypatch):
     session = Session(_envelope({'items': [{'index': 0, 'claims': []}]}))
     result = run_web(settings, clock=clock, session=session, testing=True)
     assert result['state'] == 'done' and len(session.calls) == 1
-    assert {r['path'] for r in server.log} == {'/robots.txt', '/official'}
+    assert {r['path'] for r in server.log} == {'/official'}
     proposals = json.loads((settings.data_dir / 'watchlist-proposals.json').read_text())
     assert proposals['proposals'][0]['handle'] == 'fixture.venue'
     assert not (settings.data_dir / 'watchlist.json').exists()

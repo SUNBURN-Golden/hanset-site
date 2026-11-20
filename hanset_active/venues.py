@@ -6,6 +6,7 @@ import re
 import unicodedata
 from difflib import SequenceMatcher
 from pathlib import Path
+from uuid import NAMESPACE_URL, uuid5
 from .db import deterministic_id
 from .util.pii import strip_pii
 from .util.timeutil import kst_now
@@ -14,6 +15,9 @@ from .util.followups import portal_domains
 
 def normalize_name(name):
     return re.sub(r'[^a-z0-9가-힣]', '', re.sub(r'본점|지점|branch|main branch','',name.casefold()))
+
+def seed_target_identity(normalized_name, domain):
+    return 'seed:' + str(uuid5(NAMESPACE_URL, f'hanset-collector-seed:{normalized_name}:{domain}'))
 
 _ARTICLE_TITLE = re.compile(r'추천|어디|총정리|후기|[?!]|\bbest\b|\btop\s*\d+|^\d+\s*(?:곳|선)')
 
