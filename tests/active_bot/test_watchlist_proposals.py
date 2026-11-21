@@ -9,7 +9,7 @@ from hanset_active.collect.targets import source_authorization
 from hanset_active.collect.watchlist_proposals import (
     PROPOSAL_KEYS, classify, inspect_page, write_proposals,
 )
-from tests.active_bot.test_collect_deepseek import KEY, Session, _envelope
+from tests.active_bot.test_collect_deepseek import Session, _envelope, enable_qwen
 from tests.active_bot.test_collect_plan import env, save_targets, venue, watch
 
 
@@ -109,10 +109,10 @@ def test_web_proposals_do_not_request_instagram(env, server, monkeypatch):
     html = ('<html><main>' + 'Official hotel sauna information. ' * 8 + '</main>'
             '<footer><a href="https://www.instagram.com/fixture.venue/">social</a></footer></html>')
     server.add('/official', html)
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     save_targets(settings.data_dir / 'web_targets.json', [target])
     session = Session(_envelope({'items': [{'index': 0, 'claims': []}]}))
-    result = run_web(settings, clock=clock, session=session, testing=True)
+    result = run_web(settings, clock=clock, qwen_session=session, testing=True)
     assert result['state'] == 'done' and len(session.calls) == 1
     assert {r['path'] for r in server.log} == {'/official'}
     proposals = json.loads((settings.data_dir / 'watchlist-proposals.json').read_text())
@@ -129,7 +129,7 @@ def test_proposal_write_failure_does_not_abort_extraction(env, server, monkeypat
     html = ('<html><main>' + 'Official hotel sauna information. ' * 8 + '</main>'
             '<footer><a href="https://www.instagram.com/fixture.venue/">social</a></footer></html>')
     server.add('/official', html)
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     save_targets(settings.data_dir / 'web_targets.json', [target])
     session = Session(_envelope({'items': [{'index': 0, 'claims': []}]}))
 
@@ -140,7 +140,7 @@ def test_proposal_write_failure_does_not_abort_extraction(env, server, monkeypat
 
     monkeypatch.setattr(service, 'write_proposals', fail_write)
 
-    result = run_web(settings, clock=clock, session=session, testing=True)
+    result = run_web(settings, clock=clock, qwen_session=session, testing=True)
     assert result['state'] == 'done' and len(session.calls) == 1
     assert {'url': '', 'disposition': 'proposals_invalid'} in result['pages']
 

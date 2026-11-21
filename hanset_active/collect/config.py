@@ -1,4 +1,4 @@
-"""External paths, hard budgets, and official-source identity checks."""
+"""External paths, model identity, and official-source identity checks."""
 import os
 import re
 from dataclasses import dataclass
@@ -11,18 +11,16 @@ from hanset_active.util.urls import is_collect_denied, is_denied, is_excluded, r
 
 from . import CollectError
 
-ALLOWED_MODELS = frozenset({'deepseek-flash', 'deepseek-v4-pro'})
+DEEPSEEK_MODELS = frozenset({'deepseek-flash', 'deepseek-v4-pro'})
+QWEN_MODEL = 'qwen4-max-preview'
+PLAN_MODELS = DEEPSEEK_MODELS | {QWEN_MODEL}
+ALLOWED_MODELS = PLAN_MODELS
 DEFAULT_MODEL = 'deepseek-flash'
-PAGE_RUN_CAP = 10
-PAGE_DAY_CAP = 20
 SUBPAGE_MAX = 2
 BLOCK_COOLDOWN_DAYS = 14
 UNCHANGED_COOLDOWN_DAYS = 7
 IG_READ_MAX = 20
 IG_READ_TARGET = 10
-MODEL_CALL_CAP = 36
-MODEL_INPUT_CAP = 180_000
-MODEL_OUTPUT_CAP = 32_000
 MAX_TEXT = 4_000
 MAX_TARGETS = 100
 HANDLE_RE = re.compile(r'[A-Za-z0-9_][A-Za-z0-9._]{0,29}')
@@ -48,7 +46,7 @@ def outside(path):
 
 def configured_model(value=None):
     model = value if value is not None else os.environ.get('HANSET_DEEPSEEK_MODEL', DEFAULT_MODEL)
-    if model not in ALLOWED_MODELS:
+    if model not in DEEPSEEK_MODELS:
         raise CollectError('model_config_invalid')
     return model
 

@@ -4,9 +4,12 @@ from datetime import datetime, timedelta
 from itertools import combinations
 
 from hanset_active.db import deterministic_id
+from hanset_active.util.timeutil import KST
 
-from .normalize import VERSION, normalize_value, stable_json
+from .normalize import AVAILABILITY_FIELDS, LEGACY_VERSION, VERSION, normalize_value, stable_json
 from .promotion_policy import approval_for, independence
+from .safety import evidence_rejection
+from .store import validated_authorization
 
 _PROVENANCE = {'web': ('web_verbatim', 'page_span', 1),
                'instagram': ('operator_summary', 'summary_span', 0)}
@@ -40,9 +43,22 @@ def _eligibility(claim, policy):
     approval, reason = approval_for(claim, policy)
     if reason:
         reasons.append(reason)
+    if claim.get('binding_current') == 0:
+        reasons.append('source_binding_changed')
+    if evidence_rejection(claim.get('quote', '') + '\n' + stable_json(claim['value'])):
+        reasons.append('unsafe_evidence')
     if claim['normalization']['reason']:
         reasons.append(claim['normalization']['reason'])
     return approval, reasons
+
+
+def _official(claim):
+    approval = claim['approval']
+    if (approval['source_kind'] != 'web' or approval.get('review_only')
+            or claim.get('source_type') != 'own_site'):
+        return False
+    return validated_authorization(claim['source_url'], claim.get('final_url'), claim.get('source_authorization'),
+                                   {approval['registrable_domain']}) is not None
 
 
 def _group_key(item):
@@ -73,10 +89,10 @@ def assess(claims, existing, policy, *, now):
         item['promotion_eligible'] = not errors
         item['eligibility_reasons'] = errors
         item['approval'] = approval
-        if item.get('source_type') == 'third_party':
-            item['verification_label'] = '미확인'
+        item['verification_label'] = '미확인'
         seen = timestamp(item.get('seen_at'))
         item['date_basis'] = 'seen_at'
+        item['checked'] = seen.astimezone(KST).date().isoformat() if seen else None
         item['freshness'] = ('오래됨' if now - seen > timedelta(days=90) else 'fresh') if seen else 'unranked'
         reasons.update(errors)
         evaluated.append(item)
@@ -114,16 +130,27 @@ def assess(claims, existing, policy, *, now):
             eligible = [item for item in supporting if item['promotion_eligible']]
             pairs = [rationale for left, right in combinations(eligible, 2)
                      if (rationale := independence(left, right)) is not None]
-            if not pairs:
+            official_ids = sorted(item['claim_id'] for item in eligible if _official(item))
+            if not pairs and not official_ids:
                 continue
+            basis = None
+            current_ids = []
+            if not is_conflict:
+                if official_ids:
+                    basis, current_ids = 'official', official_ids
+                else:
+                    basis = 'independent_agreement'
+                    current_ids = sorted({cid for pair in pairs for cid in pair['claim_ids']})
             first = supporting[0]
-            candidate_id = deterministic_id('collector-fact-candidate', VERSION, group_key, value_key)
+            identity_version = VERSION if first['field'] in AVAILABILITY_FIELDS else LEGACY_VERSION
+            candidate_id = deterministic_id('collector-fact-candidate', identity_version, group_key, value_key)
             proposed[candidate_id] = {
                 'candidate_id': candidate_id, 'venue_id': first['venue_id'],
                 'venue_key': first['venue_key'], 'field': first['field'],
                 'qualifiers': first['normalization']['qualifiers'],
                 'normalized_value': first['normalization']['normalized_value'],
                 'normalizer_version': VERSION, 'status': 'fact_candidate',
+                'qualification_basis': basis, 'current_supporting_claim_ids': current_ids,
                 'rights': 'internal_review_only',
                 'review_state': 'needs_confirmation' if is_conflict else 'awaiting_review',
                 'conflict_id': conflict_id if is_conflict else None,
@@ -137,11 +164,13 @@ def assess(claims, existing, policy, *, now):
             item = proposed[candidate_id]
             item['supporting_claim_ids'] = sorted(set(item['supporting_claim_ids']) | set(stored['supporting_claim_ids']))
             item['created_at'], item['changed_at'] = stored['created_at'], stored['changed_at']
+            item['normalizer_version'] = stored['normalizer_version']
         else:
-            item = {**stored, 'review_state': 'evidence_hold', 'independence_rationale': []}
+            item = {**stored, 'review_state': 'evidence_hold', 'independence_rationale': [],
+                    'qualification_basis': None, 'current_supporting_claim_ids': []}
             group_key = (item['venue_id'], item['venue_key'], item['field'], stable_json(item['qualifiers']))
             item['conflict_id'] = deterministic_id('collector-conflict', VERSION, group_key) if group_key in conflicting_keys else None
-            if item['normalizer_version'] == VERSION:
+            if item['normalizer_version'] in (VERSION, LEGACY_VERSION):
                 matching = [claim['claim_id'] for claim in groups.get(group_key, [])
                             if claim['normalization']['comparison_key'] == stable_json(item['normalized_value'])]
                 item['supporting_claim_ids'] = sorted(set(item['supporting_claim_ids']) | set(matching))
@@ -152,18 +181,22 @@ def assess(claims, existing, policy, *, now):
         item['conflict_state'] = '확인 필요' if item.get('conflict_id') else None
         item['eligible_supporting_claim_ids'] = [cid for cid in item['supporting_claim_ids']
                                                if cid in by_id and by_id[cid]['promotion_eligible']]
-        eligible_ids = item['eligible_supporting_claim_ids']
-        if eligible_ids and all(by_id[cid].get('source_type') == 'third_party' for cid in eligible_ids):
+        if not item['qualification_basis']:
             item['verification_label'] = '미확인'
+        else:
+            item.pop('verification_label', None)
         item['assessment_digest'] = deterministic_id(
             'collector-assessment', policy['fingerprint'], item['review_state'],
             item['supporting_claim_ids'], item['independence_rationale'],
+            item['qualification_basis'], item['current_supporting_claim_ids'],
             _assessment_evidence([entry for entry in conflicts if entry['conflict_id'] == item.get('conflict_id')]),
             _assessment_evidence([by_id[cid] for cid in item['supporting_claim_ids'] if cid in by_id]))
     for item in evaluated:
         item.pop('approval', None)
     candidates = sorted(proposed.values(), key=lambda item: item['candidate_id'])
-    return {'claims': evaluated, 'conflicts': conflicts, 'fact_candidates': candidates,
+    facts = [{**item, 'status': 'fact', 'supporting_claim_ids': item['current_supporting_claim_ids']}
+             for item in candidates if item['qualification_basis']]
+    return {'claims': evaluated, 'conflicts': conflicts, 'fact_candidates': candidates, 'facts': facts,
             'eligibility_reason_counts': dict(sorted(reasons.items())),
             'policy_fingerprint': policy['fingerprint'], 'normalizer_version': VERSION,
             'assessment_fingerprint': deterministic_id('collector-report', policy['fingerprint'],

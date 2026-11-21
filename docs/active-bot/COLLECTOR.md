@@ -1,4 +1,4 @@
-# DeepSeek web collector and desktop Instagram handoff
+# Web collector and desktop Instagram handoff
 
 This collector writes internal `source_claim` rows under `HANSET_IG_DIR`
 (default `/workspace/hanset-data/ig`). It does not publish the site, fill active
@@ -31,80 +31,69 @@ post's original caption. Grounding that span checks the paraphrase only. It
 does not verify the post. Rows stored before provenance columns existed keep
 NULL origin and are unrecorded, not relabeled.
 
-DeepSeek is the existing account identified by `DEEPSEEK_API_KEY`. The
-owner-approved Qwen backup tier (below) uses a host-provided token-plan key.
-Tavily, when a target asks for it, remains the existing 30-request daily cap.
-Its secret stays on the host.
+## Model routing and accounting
 
-The model default is `deepseek-flash` (DeepSeek's documented Flash id).
-`HANSET_DEEPSEEK_MODEL=deepseek-v4-pro` is an optional same-account override
-and costs more. Other ids, including retired aliases, fail as
-`model_config_invalid`. Requests disable thinking mode and cap each response
-at 1,200 output tokens. The persistent budget is 36 calls, 180,000 input
-characters, and 32,000 output tokens per KST day. A reserved call stays spent
-if the process stops. The next KST day starts a new budget. Rolling the clock
-backward fails closed as `state_corrupt`.
+Ranking, web extraction, and desktop summary ingestion start with
+`qwen4-max-preview` on the existing Qwen Token Plan. The loader reads
+`/home/box/.qwen/token_plan_key` or `HANSET_QWEN_KEY_FILE` at runtime. It
+refuses symlinks, checkout files, and invalid keys. Qwen disables thinking,
+omits `response_format`, and accepts a single JSON fence. The collector
+validates the returned JSON locally and discards reasoning.
 
-## Qwen backup tier (owner-approved 2026-11-11)
+When Qwen lacks credentials or reports an operational error, the collector
+can try DeepSeek using `DEEPSEEK_API_KEY`. `HANSET_DEEPSEEK_MODEL` selects
+`deepseek-flash` by default or `deepseek-v4-pro` on the same account. The
+DeepSeek fallback requires a healthy result less than six hours old. If
+health is missing or expired, one read-only balance probe checks
+`is_available`. A negative result is reused for six hours. Insufficient
+balance from a probe or completion disables DeepSeek for the invocation,
+including web ranking and split retries. A valid Qwen response requires no
+DeepSeek request. Model requests use direct sessions with bounded timeouts
+and disabled redirects. Approval is required for any plan upgrade or top-up.
+[DeepSeek balance API](https://api-docs.deepseek.com/api/get-user-balance/)
 
-Every model step (web extraction, Instagram summary extraction, gap ranking)
-retries a failed DeepSeek call exactly once via Qwen4-Max. The retry fires
-only for `model_unavailable`, `model_rate_limited`, `model_transport`,
-`model_timeout`, `model_auth`, and `model_insufficient_balance` — which covers
-402 credit exhaustion, 429 limits, and 5xx. Invalid model output, an exhausted
-budget, and missing DeepSeek credentials (`missing_credentials`) never fall back.
-After a primary 402, that client skips DeepSeek for its remaining calls and
-goes straight to Qwen. The first primary reservation stays spent; skipped
-attempts make no request and reserve no budget. Extraction reuses one client
-across batches; ranking uses a separate client. A new client tries DeepSeek
-again. A Qwen 402 does not activate the primary skip.
+`HANSET_ACTIVE_DIR/collect-runtime.sqlite3` holds provider health and a
+`model_usage` ledger of dispatched completions and probes. Each entry records
+the provider, model, time, outcome, input characters, requested output allowance,
+reported token usage, and cost basis. An explicit provider amount with currency
+is recorded as `provider_reported`. Unavailable cost is `unknown`. Balances,
+keys, headers, and provider bodies are discarded. Checkpoint budgets are
+cumulative KST-day counters. They do not gate model calls. Status `provider`
+counts dispatched completions in the invocation. Probes appear separately in
+the ledger. `deepseek_skipped: "insufficient_balance"` reports a balance hold.
 
-- Endpoint: `https://token-plan.maas.qwencloudapi.com/compatible-mode/v1/chat/completions`,
-  model `qwen4-max-preview`, same bounded messages as the primary attempt.
-  The Qwen request sets `enable_thinking: false`, omits the DeepSeek-only
-  `thinking` parameter and `response_format`, and uses a 60 s read timeout
-  instead of 20 s. A single surrounding Markdown `json` fence is accepted for
-  Qwen only; the content must still parse as a JSON object. Empty content,
-  including reasoning-only replies, is `model_invalid`; reasoning is discarded.
-- Key: read at runtime from `/home/box/.qwen/token_plan_key`, overridable
-  with `HANSET_QWEN_KEY_FILE`. A missing, unreadable, symlinked, oversized,
-  or repo-internal key file silently skips the backup and keeps the original
-  error. The key is cached in process memory only; a new run picks up
-  rotation. It is redacted like other secrets and never logged, persisted,
-  or committed. No wrapper or cron change: the file is read at runtime, not
-  sourced.
-- If Qwen also fails (credit exhausted, 429, limit, timeout, invalid output),
-  the original DeepSeek reason is raised and existing retry/fallback
-  handling proceeds. There is no third tier in the collector.
-- Both attempts charge the same daily budget via `reserve_model`; the failed
-  primary reservation stays spent, so the caps cannot be exceeded by the
-  retry. With no headroom for the retry, the original error is kept.
-- `provider` in run results, `status.json`, and `collect status` counts which
-  provider answered successfully (`deepseek` / `qwen`). It is per-run
-  diagnostics: not part of `checkpoint.json`, and plan artifacts keep the
-  configured DeepSeek id in `ranking.model` (see GAP_PRIORITY.md).
-- Run results, `status.json`, `collect status`, and planning results also report
-  `primary_skipped: "insufficient_balance"` when a primary 402 occurred, even if
-  Qwen fails. This diagnostic is absent otherwise, is never checkpointed, and
-  never controls routing on a later run. Successful fallback retains its ordinary
-  success reason; failed fallback retains `model_insufficient_balance`.
-- Model calls (DeepSeek and Qwen) go direct with `trust_env=False` and never
-  use the SOCKS web proxy.
+### Web batches and recovery
 
-The 2026-11-15 live probe confirmed that disabling Qwen thinking produces JSON
-content within the output cap. Adding `response_format` produced malformed
-output, so it remains omitted. Tests never make live model calls.
+Web collection uses the guarded active fetcher. The fixed User-Agent includes
+`hanset@soulbound.co.kr`. Requests serialize per registrable domain, and each
+redirect must pass URL guards before the destination is contacted. Web jobs use
+HTTPS except in loopback fixtures. Instagram, asset, and policy pages never
+reach web extraction. Fetch and model volume have no per-run or daily page
+ceiling. The active lock protects the guarded fetch queue during collection.
 
-Web fetches use the active-bot fetcher with a fixed User-Agent, URL and redirect
-checks, Korean-news robots policy, and active daily body/aux caps. This
-collector adds its own ceiling of 10 pages per run and 20 pages per KST day.
-It holds the active `run.lock` only during fetches. `active_busy` means the
-active collector already held that lock. Web targets require HTTPS except for
-loopback fixtures. The fixed User-Agent includes `hanset@soulbound.co.kr` and
-requests are serialized per registrable domain. Each redirect must pass the
-URL guards and stay within the starting registrable domain before the collector
-contacts the destination. Instagram is outside web collection. Asset and policy
-pages do not reach the model.
+The collector hashes the full eligible text after NFKC and whitespace normalization for each canonical
+requested URL before fragmenting long pages at line, sentence, or word
+boundaries. Each compact JSON request fits six fragments or 24,000 input
+characters including the instruction allowance. A fragment carries up to
+4,000 characters. The response allowance is 1,200 tokens per item. Strict
+local validation requires one result per index and typed claims with grounded
+evidence. A malformed batch splits once into two independently validated
+halves. A page commits only after all its fragments validate.
+
+Applied and empty extractions are cached by canonical requested URL and
+content hash. A hit reports `unchanged`, preserves claim IDs and check dates,
+and records the new observation. The receipts database lets a restart recover
+a cache entry after a cache-index write is interrupted. Legacy short-text
+receipts count only when the legacy hash covered the full eligible text.
+Current venue binding and guarded final-URL authority govern reuse in review.
+
+The runtime database also stores same-day web completions and retry metadata.
+It imports safe same-day web completion keys from the old checkpoint.
+Unfinished pages are reauthorized and refetched on resume through the guarded
+fetcher. A partial result includes full `counts.committed`, `counts.unchanged`,
+and `counts.pending` for the invocation, with up to 200 page outcomes sampled
+in status. The ledger retains all completions and retry entries. The checkpoint
+continues to track Instagram completions, the read limit and security halts.
 
 ### Information subpages and URL cooldowns
 
@@ -121,20 +110,19 @@ registrable domain, belong to the target's approved domains, and pass the existi
 portal/exclusion and safe-URL guards. Policy pages, downloads, credential-bearing
 URLs and external links are rejected. Tracking parameters and fragments collapse;
 meaningful query parameters remain distinct. Canonical identities deduplicate
-slash variants and drive queue, checkpoint, and cooldown comparisons. Each
+slash variants and drive queue, completion, and cooldown comparisons. Each
 identity keeps its maximum score and first validated fetch URL, preserving the
 original encoded path and trailing slash for the actual request.
 
 Fresh children run immediately after their parent, ahead of new roots. All
-children use the same fetcher, proxy, robots rules, locks and budgets. Children
+children use the same guarded fetcher, proxy, robots rules, and locks. Children
 never recurse. A child under a block hold is noted as skipped without consuming
 one of the two subpage slots. Redirects with unsafe URL identities, including
 session parameters, are refused before the destination is contacted.
-Every non-`cap_reached` fetch attempt counts toward the existing 10-page run and
-20-page daily caps, including robots refusals and collateral domain stops. Link
-selection precedes extraction and receipt deduplication, so unchanged or
-empty-extraction roots can still yield useful children. Unprocessed children
-remain in memory and must be rediscovered on a later eligible root fetch.
+Fetch totals include robots refusals and collateral domain stops. Link selection
+precedes extraction and receipt deduplication, so unchanged or empty-extraction
+roots can still yield new children. Pending discovered children resume only
+when the parent and scope still authorize their URLs.
 Only newly discovered children enable the fetcher's subpage mode: paths stay
 intact through normalization, with at most two HTTPS redirects within the
 initial registrable domain. External redirects and downgrades are rejected
@@ -165,25 +153,21 @@ can be retried next run. A blocked homepage therefore does not create a cooldown
 for an independently approved venue subpage.
 
 Holds last 14 days per URL. `recent_block_skipped` makes no fetcher call, consumes
-no page slot, and is never added to checkpoint `completed`. The checkpoint is
-shared with same-day Instagram ingestion: completed keys that fail the safe-URL
-check (such as denied `instagram.com` post URLs) stay inert for web deduplication
-and never abort a web run. Skips do not refresh the timestamp. Exactly at expiry the URL is eligible; a new genuine terminal
-result starts a fresh hold. Expired entries are pruned when opening cooldown
+no page slot, and adds no completion. Skips preserve the existing timestamp.
+At expiry the URL is eligible and a new genuine terminal result starts a fresh
+hold. Expired entries are pruned when opening cooldown
 state and in each write transaction; malformed entries fail as `state_corrupt`.
-Skip notes follow fetch/extraction notes so the 20-entry public status limit
+Skip notes follow fetch/extraction notes so the 200-entry public status sample
 preserves real results; `rejections.recent_block_skipped` reports the total.
 When no unfinished URL remains outside cooldown, the result is successful with
-`collected: false`, reason `recent_block_skipped`, before extraction credential
-checks or proxy preflight.
+`collected: false`, reason `recent_block_skipped`, before proxy preflight or model dispatch.
 
 Search leads are only scheme/domain-checked upstream. A lead whose identity fails
 the safe-URL check (credential params such as `?sid=`/`?key=`, redaction markers,
 over-length) skips that one job with an `unsafe_url_skipped` note and a
 `rejections.unsafe_url_skipped` count; it is never fetched and its raw URL is not
 echoed into status. Other jobs in the same run proceed normally. If every job is
-unsafe, the run stops with reason `unsafe_url_skipped` before credential checks
-or proxy preflight.
+unsafe, the run stops with reason `unsafe_url_skipped` before proxy preflight or model dispatch.
 
 Web collection applies robots.txt, Crawl-delay and per-site spacing to the
 Korean news hosts listed in `hanset_active/profiles/kr_news_domains.txt`. Naver
@@ -205,8 +189,7 @@ uses observations from the past seven days to defer canonical requested URLs
 with `duplicate`, `empty_extraction`, or `applied` with a hash matching an
 applied web receipt for that URL. At seven days the URL returns to normal
 priority. Initial jobs keep their planner order within each queue. The normal
-queue drains first and deferred jobs fetch with spare capacity under the same
-caps and guards.
+queue drains first and deferred jobs then fetch under the same guards.
 
 Fresh link candidates get first choice of each venue's two subpage slots.
 Within each group the original link ranking applies. Fresh children follow
@@ -231,7 +214,7 @@ Scheduling entries stay available after the seven-day window, and existing
 evidence rows retain their original timestamps and labels.
 
 `rejections.recent_unchanged_deferred` reports the number of distinct canonical
-URLs admitted to the deferred queue, including jobs fetched with spare capacity.
+URLs admitted to the deferred queue, including jobs fetched later in the run.
 The key appears in the run result and `collect status` for positive counts.
 Queue admission spends no budget and writes no completion or fetch timestamp.
 
@@ -244,7 +227,7 @@ Queue admission spends no budget and writes no completion or fetch timestamp.
 | `/workspace/hanset-data/ig/web_targets.json` | Manual official URLs and disabled selectors; merged with active DB gap targets. Not the example in git. |
 | `/workspace/hanset-data/ig/watchlist.json` | Official handles allowed in a desktop batch. |
 | `/workspace/hanset-data/ig/inbox/*.jsonl` | Transient desktop batch. |
-| `/workspace/hanset-data/active` | Existing fetcher budgets and robots cache. |
+| `/workspace/hanset-data/active` | Robots cache, fetch audit, and `collect-runtime.sqlite3` for health, usage, cache, completions, and retries. |
 | `/workspace/hanset-data/twin` | Unchanged by this collector. |
 
 `data/ig/*.example.json` shows the shape with `enabled: false`. Copy a file
@@ -293,10 +276,9 @@ portal, map, directory and OTA URLs are fetch targets with third-party
 supply internal evidence. Listing still requires the venue's consent.
 Discovery and collection write internal state.
 
-The planner records up to 100 targets. Fetch execution rotates eligible work
-before selecting the 100-target window. Change detection sees the complete
-authorization set. Collection retains the 10-page run and 20-page KST day
-limits. A plan over 512 KB fails as `plan_invalid`.
+The planner records up to 100 targets. Fetch execution rotates and drains
+the full current authorization set. Change detection sees that same set.
+A plan over 512 KB fails as `plan_invalid`.
 See [GAP_PRIORITY.md](GAP_PRIORITY.md) for ownership/seed ties, identity
 resolution, count-only diagnostics, snapshot reuse and DB failure semantics.
 Planning/execution can fall back to manual targets on DB failure; change
@@ -329,7 +311,7 @@ minutes. A second overlapping run logs `already_running` and exits 0.
 Exit 0 is only `done`, `already_complete`, `already_running`, or idle status.
 `done` with `collected: false` finished without a new claim (robots refusal or
 an empty extraction, for example). Exit 2 means the run did not finish that
-way: missing key, invalid targets, shared-lock deferral, model error, or cap.
+way, for example because of a missing key, invalid targets, shared-lock deferral, or a model error.
 
 The cron line is not installed by this change. After review, an operator on a
 host whose cron timezone is Asia/Seoul can add:
@@ -510,21 +492,18 @@ same pairs.
 
 This command opens the database read-only and prints claims and conflicts.
 It adapts to schemas without provenance columns without applying migrations.
-It does not call DeepSeek, read Instagram, or change the web cron:
+It runs offline:
 
 ```sh
 HANSET_IG_DIR=/workspace/hanset-data/ig python3 -m hanset_active collect report
 ```
 
-The explicit `collect promote --policy /outside-checkout/policy.json` review
-gate can create internal fact candidates from two agreeing independent source
-approvals. `review_only: true` admits third-party web evidence to this gate.
-Third-party claims and candidates supported entirely by third-party claims
-show `미확인`. Public facts require official-source confirmation.
-`--dry-run` is read-only; `collect report --policy ...` reassesses without
-persisting. Both retain conflicts and never publish. See
-[SOURCE_CLAIM_PROMOTION.md](SOURCE_CLAIM_PROMOTION.md) for source approvals,
-normalization, candidate migration, evidence holds and observation-date markers.
+The explicit `collect promote --policy /outside-checkout/policy.json` workflow
+records an internal fact when exact approved official-domain evidence qualifies
+or when two approved independent sources agree. Unqualified source claims
+show `미확인`. Site publication still requires official-source confirmation.
+Event dates await the operator-managed event and edition registry.
+[Source claim promotion](SOURCE_CLAIM_PROMOTION.md) · [Event registry issue](https://github.com/SUNBURN-Golden/hanset-site/issues/129)
 
 Operations replaces the previous daily web trigger with the two-hour web
 trigger. Instagram ingestion follows the hour-13 desktop summary workflow.

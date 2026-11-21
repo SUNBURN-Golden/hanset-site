@@ -143,7 +143,7 @@ def test_subpage_robots_denial_does_not_request_body(tmp_path, monkeypatch):
     assert [(row[0], row[1]) for row in blocks(settings)] == [(digest(ROOT + '/price'), 'robots_disallowed')]
 
 
-def test_real_active_body_budget_includes_subpages(tmp_path, monkeypatch):
+def test_collection_bypasses_legacy_body_budget_for_subpages(tmp_path, monkeypatch):
     settings, path = setup_run(tmp_path, monkeypatch)
     original_settings = service.Settings
     monkeypatch.setattr(service, 'Settings', lambda **kwargs: original_settings(**kwargs, body_cap=2))
@@ -151,14 +151,14 @@ def test_real_active_body_budget_includes_subpages(tmp_path, monkeypatch):
         ROOT + '/robots.txt': (200, b'User-agent: *\nAllow: /\n'),
         ROOT: (200, html('<a href="/price">Price</a><a href="/about">About</a>')),
         ROOT + '/price': (200, html()),
+        ROOT + '/about': (200, html()),
     })
     capture_extraction(monkeypatch)
     result = service.run_web(settings, targets_path=path, clock=FakeClock(), testing=True)
-    assert result['reason'] == 'active_body_cap' and result['counts']['pages'] == 2
-    assert requests == [ROOT, ROOT + '/price']
-    assert evaluations[-1] == (ROOT + '/about', 'cap_reached', None)
+    assert result['success'] and result['counts']['pages'] == 3
+    assert requests == [ROOT, ROOT + '/price', ROOT + '/about']
     with sqlite3.connect(settings.active_dir / 'active.sqlite3') as db:
-        assert db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0] == 2
+        assert db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone() is None
 
 
 def test_pruning_timezone_validation_and_additive_schema(tmp_path):
@@ -202,7 +202,8 @@ def test_many_skips_do_not_hide_fetches_or_fill_checkpoint(tmp_path, monkeypatch
     assert result['success'] and calls == ['https://venue30.example/info']
     assert result['counts']['pages'] == 1 and result['rejections'] == {'recent_block_skipped': 30}
     assert any(page['disposition'] == 'empty_extraction' for page in result['pages'])
-    assert len(State(settings.data_dir, clock).data['completed']) == 1
+    with sqlite3.connect(settings.active_dir / 'collect-runtime.sqlite3') as db:
+        assert db.execute('SELECT count(*) FROM web_completions').fetchone()[0] == 1
     assert service.run_status(settings)['rejections'] == {'recent_block_skipped': 30}
 
 

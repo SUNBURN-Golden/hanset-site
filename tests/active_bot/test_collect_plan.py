@@ -8,8 +8,8 @@ import pytest
 import requests
 
 from hanset_active.collect import CollectError
-from hanset_active.collect.config import CollectSettings, MODEL_CALL_CAP
-from hanset_active.collect.deepseek import OUTPUT_TOKENS, QWEN_ENDPOINT
+from hanset_active.collect.config import CollectSettings, QWEN_MODEL
+from hanset_active.collect.deepseek import DeepSeek
 from hanset_active.collect.plan import (
     DeepSeekRanker, _write, digest, ensure_daily_plan,
     local_target_order, order_targets, run_plan, snapshot, target_id, validate_plan,
@@ -20,7 +20,7 @@ from hanset_active.db import connect
 from hanset_active.gaps import COUNTED_GAP_STATES, project_needs
 from hanset_active.util.timeutil import FakeClock, KST, kst_now
 from hanset_twin.daemon import ProcessLock
-from tests.active_bot.test_collect_deepseek import KEY, QWEN_KEY, Response, Session, _envelope, _qwen_key_file
+from tests.active_bot.test_collect_deepseek import KEY, Response, Session, _envelope, enable_qwen
 
 
 @pytest.fixture(autouse=True)
@@ -232,7 +232,7 @@ def test_identity_type_closed_and_ig_cap(env):
 
 def test_model_only_breaks_ties_and_is_bounded(env, monkeypatch):
     settings, clock, db = env
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     targets = [venue(db, n) for n in range(103)]
     fact(db, targets[0], now=kst_now(clock))
     entries = watch(settings, targets)
@@ -244,10 +244,10 @@ def test_model_only_breaks_ties_and_is_bounded(env, monkeypatch):
     # Lower count cannot move ahead even if the model puts it first.
     small = [rows[0], rows[1], rows[-1]]
     ranker.session = Session(_envelope({'order': [2, 1, 0]}))
-    order, reason = ranker.rank(small)
+    order, reason, producer = ranker.rank(small)
     from hanset_active.collect.plan import _apply_rank
     ranked = _apply_rank(small, small, order)
-    assert reason == 'model_ranked' and [r['gap_count'] for r in ranked] == [6, 6, 5]
+    assert reason == 'model_ranked' and producer == QWEN_MODEL and [r['gap_count'] for r in ranked] == [6, 6, 5]
     ranker.session = session
     plan = ensure_daily_plan(settings, state, targets, 'ok', clock=clock, planner=ranker)
     assert len(session.calls) == 1 and plan['ranking']['candidate_count'] == 100
@@ -258,7 +258,7 @@ def test_model_only_breaks_ties_and_is_bounded(env, monkeypatch):
     assert len(content) <= 24000
     assert set(payload) == {'groups'}
     assert session.calls[0]['json']['temperature'] == 0
-    assert session.calls[0]['json']['thinking'] == {'type': 'disabled'}
+    assert session.calls[0]['json']['enable_thinking'] is False
     before = (settings.data_dir / 'plans' / (plan['day'] + '.json')).read_bytes()
     again = ensure_daily_plan(settings, state, targets, 'ok', clock=clock, planner=ranker)
     assert again == plan and len(session.calls) == 1
@@ -271,7 +271,7 @@ def test_model_only_breaks_ties_and_is_bounded(env, monkeypatch):
 ])
 def test_invalid_model_output_falls_back(env, monkeypatch, answer):
     settings, clock, db = env
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     targets = [venue(db, n) for n in range(2)]
     state = State(settings.data_dir, clock)
     session = Session(_envelope(answer))
@@ -283,17 +283,15 @@ def test_invalid_model_output_falls_back(env, monkeypatch, answer):
 
 
 @pytest.mark.parametrize('failure,reason', [
-    ('credentials', 'fallback_missing_credentials'), ('budget', 'fallback_budget_reserved'),
+    ('credentials', 'fallback_missing_credentials'),
     ('timeout', 'fallback_model_timeout'), ('rate', 'fallback_model_rate_limited'),
 ])
-def test_safe_fallbacks_preserve_extraction_headroom(env, monkeypatch, failure, reason):
+def test_safe_ranking_fallbacks(env, monkeypatch, failure, reason):
     settings, clock, db = env
     target = venue(db, 1)
     state = State(settings.data_dir, clock)
     if failure != 'credentials':
-        monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    if failure == 'budget':
-        state.data['budgets']['model_calls'] = MODEL_CALL_CAP - 1
+        enable_qwen(monkeypatch)
     session = Session(_envelope({'order': [0]}))
     if failure == 'timeout':
         def fail(*args, **kwargs):
@@ -305,105 +303,59 @@ def test_safe_fallbacks_preserve_extraction_headroom(env, monkeypatch, failure, 
                              planner=DeepSeekRanker(state, model=settings.model, session=session))
     assert plan['ranking']['reason'] == reason
     assert KEY not in json.dumps(plan)
-    if failure in ('budget', 'credentials'):
+    if failure == 'credentials':
         assert not session.calls
 
 
-def test_ranking_falls_back_to_qwen(env, tmp_path, monkeypatch):
+def test_qwen_primary_and_healthy_fallback_record_the_producing_model(env, monkeypatch):
+    from tests.active_bot.test_collect_deepseek import healthy
+
     settings, clock, db = env
+    enable_qwen(monkeypatch)
     monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
     targets = [venue(db, n) for n in range(2)]
-    state = State(settings.data_dir, clock)
-    primary = Session(Response(429, b'provider text'))
-    qwen = Session(_envelope({'order': [1, 0]}))
-    monkeypatch.setattr('hanset_active.collect.deepseek.new_qwen_session', lambda: qwen)
-    plan = ensure_daily_plan(settings, state, targets, 'ok', clock=clock,
-                             planner=DeepSeekRanker(state, model=settings.model, session=primary))
-    assert plan['ranking']['reason'] == 'model_ranked'
-    # Plan artifacts keep the configured DeepSeek id even when Qwen answered.
-    assert plan['ranking']['model'] == 'deepseek-flash'
-    assert validate_plan(plan, plan['day'])
-    assert plan['ranked_venues'][0]['venue_id'] == 'v001'
-    assert len(primary.calls) == 1 and len(qwen.calls) == 1
-    assert qwen.calls[0]['url'] == QWEN_ENDPOINT
-    assert state.model_providers == {'qwen': 1}
-    assert QWEN_KEY not in json.dumps(plan)
+    state = State(settings.data_dir, clock, active_dir=settings.active_dir)
+    for day, code, producer in [('2026-11-10', 429, 'deepseek-flash'), ('2026-11-11', 200, QWEN_MODEL)]:
+        primary = Session(Response(code, b'{}') if code != 200 else _envelope({'order': [1, 0]}))
+        fallback = Session(_envelope({'order': [1, 0]}), probe=healthy())
+        with DeepSeek(state, session=fallback, qwen_session=primary) as router:
+            ranker = DeepSeekRanker(state, model=settings.model)
+            plan = ensure_daily_plan(settings, state, targets, 'ok', day=day, clock=clock,
+                                     planner=ranker, router=router)
+        assert plan['ranking']['reason'] == 'model_ranked'
+        assert plan['ranking']['model'] == producer
+        assert validate_plan(plan, plan['day'])
+        assert plan['ranked_venues'][0]['venue_id'] == 'v001'
+        assert len(primary.calls) == 1
+        assert len(fallback.calls) == len(fallback.probes) == int(code == 429)
 
 
-@pytest.mark.parametrize('code,reason', [
-    (429, 'fallback_model_rate_limited'), (402, 'fallback_model_insufficient_balance'),
-])
-def test_ranking_both_fail_keeps_local_order_and_reason(env, tmp_path, monkeypatch, code, reason):
+def test_plan_runs_with_legacy_accounting_above_former_limits(env, monkeypatch):
     settings, clock, db = env
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
-    targets = [venue(db, n) for n in range(2)]
-    state = State(settings.data_dir, clock)
-    primary = Session(Response(code, b'provider text'))
-    qwen = Session(Response(402, b'credit exhausted'))
-    monkeypatch.setattr('hanset_active.collect.deepseek.new_qwen_session', lambda: qwen)
-    plan = ensure_daily_plan(settings, state, targets, 'ok', clock=clock,
-                             planner=DeepSeekRanker(state, model=settings.model, session=primary))
-    assert plan['ranking']['reason'] == reason
-    assert validate_plan(plan, plan['day'])
-    assert plan['ranked_venues'][0]['venue_id'] == 'v000'
-    assert state.model_providers == {}
-    assert len(primary.calls) == 1 and len(qwen.calls) == 1
-    assert QWEN_KEY not in json.dumps(plan)
-    assert state.primary_skipped == ('insufficient_balance' if code == 402 else None)
-
-
-@pytest.mark.parametrize('calls', [MODEL_CALL_CAP - 2, MODEL_CALL_CAP - 3])
-def test_ranking_headroom_reserves_two_attempts_plus_extraction(env, tmp_path, monkeypatch, calls):
-    settings, clock, db = env
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
+    enable_qwen(monkeypatch)
     target = venue(db, 1)
     state = State(settings.data_dir, clock)
-    state.data['budgets']['model_calls'] = calls
+    state.data['budgets'] = {'model_calls': 1000, 'input_chars': 200000, 'output_tokens': 40000}
     state.save()
-    primary = Session(Response(429, b'provider text'))
-    qwen = Session(_envelope({'order': [0]}))
-    monkeypatch.setattr('hanset_active.collect.deepseek.new_qwen_session', lambda: qwen)
+    primary = Session(_envelope({'order': [0]}))
     plan = ensure_daily_plan(settings, state, [target], 'ok', clock=clock,
                              planner=DeepSeekRanker(state, model=settings.model, session=primary))
-    if calls == MODEL_CALL_CAP - 2:
-        assert plan['ranking']['reason'] == 'fallback_budget_reserved'
-        assert primary.calls == [] and qwen.calls == []
-        assert state.data['budgets']['model_calls'] == calls
-    else:
-        assert plan['ranking']['reason'] == 'model_ranked'
-        assert len(primary.calls) == 1 and len(qwen.calls) == 1
-        assert state.data['budgets']['model_calls'] == calls + 2
-        # One full extraction attempt still fits after both ranking attempts.
-        assert state.can_model(1, OUTPUT_TOKENS)
-        state.reserve_model(1, OUTPUT_TOKENS)
-        assert state.data['budgets']['model_calls'] == MODEL_CALL_CAP
-        assert not state.can_model(1, OUTPUT_TOKENS)
+    assert plan['ranking']['reason'] == 'model_ranked'
+    assert len(primary.calls) == 1 and state.data['budgets']['model_calls'] == 1001
 
 
-@pytest.mark.parametrize('code', [429, 402])
-def test_run_plan_reports_transient_provider(env, tmp_path, monkeypatch, code):
+def test_run_plan_reports_producing_provider(env, monkeypatch):
     settings, clock, db = env
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
+    enable_qwen(monkeypatch)
     targets = [venue(db, n) for n in range(2)]
     save_targets(settings.data_dir / 'web_targets.json', targets)
-    primary = Session(Response(code, b'provider text'))
-    qwen = Session(_envelope({'order': [1, 0]}))
-    monkeypatch.setattr('hanset_active.collect.deepseek.new_qwen_session', lambda: qwen)
-    result = run_plan(settings, clock=clock,
-                      planner=DeepSeekRanker(State(settings.data_dir, clock), model=settings.model, session=primary))
+    primary = Session(_envelope({'order': [1, 0]}))
+    result = run_plan(settings, clock=clock, planner_session=primary)
     assert result['state'] == 'done' and result['provider'] == {'qwen': 1}
-    if code == 402:
-        assert result['primary_skipped'] == 'insufficient_balance'
-    else:
-        assert 'primary_skipped' not in result
     plan = json.loads((settings.data_dir / 'plans' / (result['day'] + '.json')).read_text())
-    assert plan['ranking']['model'] == 'deepseek-flash' and 'provider' not in plan
-    assert 'primary_skipped' not in plan
+    assert plan['ranking']['model'] == QWEN_MODEL and 'provider' not in plan
     assert validate_plan(plan, plan['day'])
+
 
 
 def test_snapshot_digest_changes_and_planning_is_read_only(env, monkeypatch):
@@ -496,7 +448,7 @@ def test_planning_precedes_early_web_return(env, status):
     assert {'code': 'targets_' + status, 'count': 1} in plan['diagnostics']
 
 
-def test_adhoc_targets_never_read_or_write_plan(env):
+def test_adhoc_targets_never_read_or_write_plan(env, monkeypatch):
     settings, clock, db = env
     target = venue(db, 1)
     other = settings.data_dir / 'other.json'
@@ -507,6 +459,7 @@ def test_adhoc_targets_never_read_or_write_plan(env):
     marker = settings.data_dir / 'sentinel'
     marker.write_text('unchanged')
     (directory / '2026-11-10.json').symlink_to(marker)
+    _fake_ready_page(monkeypatch)
     result = run_web(settings, targets_path=other, clock=clock, testing=True)
     assert result['reason'] == 'missing_credentials'
     assert marker.read_text() == 'unchanged' and len(list(directory.iterdir())) == 1
@@ -582,7 +535,7 @@ def test_strict_plan_validation(env, change):
 
 def test_incomplete_recovery_reuses_validated_decision(env, monkeypatch):
     settings, clock, db = env
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     targets = [venue(db, n) for n in range(2)]
     state = State(settings.data_dir, clock)
     session = Session(_envelope({'order': [1, 0]}))
@@ -598,9 +551,15 @@ def test_incomplete_recovery_reuses_validated_decision(env, monkeypatch):
         ensure_daily_plan(settings, state, targets, 'ok', clock=clock, planner=ranker)
     marker = settings.data_dir / 'plans' / '.incomplete-2026-11-10.json'
     assert marker.exists() and len(session.calls) == 1
+    cache = next((marker.parent / 'decisions').glob('*.json'))
+    cached = json.loads(cache.read_text())
+    cached['model'] = 'deepseek-flash'
+    cached['decision_digest'] = digest({key: value for key, value in cached.items() if key != 'decision_digest'})
+    write(cache, cached)
     monkeypatch.setattr(module, '_write', write)
     result = ensure_daily_plan(settings, state, targets, 'ok', clock=clock, planner=ranker)
     assert result['ranking']['reason'] == 'decision_cached' and len(session.calls) == 1
+    assert result['ranking']['model'] == 'deepseek-flash'
     assert not marker.exists()
     assert result['ranked_venues'][0]['venue_id'] == 'v001'
 
@@ -636,11 +595,11 @@ def test_web_order_separate_planner_session_and_shared_budget(env, server, monke
     # Venue zero has fewer gaps; it must remain last despite model position.
     fact(db, targets[0], now=kst_now(clock))
     save_targets(settings.data_dir / 'web_targets.json', targets)
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     planning = Session(_envelope({'order': [2, 1, 0]}))
     extracting = Session(_envelope({'items': [{'index': i, 'claims': []} for i in range(3)]}))
     injected = DeepSeekRanker(State(settings.data_dir, clock), model=settings.model)
-    result = run_web(settings, clock=clock, session=extracting, planner=injected,
+    result = run_web(settings, clock=clock, qwen_session=extracting, planner=injected,
                      planner_session=planning, testing=True)
     assert result['state'] == 'done'
     assert [r['path'] for r in server.log if r['path'] != '/robots.txt'] == ['/2', '/1', '/0']
@@ -712,7 +671,7 @@ def test_watchlist_rejects_real_pii_and_configured_secret_in_hash(env, monkeypat
     assert _watchlist(settings, notes) == [] and notes['watchlist_invalid'] == 1
 
 
-def test_default_derived_replay_keeps_zero_candidate_plan_frozen(env):
+def test_default_derived_replay_keeps_zero_candidate_plan_frozen(env, monkeypatch):
     settings, clock, db = env
     result = run_plan(settings, clock=clock, testing=True)
     path = settings.data_dir / 'plans' / (result['day'] + '.json')
@@ -722,7 +681,45 @@ def test_default_derived_replay_keeps_zero_candidate_plan_frozen(env):
     gap(db, target)
     with db:
         db.execute('UPDATE venues SET website=?', (target['urls'][0],))
+    _fake_ready_page(monkeypatch)
     replay = run_web(settings, clock=clock, testing=True)
     assert replay['reason'] == 'missing_credentials'
     assert {'targets_changed', 'unplanned_targets'} <= {r['disposition'] for r in replay['pages']}
     assert path.read_bytes() == before
+
+
+def _fake_ready_page(monkeypatch):
+    from hanset_active.fetcher import FetchResult
+
+    def fetch(self, url, **kwargs):
+        return FetchResult(url, 'ok', status=200, content_type='text/html',
+                           content=b'<main>' + b'Official hours and access guide. ' * 6 + b'</main>')
+
+    monkeypatch.setattr('hanset_active.collect.service.Fetcher.fetch', fetch)
+
+
+def test_deepseek_balance_latch_is_shared_from_rank_to_web_batches(env, monkeypatch):
+    from hanset_active.fetcher import FetchResult
+    from tests.active_bot.test_collect_deepseek import healthy
+    from tests.active_bot.test_collect_web import WebModel
+
+    settings, clock, db = env
+    enable_qwen(monkeypatch)
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    targets = [venue(db, n) for n in range(8)]
+    save_targets(settings.data_dir / 'web_targets.json', targets)
+    page = b'<main>' + b'Official venue opening guide. ' * 6 + b'</main>'
+    monkeypatch.setattr('hanset_active.collect.service.Fetcher.fetch',
+                        lambda self, url, **kwargs: FetchResult(url, 'ok', status=200,
+                                                                content=page, content_type='text/html'))
+    planner_session = Session(Response(429, b'{}'))
+    fallback = Session(Response(402, b'{}'), probe=healthy())
+    model = WebModel(lambda items, attempt: Response(503, b'{}') if attempt == 1
+                     else _envelope({'items': [{'index': item['index'], 'claims': []} for item in items]}))
+    injected = DeepSeekRanker(State(settings.data_dir, clock), model=settings.model)
+    result = run_web(settings, clock=clock, testing=True, session=fallback, qwen_session=model,
+                     planner=injected, planner_session=planner_session)
+    assert len(planner_session.calls) == len(fallback.probes) == len(fallback.calls) == 1
+    assert [len(batch) for batch in model.items] == [6, 2]
+    assert result['deepseek_skipped'] == 'insufficient_balance'
+    assert result['counts']['pending'] == 6 and result['counts']['committed'] == 2

@@ -1,4 +1,4 @@
-"""DeepSeek web collection and desktop Instagram ingestion.
+"""Public web collection and desktop Instagram ingestion.
 
 This package does not browse Instagram, read a browser session, or publish
 site facts. Web fetches use the existing guarded HTTP fetcher. Instagram

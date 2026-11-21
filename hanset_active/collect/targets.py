@@ -17,6 +17,7 @@ _TAVILY_REASON = re.compile(r'tavily_[a-z_]{1,40}')
 def canonical_requested_url(url, *, testing=False):
     """Reject unsafe identities before canonicalization; never repair redactions."""
     from .ground import secrets
+    from .safety import evidence_rejection
     from hanset_active.util.pii import strip_pii
     from hanset_active.util.urls import canonicalize
     if not isinstance(url, str) or len(url) > 500:
@@ -28,7 +29,7 @@ def canonical_requested_url(url, *, testing=False):
     if (not _https_or_test(url, testing=testing) or strip_pii(decoded) != decoded
             or any(key.casefold() in credential_keys for key, _ in parse_qsl(urlsplit(decoded).query))
             or re.search(r'\[(?:token|phone|email|redacted[^\]]*)\]', decoded, re.I)
-            or any(secret in decoded for secret in secrets())):
+            or evidence_rejection(decoded, secrets())):
         raise ValueError('unsafe_url')
     return canonicalize(url)
 
@@ -77,10 +78,10 @@ def _https_or_test(url, *, testing):
 
 def parse_targets(path, *, testing, disabled=None):
     try:
-        if path.is_symlink() or not path.is_file() or path.stat().st_size > 512_000:
+        if path.is_symlink() or not path.is_file():
             raise ValueError
         data = json.loads(path.read_bytes().decode())
-        if data.get('schema_version') != 1 or not isinstance(data.get('targets'), list) or len(data['targets']) > MAX_TARGETS:
+        if data.get('schema_version') != 1 or not isinstance(data.get('targets'), list):
             raise ValueError
     except (OSError, UnicodeError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
         raise CollectError('targets_invalid') from None

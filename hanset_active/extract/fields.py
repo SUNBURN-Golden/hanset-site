@@ -1,7 +1,7 @@
 """Explicit bilingual field rules. Offsets refer to sanitized input text."""
 import re
 from ..util.pii import strip_pii
-VERSION = '1.7.0'
+VERSION = '1.8.0'
 # Shuttle/transport timetables are never opening hours.
 TRANSPORT_CUE = re.compile(r'운행|셔틀|픽업|배차|shuttle|\bbus\b|pick-?up', re.I)
 BREAK_CUE = re.compile(r'lunch\s*break|break\s*time|브레이크\s*타임|휴게\s*시간|점심\s*시간|청소\s*시간|cleaning\s*time', re.I)
@@ -63,6 +63,35 @@ def hours_qualifiers(text, start):
         q['facility'] = _FACILITY_NAMES.get(label, label)
     return q
 
+_DROP_IN_CUE = r'(?<![\w-])(?:drop[ -]?ins?|walk[ -]?ins?)(?![\w-])|드롭인|당일\s*입장|현장\s*입장'
+_AVAILABILITY_CUES = {
+    'drop_in_available': _DROP_IN_CUE,
+    'parking': r'\bparking\b|주차(?:장)?',
+    'showers': r'\bshowers?\b|샤워(?:실|시설)?',
+}
+_AVAILABLE = re.compile(
+    r'^\s*(?::|：)?\s*(?:is |are )?(?:available|provided|permitted|accepted|allowed|welcome|'
+    r'yes|on[ -]site|(?:이용\s*)?가능|허용|제공|구비|운영|있(?:음|습니다|어요)|무료|유료)(?![a-z])', re.I)
+_UNAVAILABLE = re.compile(
+    r'^\s*(?::|：)?\s*(?:is |are )?(?:not available|not provided|not accepted|not permitted|'
+    r'not allowed|unavailable|none|no\b|불가|금지|미제공|미운영|없|이용할 수 없|'
+    r'(?:가능|허용|제공|운영)\s*하지\s*않|(?:허용|제공|운영)\s*(?:안\s*됨|안\s*함))', re.I)
+
+
+def _availability(clause, cue):
+    before, after = clause[:cue.start()], clause[cue.end():]
+    # A price, question, or nearby option is insufficient venue evidence.
+    if (re.search(r'^\s*(?:fee|rates?|prices?|요금|가격|비용|문의)', after, re.I)
+            or re.search(r'인근|근처|인접|nearby|off[ -]site|maybe|예약자만|(?:고객|투숙객|회원)\s*(?:만|전용)|'
+                         r'\bonly\b|unless|except|한해|일부', clause, re.I)):
+        return None
+    if re.search(r'\bno\s+$', before, re.I) or _UNAVAILABLE.match(after):
+        return False
+    if re.search(r'\b(?:offers?|provides?|has|features|free|complimentary)\s+$', before, re.I) or _AVAILABLE.match(after):
+        return True
+    return None
+
+
 def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
     text = strip_pii(text)
     results = []
@@ -98,13 +127,19 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
             emit(field,value,Offset(m),unit,ambiguous)
         money=list(matches(r'₩\s*[\d,]+|[\d,]+\s*KRW|(?:\d+만(?:\d+천|\d+)?|\d+천|만|[\d,]+)\s*원'))
         price_context=text[max(0,block.start()-60):block.end()]
-        if re.search(r'요금|이용료|입장료|1회|일일|이용권|drop.?in|day pass|single entry|admission|visit|price',price_context,re.I):
+        if re.search(r'요금|이용료|입장료|1회|일일|이용권|day pass|single entry|admission|visit|price|'
+                     + _DROP_IN_CUE, price_context, re.I):
             for m in money:
-                value={'amount':amount(m[0]),'scope':_scope(s),'ticket':'drop_in' if re.search(r'drop.?in|드롭인',s,re.I) else 'day_pass'}
+                ticket = 'drop_in' if re.search(_DROP_IN_CUE, s, re.I) else 'day_pass'
+                value={'amount':amount(m[0]),'scope':_scope(s),'ticket':ticket}
                 if re.search(r'성인|adult',s,re.I): value['audience']='adult'
                 elif re.search(r'소인|어린이|child',s,re.I): value['audience']='child'
                 duration=re.search(r'(\d+)\s*(?:시간|hours?)',s,re.I)
                 if duration: value['duration_hours']=int(duration[1])
+                facilities = list(_HOURS_FACILITY.finditer(s[:m.start()]))
+                if facilities:
+                    label = facilities[-1][0].lower()
+                    value['facility'] = _FACILITY_NAMES.get(label, label)
                 add('price_day_pass',value,m,'KRW',len(money)>1)
         for m in matches(r'(?:이용시간|운영시간|영업시간)\s*[:：]?\s*(\d{1,2})시(?:\s*(\d{1,2})분)?\s*[~–-]\s*(\d{1,2})시(?:\s*(\d{1,2})분)?'):
             if int(m[1])<24 and int(m[3])<=24 and int(m[2] or 0)<60 and int(m[4] or 0)<60:
@@ -165,6 +200,12 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
             for m in matches(r'\b(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+cold\b(?!-?\s*showers?)'):
                 bath('냉탕',m)
         if baths: add('bath_composition',sorted({t for t,_ in baths}),baths[0][1])
+        if not USER_REVIEW.search(s) and text[block.end():block.end()+1] != '?':
+            for field, cue in _AVAILABILITY_CUES.items():
+                for m in matches(cue):
+                    value = _availability(s, m)
+                    if value is not None:
+                        add(field, value, m)
         for m in matches(r'문신|tattoos?'):
             if USER_REVIEW.search(s): continue
             tail=re.split(r'[,;]',s[m.end():m.end()+160])[0]

@@ -334,7 +334,7 @@ class Fetcher:
                     self.db.execute('INSERT INTO failures(failure_id,task_id,url,domain,reason,state,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(failure_id) DO NOTHING',
                         (deterministic_id(safe_url,ref['task_id'],outcome),ref['task_id'],safe_url,registrable_domain(url),outcome,'dead' if outcome in ('blocked','login_wall','robots_disallowed') else 'pending',kst_now(self.clock).isoformat()))
             return FetchResult(safe_url,outcome,reason=reason,fetched_at=kst_now(self.clock).isoformat(),source_ref=ref,**kw)
-        preserve_path = preserve_path or subpage or not self.policy.use_daily_budgets
+        preserve_path = preserve_path or subpage or self.policy.preserve_path
         try:
             if self.public_scope and not _safe_public_query(url):
                 return FetchResult('', 'denied', reason='unsafe_url')
@@ -381,14 +381,14 @@ class Fetcher:
                     if reason=='cap_reached':
                         return result('cap_reached',reason)
                     if reason=='proxy_unavailable':
-                        if not self.policy.use_daily_budgets and not retried_direct:
+                        if self.policy.retry_direct and not retried_direct:
                             retried_direct=True
                             continue
                         return result('error',reason)
                     self._inaccessible(self._stop_scope(url),'robots_disallowed')
                     return result('robots_disallowed','robots_disallowed')
                 response,body,error=self._request(url,kind,headers=api_headers if (urlsplit(url).scheme,urlsplit(url).netloc)==auth_origin else None, service_key=service_key, audit_source=audit_source)
-                if error=='proxy_unavailable' and not self.policy.use_daily_budgets and not retried_direct:
+                if error=='proxy_unavailable' and self.policy.retry_direct and not retried_direct:
                     retried_direct=True
                     continue
                 if error:
@@ -418,7 +418,7 @@ class Fetcher:
                 if service_key:
                     body=body.replace(service_key.encode(),b'[redacted]')
                 outcome=detect_outcome(body,ct,status,public_scope=self.public_scope,
-                                       allow_short=not self.policy.use_daily_budgets)
+                                       allow_short=self.policy.allow_short)
                 retry=None
                 if status==429:
                     raw=response.headers.get('Retry-After','')

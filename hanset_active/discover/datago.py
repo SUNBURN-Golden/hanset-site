@@ -19,8 +19,8 @@ GYM_RELEVANCE = re.compile(r'cross[\s-]*fit|크로스\s*핏|hyrox|하이(?:록|�
 _PAGE_SIZE = 100
 
 
-def credential():
-    path = Path(os.environ.get('HANSET_DATAGO_KEY_FILE', '/workspace/.secrets/datago_key'))
+def credential(path=None):
+    path = Path(path or os.environ.get('HANSET_DATAGO_KEY_FILE', '/workspace/.secrets/datago_key'))
     try:
         fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
         with os.fdopen(fd, 'rb') as stream:

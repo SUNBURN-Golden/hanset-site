@@ -20,14 +20,18 @@ def korean_news(url):
 class FetchPolicy:
     news_only: bool = False
     use_daily_budgets: bool = True
+    preserve_path: bool = False
+    retry_direct: bool = False
+    allow_short: bool = False
 
     def robots(self, url):
         return not self.news_only or korean_news(url)
 
 
 LEGACY = FetchPolicy()
-COLLECTION = FetchPolicy(news_only=True)
-DISCOVERY = FetchPolicy(news_only=True, use_daily_budgets=False)
+COLLECTION = FetchPolicy(news_only=True, use_daily_budgets=False, retry_direct=True)
+DISCOVERY = FetchPolicy(news_only=True, use_daily_budgets=False, preserve_path=True,
+                        retry_direct=True, allow_short=True)
 
 
 

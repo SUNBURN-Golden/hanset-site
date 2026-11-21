@@ -1,6 +1,8 @@
 """DeepSeek parsing, budgets, and grounding. No live model call."""
 import json
-from datetime import datetime, timedelta, timezone
+from pathlib import Path
+import os
+import sqlite3
 
 import pytest
 import requests
@@ -8,7 +10,7 @@ import requests
 from hanset_active.collect import CollectError
 from hanset_active.collect.config import CollectSettings
 from hanset_active.collect.deepseek import (
-    ENDPOINT, INPUT_LIMIT, OUTPUT_TOKENS, QWEN_ENDPOINT, QWEN_MODEL, DeepSeek,
+    BALANCE_ENDPOINT, ENDPOINT, INPUT_LIMIT, OUTPUT_TOKENS_PER_ITEM, QWEN_ENDPOINT, QWEN_MODEL, DeepSeek,
 )
 from hanset_active.collect.ground import bounded_text, ground
 from hanset_active.collect.state import State
@@ -32,10 +34,10 @@ def _settings(tmp_path):
     return CollectSettings(data_dir=tmp_path / 'ig', active_dir=tmp_path / 'active', twin_dir=tmp_path / 'twin', model='deepseek-flash')
 
 
-def _state(tmp_path):
+def _state(tmp_path, clock=None):
     directory = tmp_path / 'ig'
-    directory.mkdir()
-    state = State(directory, FakeClock())
+    directory.mkdir(exist_ok=True)
+    state = State(directory, clock or FakeClock(), active_dir=tmp_path / 'active')
     state.save()
     return state
 
@@ -55,6 +57,11 @@ def _qwen_key_file(tmp_path, monkeypatch, value=QWEN_KEY):
     return path
 
 
+def enable_qwen(monkeypatch):
+    path = Path(os.environ['HANSET_QWEN_KEY_FILE'])
+    _qwen_key_file(path.parent, monkeypatch)
+
+
 class Response:
     def __init__(self, status, body):
         self.status_code = status
@@ -70,10 +77,12 @@ class Response:
 
 
 class Session:
-    def __init__(self, response=None, error=None):
+    def __init__(self, response=None, error=None, *, probe=None):
         self.response = response
         self.error = error
         self.calls = []
+        self.probe = probe
+        self.probes = []
         self.trust_env = True
 
     def post(self, url, headers=None, json=None, timeout=None, allow_redirects=None, stream=None):
@@ -81,6 +90,13 @@ class Session:
         if self.error:
             raise self.error
         return self.response
+
+    def get(self, url, **kwargs):
+        self.probes.append((url, kwargs))
+        assert self.probe is not None
+        if isinstance(self.probe, Exception):
+            raise self.probe
+        return self.probe
 
     def close(self):
         pass
@@ -130,156 +146,11 @@ def test_ground_drops_secret_and_unredacted_contact(monkeypatch):
     assert leaked == [] and reasons
 
 
-def test_deepseek_success_shape_and_reconcile(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    payload = {'items': [{'index': 0, 'claims': [{'field': 'hours', 'value': _hours_value(), 'quote': HOURS}]}]}
-    session = Session(_envelope(payload, usage=20))
-    state = _state(tmp_path)
-    parsed = DeepSeek(state, session=session).ask([{'index': 0, 'text': HOURS}])
-    assert parsed['items'][0]['index'] == 0
-    call = session.calls[0]
-    assert call['url'] == ENDPOINT
-    assert call['allow_redirects'] is False
-    assert call['json']['model'] == 'deepseek-flash'
-    assert call['json']['thinking'] == {'type': 'disabled'}
-    assert call['json']['max_tokens'] == 1200
-    assert call['headers']['Authorization'] == 'Bearer ' + KEY
-    assert state.data['budgets']['model_calls'] == 1
-    assert state.data['budgets']['output_tokens'] == 20
-    saved = (tmp_path / 'ig' / 'checkpoint.json').read_text()
-    assert KEY not in saved and 'REASONING_TRACE_DO_NOT_STORE' not in saved and HOURS not in saved
-
-
-def test_deepseek_errors_do_not_echo_transport(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    state = _state(tmp_path)
-    secret_body = Response(401, b'ECHO ' + KEY.encode() + b' provider-body')
-    session = Session(secret_body)
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=session).ask([{'text': 'x'}])
-    assert error.value.reason == 'model_auth' and KEY not in str(error.value) and 'provider-body' not in str(error.value)
-    assert secret_body.closed and state.data['budgets']['model_calls'] == 1
-    session.error = requests.Timeout('slow ' + KEY)
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=session).ask([{'text': 'x'}])
-    assert error.value.reason == 'model_timeout' and KEY not in str(error.value)
-    session.error = None
-    session.response = Response(200, b'{"choices":[{"message":{"content":"[]"}}]}')
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=session).ask([{'text': 'x'}])
-    assert error.value.reason == 'model_invalid'
-    session.response = Response(429, b'{}')
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=session).ask([{'text': 'again'}])
-    assert error.value.reason == 'model_rate_limited'
-    session.response = Response(400, b'{}')
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=session).ask([{'text': 'again'}])
-    assert error.value.reason == 'model_unavailable'
-
-
-def test_budget_stops_before_transport_and_survives_restart(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    state = _state(tmp_path)
-    state.data['budgets']['model_calls'] = 36
-    state.save()
-    session = Session(Response(200, b'{}'))
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=session).ask([{'text': 'x'}])
-    assert error.value.reason == 'model_budget_exhausted' and session.calls == []
-    reloaded = State(tmp_path / 'ig', state.clock)
-    assert reloaded.data['budgets']['model_calls'] == 36
-    with pytest.raises(CollectError) as error:
-        State(tmp_path / 'ig', FakeClock(state.clock.now() - timedelta(days=1)))
-    assert error.value.reason == 'state_corrupt'
-    assert json.loads((tmp_path / 'ig' / 'checkpoint.json').read_text())['budgets']['model_calls'] == 36
-
-
-def test_missing_key_and_schema_refusal(tmp_path):
-    state = _state(tmp_path)
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=Session(Response(200, b'{}'))).ask([{'text': 'x'}])
-    assert error.value.reason == 'missing_credentials'
-    path = tmp_path / 'ig' / 'checkpoint.json'
-    original = path.read_bytes()
-    path.write_text(json.dumps({'schema_version': 1, 'reserved_follows': ['do-not-run']}))
-    with pytest.raises(CollectError) as error:
-        State(tmp_path / 'ig', FakeClock())
-    assert error.value.reason == 'state_corrupt'
-    assert path.read_bytes() != original
-    assert b'reserved_follows' in path.read_bytes()
-
-
-def test_deepseek_success_never_calls_qwen(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
-    payload = {'items': [{'index': 0, 'claims': []}]}
-    primary = Session(_envelope(payload))
-    qwen = Session(_envelope({'items': []}))
-    state = _state(tmp_path)
-    parsed = DeepSeek(state, session=primary, qwen_session=qwen).ask([{'index': 0, 'text': HOURS}])
-    assert parsed == payload
-    assert len(primary.calls) == 1 and qwen.calls == []
-    assert state.model_providers == {'deepseek': 1}
-    assert state.data['budgets']['model_calls'] == 1
-
-
-def test_deepseek_rate_limited_falls_back_to_qwen(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
-    payload = {'items': [{'index': 0, 'claims': [{'field': 'hours', 'value': _hours_value(), 'quote': HOURS}]}]}
-    primary = Session(Response(429, b'provider rate text'))
-    qwen = Session(_envelope(payload, usage=17))
-    state = _state(tmp_path)
-    parsed = DeepSeek(state, session=primary, qwen_session=qwen).ask([{'index': 0, 'text': HOURS}])
-    assert parsed == payload
-    assert len(primary.calls) == 1 and len(qwen.calls) == 1
-    call = qwen.calls[0]
-    assert call['url'] == QWEN_ENDPOINT
-    assert call['json']['model'] == QWEN_MODEL == 'qwen4-max-preview'
-    assert call['json']['messages'] == primary.calls[0]['json']['messages']
-    assert call['headers']['Authorization'] == 'Bearer ' + QWEN_KEY
-    assert 'thinking' not in call['json'] and 'response_format' not in call['json']
-    assert call['json']['enable_thinking'] is False
-    assert call['json']['temperature'] == 0 and call['json']['max_tokens'] == OUTPUT_TOKENS
-    assert call['timeout'] == (5, 60)
-    assert call['allow_redirects'] is False and call['stream'] is True
-    budgets = state.data['budgets']
-    assert budgets['model_calls'] == 2
-    # The failed primary reservation stays spent; Qwen reconciles its own usage.
-    assert budgets['output_tokens'] == OUTPUT_TOKENS + 17
-    content = primary.calls[0]['json']['messages'][1]['content']
-    assert budgets['input_chars'] == 2 * len(content)
-    assert state.model_providers == {'qwen': 1}
-    saved = json.loads((tmp_path / 'ig' / 'checkpoint.json').read_text())
-    assert QWEN_KEY not in json.dumps(saved) and KEY not in json.dumps(saved)
-    assert 'provider' not in saved
-
-
-@pytest.mark.parametrize('failure', [
-    Response(402, b'credit exhausted'), Response(429, b'limit'), Response(500, b'boom'), 'timeout',
-], ids=['credit_402', 'rate_429', 'server_500', 'timeout'])
-def test_both_providers_fail_preserves_original_reason(tmp_path, monkeypatch, failure):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
-    primary = Session(Response(429, b'provider rate text'))
-    qwen = Session(error=requests.Timeout('slow ' + QWEN_KEY)) if failure == 'timeout' else Session(failure)
-    state = _state(tmp_path)
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=primary, qwen_session=qwen).ask([{'text': 'x'}])
-    assert error.value.reason == 'model_rate_limited'
-    assert len(primary.calls) == 1 and len(qwen.calls) == 1
-    text = str(error.value)
-    assert QWEN_KEY not in text and KEY not in text and 'provider' not in text
-    assert state.model_providers == {}
-    assert state.data['budgets']['model_calls'] == 2
-
-
 @pytest.mark.parametrize('variant', [
     'absent', 'empty', 'oversized', 'nonregular', 'symlink', 'symlink_parent',
     'short', 'newline', 'repo_internal',
 ])
-def test_missing_or_invalid_qwen_key_skips_fallback(tmp_path, monkeypatch, variant, capsys):
+def test_qwen_credential_refuses_invalid_files(tmp_path, monkeypatch, variant):
     from hanset_active.collect import credentials
     monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
     if variant == 'absent':
@@ -314,104 +185,6 @@ def test_missing_or_invalid_qwen_key_skips_fallback(tmp_path, monkeypatch, varia
         _qwen_key_file(tmp_path, monkeypatch)
     credentials._read_key.cache_clear()
     assert credentials.qwen_key() == ''
-    primary = Session(Response(429, b'provider rate text'))
-    qwen = Session(_envelope({'items': []}))
-    state = _state(tmp_path)
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=primary, qwen_session=qwen).ask([{'text': 'x'}])
-    assert error.value.reason == 'model_rate_limited'
-    assert len(primary.calls) == 1 and qwen.calls == []
-    assert state.data['budgets']['model_calls'] == 1
-    assert state.model_providers == {}
-    captured = capsys.readouterr()
-    assert captured.out == '' and captured.err == ''
-
-
-@pytest.mark.parametrize('failure,reason', [
-    (Response(400, b'{}'), 'model_unavailable'),
-    (Response(404, b'{}'), 'model_unavailable'),
-    (Response(401, b'{}'), 'model_auth'),
-    (Response(403, b'{}'), 'model_auth'),
-    (Response(429, b'{}'), 'model_rate_limited'),
-    (Response(402, b'{}'), 'model_insufficient_balance'),
-    (Response(500, b'{}'), 'model_transport'),
-    (Response(503, b'{}'), 'model_transport'),
-    ('timeout', 'model_timeout'),
-    ('connection', 'model_transport'),
-])
-def test_fallback_trigger_matrix(tmp_path, monkeypatch, failure, reason):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
-    if failure == 'timeout':
-        primary = Session(error=requests.Timeout('slow'))
-    elif failure == 'connection':
-        primary = Session(error=requests.ConnectionError('down'))
-    else:
-        primary = Session(failure)
-    qwen = Session(_envelope({'items': []}))
-    state = _state(tmp_path)
-    parsed = DeepSeek(state, session=primary, qwen_session=qwen).ask([{'text': 'x'}])
-    assert parsed == {'items': []}
-    assert len(primary.calls) == 1 and len(qwen.calls) == 1
-    assert qwen.calls[0]['url'] == QWEN_ENDPOINT
-    assert state.model_providers == {'qwen': 1}
-    assert state.data['budgets']['model_calls'] == 2
-
-
-def test_non_trigger_failures_never_call_qwen(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
-    qwen = Session(_envelope({'items': []}))
-    state = _state(tmp_path)
-    for response in (
-        Response(200, b'not json'),
-        Response(200, b'{"choices":[{"message":{"content":"[]"}}]}'),
-        Response(200, b'{"choices":[]}'),
-        Response(200, b'x' * 65000),
-    ):
-        primary = Session(response)
-        with pytest.raises(CollectError) as error:
-            DeepSeek(state, session=primary, qwen_session=qwen).ask([{'text': 'x'}])
-        assert error.value.reason == 'model_invalid'
-        assert len(primary.calls) == 1
-    assert qwen.calls == [] and state.model_providers == {}
-    # Oversized input and an exhausted budget fail before any transport.
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=Session(), qwen_session=qwen).ask([{'text': 'x' * (INPUT_LIMIT + 1)}])
-    assert error.value.reason == 'model_budget_exhausted'
-    state.data['budgets']['model_calls'] = 36
-    state.save()
-    primary = Session(Response(429, b'{}'))
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=primary, qwen_session=qwen).ask([{'text': 'x'}])
-    assert error.value.reason == 'model_budget_exhausted' and primary.calls == []
-    assert qwen.calls == []
-
-
-def test_missing_deepseek_key_never_calls_qwen(tmp_path, monkeypatch):
-    _qwen_key_file(tmp_path, monkeypatch)
-    primary = Session(Response(429, b'{}'))
-    qwen = Session(_envelope({'items': []}))
-    state = _state(tmp_path)
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=primary, qwen_session=qwen).ask([{'text': 'x'}])
-    assert error.value.reason == 'missing_credentials'
-    assert primary.calls == [] and qwen.calls == []
-
-
-def test_qwen_retry_without_headroom_keeps_original_reason(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
-    state = _state(tmp_path)
-    state.data['budgets']['model_calls'] = 35
-    state.save()
-    primary = Session(Response(429, b'{}'))
-    qwen = Session(_envelope({'items': []}))
-    with pytest.raises(CollectError) as error:
-        DeepSeek(state, session=primary, qwen_session=qwen).ask([{'text': 'x'}])
-    assert error.value.reason == 'model_rate_limited'
-    assert len(primary.calls) == 1 and qwen.calls == []
-    assert state.data['budgets']['model_calls'] == 36
 
 
 def test_qwen_key_override_and_direct_session(tmp_path, monkeypatch):
@@ -429,29 +202,6 @@ def test_qwen_key_override_and_direct_session(tmp_path, monkeypatch):
         assert session.trust_env is False
     finally:
         session.close()
-
-
-def test_factory_qwen_session_is_closed_and_injected_is_not(tmp_path, monkeypatch):
-    import hanset_active.collect.deepseek as module
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    _qwen_key_file(tmp_path, monkeypatch)
-
-    class TrackingSession(Session):
-        def __init__(self, response):
-            super().__init__(response)
-            self.closed = False
-
-        def close(self):
-            self.closed = True
-
-    created = TrackingSession(_envelope({'items': []}))
-    monkeypatch.setattr(module, 'new_qwen_session', lambda: created)
-    state = _state(tmp_path)
-    DeepSeek(state, session=Session(Response(429, b'{}'))).ask([{'text': 'x'}])
-    assert len(created.calls) == 1 and created.closed is True
-    injected = TrackingSession(_envelope({'items': []}))
-    DeepSeek(state, session=Session(Response(429, b'{}')), qwen_session=injected).ask([{'text': 'x'}])
-    assert len(injected.calls) == 1 and injected.closed is False
 
 
 def test_qwen_key_is_redacted_everywhere(tmp_path, monkeypatch):
@@ -472,181 +222,158 @@ def test_qwen_key_is_redacted_everywhere(tmp_path, monkeypatch):
     assert QWEN_KEY not in json.dumps(result)
 
 
-def test_public_result_provider_whitelist():
-    from hanset_active.collect.service import public_result
-    base = {'state': 'done', 'reason': 'ok', 'success': True, 'collected': True, 'mode': 'web'}
-    assert public_result({**base, 'provider': {'deepseek': 1, 'qwen': 2}})['provider'] == {'deepseek': 1, 'qwen': 2}
-    assert public_result({**base, 'provider': {}})['provider'] == {}
-    for bad in ({'deepseek': 1, 'other': 2}, {'qwen': '1'}, {'qwen': True},
-                {'qwen': -1}, {'qwen': 1001}, {'deepseek': 1.0}):
-        assert 'provider' not in public_result({**base, 'provider': bad})
-    assert 'provider' not in public_result(base)
+def usage(tmp_path):
+    with sqlite3.connect(tmp_path / 'active' / 'collect-runtime.sqlite3') as db:
+        return db.execute('''SELECT provider,model,kind,outcome,input_chars,max_output_tokens,
+                             prompt_tokens,completion_tokens,cost_basis
+                             FROM model_usage ORDER BY attempt_id''').fetchall()
 
 
-def test_primary_balance_skip_is_client_local_and_spends_only_actual_attempts(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+def healthy():
+    return Response(200, b'{"is_available":true,"balance_infos":[{"total_balance":"BALANCE_SENTINEL"}]}')
+
+
+def test_qwen_primary_shape_scaled_and_uncapped(tmp_path, monkeypatch):
     _qwen_key_file(tmp_path, monkeypatch)
-    state = _state(tmp_path)
-    primary = Session(Response(402, b'provider-body ' + KEY.encode()))
-    qwen = Session(_envelope({'ok': 1}, usage=17))
-    brain = DeepSeek(state, session=primary, qwen_session=qwen)
-    documents = [{'text': 'x'}]
-    chars = len(json.dumps(documents, separators=(',', ':')))
-    assert brain.ask(documents) == {'ok': 1}
-    assert state.data['budgets'] == {
-        'model_calls': 2, 'input_chars': 2 * chars, 'output_tokens': OUTPUT_TOKENS + 17}
-    assert brain.ask(documents) == {'ok': 1}
-    assert len(primary.calls) == 1 and len(qwen.calls) == 2
-    assert state.data['budgets'] == {
-        'model_calls': 3, 'input_chars': 3 * chars, 'output_tokens': OUTPUT_TOKENS + 34}
-    assert state.model_providers == {'qwen': 2}
-    assert state.primary_skipped == 'insufficient_balance'
-    for call in qwen.calls:
-        assert call['json']['enable_thinking'] is False
-        assert 'response_format' not in call['json'] and 'thinking' not in call['json']
-    saved = state.path.read_text()
-    assert 'primary_skipped' not in saved and 'provider' not in saved
-    assert KEY not in saved and QWEN_KEY not in saved and 'provider-body' not in saved
-    assert 'REASONING_TRACE_DO_NOT_STORE' not in saved
-    # A fresh client tries DeepSeek even with the same State diagnostic.
-    healthy = Session(_envelope({'ok': 2}))
-    assert DeepSeek(state, session=healthy, qwen_session=qwen).ask(documents) == {'ok': 2}
-    assert len(healthy.calls) == 1 and len(qwen.calls) == 2
-    assert State(state.directory, state.clock).primary_skipped is None
-
-
-@pytest.mark.parametrize('failure', ['missing', 'transport', 'invalid', 'balance', 'budget'])
-def test_primary_balance_reason_survives_failed_backup_and_stays_sticky(tmp_path, monkeypatch, failure):
     monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    if failure != 'missing':
-        _qwen_key_file(tmp_path, monkeypatch)
+    qwen = Session(_envelope({'answer': 'ok'}, usage=6300))
+    fallback = Session()
     state = _state(tmp_path)
-    if failure == 'budget':
-        state.data['budgets']['model_calls'] = 35
-    primary = Session(Response(402, b'private provider body'))
-    qwen = Session(Response(402 if failure == 'balance' else 500, b'private backup body'))
-    if failure == 'invalid':
-        qwen.response = Response(200, b'not JSON')
-    brain = DeepSeek(state, session=primary, qwen_session=qwen)
-    for _ in range(2):
-        with pytest.raises(CollectError) as error:
-            brain.ask([{'text': 'x'}])
-        assert error.value.reason == 'model_insufficient_balance'
-        assert str(error.value) == 'model_insufficient_balance'
-    assert len(primary.calls) == 1
-    assert len(qwen.calls) == (0 if failure in ('missing', 'budget') else 2)
-    assert state.data['budgets']['model_calls'] == (
-        36 if failure == 'budget' else 1 + len(qwen.calls))
-    assert state.primary_skipped == 'insufficient_balance' and state.model_providers == {}
+    state.data['budgets'] = {'model_calls': 1001, 'input_chars': 200000, 'output_tokens': 40000}
+    with DeepSeek(state, session=fallback, qwen_session=qwen) as router:
+        assert router.ask([{'text': HOURS}] * 6) == {'answer': 'ok'}
+        assert router.last_model == QWEN_MODEL
+    call = qwen.calls[0]
+    assert call['url'] == QWEN_ENDPOINT and call['timeout'] == (5, 60)
+    assert call['allow_redirects'] is False and call['stream'] is True
+    assert call['json']['enable_thinking'] is False and 'response_format' not in call['json']
+    assert call['json']['max_tokens'] == 6 * OUTPUT_TOKENS_PER_ITEM
+    assert not fallback.calls and not fallback.probes
+    assert state.data['budgets']['model_calls'] == 1002
+    assert state.data['budgets']['output_tokens'] == 46300
+    assert usage(tmp_path)[0][-3:] == (None, 6300, 'unknown')
 
 
-def test_qwen_balance_failure_does_not_skip_primary(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+def test_healthy_fallback_and_success_reused_for_six_hours(tmp_path, monkeypatch):
     _qwen_key_file(tmp_path, monkeypatch)
-    state = _state(tmp_path)
-    primary = Session(Response(429, b'limit'))
-    qwen = Session(Response(402, b'balance'))
-    brain = DeepSeek(state, session=primary, qwen_session=qwen)
-    for _ in range(2):
-        with pytest.raises(CollectError) as error:
-            brain.ask([{'text': 'x'}])
-        assert error.value.reason == 'model_rate_limited'
-    assert len(primary.calls) == len(qwen.calls) == 2
-    assert state.primary_skipped is None
-
-
-@pytest.mark.parametrize('cap', ['model_calls', 'input_chars', 'output_tokens'])
-def test_sticky_backup_enforces_each_budget_cap(tmp_path, monkeypatch, cap):
-    from hanset_active.collect.config import MODEL_CALL_CAP, MODEL_INPUT_CAP, MODEL_OUTPUT_CAP
     monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    clock = FakeClock()
+    primary = Session(error=requests.Timeout(KEY))
+    fallback = Session(_envelope({'ok': True}), probe=healthy())
+    for delay in (0, 5 * 3600, 6 * 3600):
+        clock.sleep(delay)
+        with DeepSeek(_state(tmp_path, clock), session=fallback, qwen_session=primary) as router:
+            assert router.ask([{'text': 'fixture'}]) == {'ok': True}
+            assert router.last_model == 'deepseek-flash'
+    assert len(fallback.probes) == 2 and len(fallback.calls) == 3
+    assert fallback.probes[0][0] == BALANCE_ENDPOINT and fallback.probes[0][1]['allow_redirects'] is False
+    assert fallback.calls[0]['url'] == ENDPOINT
+    assert [row[2:4] for row in usage(tmp_path)][:3] == [
+        ('completion', 'model_timeout'), ('probe', 'healthy'), ('completion', 'ok')]
+    raw = (tmp_path / 'active' / 'collect-runtime.sqlite3').read_bytes()
+    assert b'BALANCE_SENTINEL' not in raw and KEY.encode() not in raw
+
+
+@pytest.mark.parametrize('probe,expected', [
+    (Response(200, b'{"is_available":false}'), 'insufficient_balance'),
+    (Response(402, b'{}'), 'insufficient_balance'),
+    (Response(200, b'{"is_available":"true"}'), 'invalid'),
+    (Response(200, b'{"is_available":false,"is_available":true}'), 'invalid'),
+    (Response(401, b'{}'), 'auth'),
+    (requests.Timeout('fixture'), 'timeout'),
+])
+def test_probe_failure_is_cached_and_never_sends_page(tmp_path, monkeypatch, probe, expected):
     _qwen_key_file(tmp_path, monkeypatch)
-    state = _state(tmp_path)
-    primary = Session(Response(402, b'{}'))
-    qwen = Session(_envelope({'ok': 1}))
-    brain = DeepSeek(state, session=primary, qwen_session=qwen)
-    brain.ask([{'text': 'x'}])
-    state.data['budgets'][cap] = {
-        'model_calls': MODEL_CALL_CAP, 'input_chars': MODEL_INPUT_CAP,
-        'output_tokens': MODEL_OUTPUT_CAP}[cap]
-    before = dict(state.data['budgets'])
-    with pytest.raises(CollectError) as error:
-        brain.ask([{'text': 'x'}])
-    assert error.value.reason == 'model_insufficient_balance'
-    assert state.data['budgets'] == before
-    assert len(primary.calls) == len(qwen.calls) == 1
-
-
-def test_sticky_backup_preserves_credential_and_input_checks(tmp_path, monkeypatch):
     monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    clock = FakeClock()
+    qwen = Session(Response(429, b'{}'))
+    fallback = Session(probe=probe)
+    for delay in (0, 5 * 3600, 3600):
+        clock.sleep(delay)
+        state = _state(tmp_path, clock)
+        with DeepSeek(state, session=fallback, qwen_session=qwen) as router:
+            with pytest.raises(CollectError, match='model_rate_limited'):
+                router.ask([{'text': 'fixture'}])
+        assert state.deepseek_skipped == ('insufficient_balance' if expected == 'insufficient_balance' else None)
+    assert not fallback.calls and len(fallback.probes) == 2
+    assert [row[3] for row in usage(tmp_path) if row[2] == 'probe'] == [expected, expected]
+
+
+@pytest.mark.parametrize('response', [Response(402, b'{}'),
+                                      Response(400, b'{"error":{"code":"insufficient_balance"}}'),
+                                      Response(200, b'{"error":{"code":"insufficient_balance"}}')])
+def test_completion_balance_failure_disables_deepseek_for_run(tmp_path, monkeypatch, response):
     _qwen_key_file(tmp_path, monkeypatch)
+    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
     state = _state(tmp_path)
-    primary = Session(Response(402, b'{}'))
-    qwen = Session(_envelope({'ok': 1}))
-    brain = DeepSeek(state, session=primary, qwen_session=qwen)
-    brain.ask([{'text': 'x'}])
-    before = dict(state.data['budgets'])
-    with pytest.raises(CollectError) as error:
-        brain.ask([{'text': 'x' * INPUT_LIMIT}])
-    assert error.value.reason == 'model_budget_exhausted'
-    monkeypatch.delenv('DEEPSEEK_API_KEY')
-    with pytest.raises(CollectError) as error:
-        brain.ask([{'text': 'x'}])
-    assert error.value.reason == 'missing_credentials'
-    assert state.data['budgets'] == before
-    assert len(primary.calls) == len(qwen.calls) == 1
+    fallback = Session(response, probe=healthy())
+    qwen = Session(Response(503, b'{}'))
+    with DeepSeek(state, session=fallback, qwen_session=qwen) as router:
+        with pytest.raises(CollectError, match='model_insufficient_balance'):
+            router.ask({'groups': []}, instruction='Rank')
+        with pytest.raises(CollectError, match='model_transport'):
+            router.ask([{'text': 'fixture'}])
+        qwen.response = _envelope({'success': True})
+        assert router.ask([{'text': 'fixture'}]) == {'success': True}
+    assert len(fallback.probes) == len(fallback.calls) == 1
+    assert len(qwen.calls) == 3
+    assert state.deepseek_skipped == 'insufficient_balance'
 
 
 @pytest.mark.parametrize('content,valid', [
     (' {"ok": 1} \n', True),
     (' \n```json\n{"ok": 1}\n```\n ', True),
     ('```json\r\n{"ok": 1}\r\n```', True),
-    ('', False), (' \n\t', False),
+    ('', False), (' \n\t', False), ('{"ok":1,"ok":2}', False),
     ('```json\n{"ok": 1}', False),
     ('```json\n{"ok": 1}\n``` trailing prose', False),
     ('prose\n```json\n{"ok": 1}\n```', False),
-    ('```json\n{"ok": 1}\n```\n```json\n{"ok": 1}\n```', False),
-    ('```json\n[]\n```', False), ('```json\n{broken}\n```', False),
+    ('```json\n[]\n```', False),
 ])
-def test_qwen_content_parsing(tmp_path, content, valid):
-    envelope = {'choices': [{'message': {
-        'content': content, 'reasoning_content': '{"ok": 1} REASONING_TRACE_DO_NOT_STORE'}}]}
-    response = Response(200, json.dumps(envelope).encode())
-    brain = DeepSeek(_state(tmp_path), session=Session())
-    # Check the inner reason; fallback handling deliberately retains the primary reason.
-    if valid:
-        assert brain._attempt(Session(response), QWEN_ENDPOINT, {}, {}, timeout=(5, 60), qwen=True) == ({'ok': 1}, None)
-    else:
-        with pytest.raises(CollectError) as error:
-            brain._attempt(Session(response), QWEN_ENDPOINT, {}, {}, timeout=(5, 60), qwen=True)
-        assert error.value.reason == 'model_invalid'
-    assert response.closed
-
-
-def test_deepseek_fenced_json_remains_invalid(tmp_path, monkeypatch):
+def test_qwen_fence_stripping_and_invalid_output_never_falls_back(tmp_path, monkeypatch, content, valid):
+    _qwen_key_file(tmp_path, monkeypatch)
     monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
-    content = '```json\n{"ok": 1}\n```'
-    envelope = {'choices': [{'message': {'content': content}}]}
-    primary = Session(Response(200, json.dumps(envelope).encode()))
-    with pytest.raises(CollectError) as error:
-        DeepSeek(_state(tmp_path), session=primary).ask([{'text': 'x'}])
-    assert error.value.reason == 'model_invalid'
-
-
-@pytest.mark.parametrize('skip', ['insufficient_balance', None, 'model_auth', '', {}, True])
-def test_primary_skip_status_whitelist_and_checkpoint_exclusion(tmp_path, skip):
-    from hanset_active.collect.service import _finish, public_result, run_status
-    state = _state(tmp_path)
-    state.primary_skipped = skip
-    base = {'state': 'done', 'reason': 'ok', 'success': True, 'collected': True, 'mode': 'web'}
-    clean = public_result({**base, 'primary_skipped': skip})
-    state.write_status({**base, 'primary_skipped': skip})
-    direct_status = json.loads((state.directory / 'status.json').read_text())
-    finished = _finish(state, base, state.clock)
-    status = json.loads((state.directory / 'status.json').read_text())
-    for result in (clean, direct_status, finished, status, run_status(_settings(tmp_path))):
-        if skip == 'insufficient_balance':
-            assert result['primary_skipped'] == skip
+    response = Response(200, json.dumps({'choices': [{'message': {'content': content}}]}).encode())
+    fallback = Session()
+    with DeepSeek(_state(tmp_path), session=fallback, qwen_session=Session(response)) as router:
+        if valid:
+            assert router.ask([{'text': 'fixture'}]) == {'ok': 1}
         else:
-            assert 'primary_skipped' not in result
-    state.save()
-    assert 'primary_skipped' not in json.loads(state.path.read_text())
+            with pytest.raises(CollectError, match='model_invalid'):
+                router.ask([{'text': 'fixture'}])
+    assert response.closed and not fallback.calls and not fallback.probes
+
+
+def test_missing_credentials_and_oversize_do_not_dispatch(tmp_path):
+    state = _state(tmp_path)
+    session = Session()
+    with DeepSeek(state, session=session, qwen_session=session) as router:
+        with pytest.raises(CollectError, match='missing_credentials'):
+            router.ask([{'text': 'fixture'}])
+        with pytest.raises(CollectError, match='model_input_limit'):
+            router.ask([{'text': 'x' * INPUT_LIMIT}])
+    assert not session.calls and not session.probes
+    assert state.data['budgets']['model_calls'] == 0
+
+
+def test_public_result_preserves_large_counters_and_limits_only_sample():
+    from hanset_active.collect.service import public_result
+
+    result = public_result({
+        'provider': {'qwen': 1200}, 'rejections': {'prohibited_wording': 7200},
+        'pages': [{'url': 'https://example.test', 'disposition': 'applied'}] * 601,
+    })
+    assert result['provider'] == {'qwen': 1200}
+    assert result['rejections'] == {'prohibited_wording': 7200}
+    assert len(result['pages']) == 200
+
+
+def test_provider_reported_cost_and_actual_token_counts_are_persisted(tmp_path, monkeypatch):
+    _qwen_key_file(tmp_path, monkeypatch)
+    envelope = {'choices': [{'message': {'content': '{"ok": true}'}}],
+                'usage': {'prompt_tokens': 140, 'completion_tokens': 28, 'cost': 0.001, 'currency': 'USD'}}
+    with DeepSeek(_state(tmp_path), qwen_session=Session(Response(200, json.dumps(envelope).encode()))) as router:
+        assert router.ask([{'text': 'fixture'}]) == {'ok': True}
+    with sqlite3.connect(tmp_path / 'active' / 'collect-runtime.sqlite3') as db:
+        assert db.execute('''SELECT prompt_tokens,completion_tokens,cost_basis,cost_amount,cost_currency
+                             FROM model_usage''').fetchone() == (140, 28, 'provider_reported', 0.001, 'USD')

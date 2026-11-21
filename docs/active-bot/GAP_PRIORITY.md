@@ -54,9 +54,9 @@ seed URLs can augment fetch scope without extending official authorization.
 Well-formed identity pairs from disabled rows suppress that venue's derivation,
 using the same conservative identity resolution. Other malformed disabled data
 is ignored as before. Enabled manual rows win over disabled selectors.
-All enabled manual identities are retained; remaining capacity up to 100 is
-filled in local gap-count/importance/identity order. Disabled rows still count
-toward the manual file's 100-row cap. Fixed count-only diagnostics are
+All enabled manual identities remain authorized. The 100-target frozen plan
+uses manual identities first. Remaining presentation capacity is
+filled in local gap-count/importance/identity order. Fixed count-only diagnostics are
 `derived_http_only`, `derived_domain_denied`, `derived_suppressed` and
 `derived_truncated` (including when a full manual file leaves zero capacity).
 
@@ -123,35 +123,29 @@ wins over stale gap state. Otherwise known unresolved states precede missing
 or invalid evidence, followed by invalid/nonofficial evidence, freshness,
 missing facts and unknown states. None of these diagnostics publish facts.
 
-## Ranking and model limits
+## Ranking and model identity
 
 More gaps always rank before fewer. Local ties use importance sum descending,
-venue ID, then venue key. DeepSeek may break ties only within the same gap
-count, for the first 100 actionable candidates in canonical local order.
-The request contains anonymous indices, field IDs, channel IDs and gap counts;
-no names, handles, URLs, claims, evidence or page text. It uses the existing
-`DeepSeek.ask`, `temperature=0`, disabled thinking and persistent State budget.
-Ranking inherits the owner-approved Qwen backup tier (see COLLECTOR.md): a
-failed primary ranking call is retried once via `qwen4-max-preview` with the
-same anonymous payload; the Qwen request omits the DeepSeek-only `thinking`
-and `response_format` fields. Both attempts charge the same daily budget.
+venue ID, then venue key. The model may break ties within the same gap count
+for the first 100 actionable candidates. The request includes anonymous
+indices, field IDs, channel IDs and gap counts. The web collector drains the
+full current authorization set after applying the plan's ordering.
 
-The only accepted response is `{"order": [0, 1]}`, a complete exact permutation
-of supplied integer indices. Bools, duplicates, omissions, out-of-range indices
-and extra keys invalidate the entire response. No partial result is used.
-Two ranking attempts (primary plus one Qwen backup) and one full extraction
-input/output request and call are reserved as headroom.
-Missing credentials, insufficient reserved budget, timeout, transport, auth,
-rate limit, unavailable model and invalid output all yield local ordering with
-`fallback_*` reasons. When both providers fail, the original DeepSeek reason
-determines the `fallback_*` code. Raw provider errors and reasoning are never
-retained.
+The collector asks Qwen4-Max first. DeepSeek gets the same anonymous payload
+only after a Qwen operational failure or missing Qwen credentials and a fresh
+healthy check. Web ranking and extraction share provider health during the run.
+Every dispatch is logged in the model usage ledger. No daily allowance is
+set aside for ranking or extraction. [Collector routing](COLLECTOR.md#model-routing-and-accounting)
 
-Plan artifacts stay DeepSeek-id: `ranking.model` remains the configured
-DeepSeek model even when Qwen answered, so plan validation, the model
-allowlist and decision digests are unchanged. Which provider answered is
-transient per-run diagnostics only (`provider` in the `plan-gaps` result and
-in web/ingest status), never a plan or checkpoint field.
+The only accepted response is `{"order": [0, 1]}`, an exact permutation of
+the supplied integer indices. Invalid replies, unavailable providers, and
+missing credentials fall back to local order with a fixed `fallback_*` reason.
+
+Plans and decision caches record the producing model in `ranking.model` and
+`model`, respectively. Frozen plans with a valid DeepSeek model remain
+readable. A digest-verified decision is reusable regardless of which registered
+model produced it. The primary model forms part of the cache key, so upgrading
+may rerank once when no same-day frozen plan or matching decision exists.
 
 ## Artifacts, freeze and recovery
 
@@ -187,9 +181,9 @@ is attempted or falls back locally.
 
 The first completed plan, including a local fallback, stays frozen. Later
 inputs or ranking modes cannot rewrite that day. Ops must have explicit owner
-approval before manually removing a plan to rebuild it. The checkpoint remains
-authoritative for completed URLs, quotas, budgets and halts; planning never
-resets those fields. Only the existing model budget methods charge planning.
+approval before manually removing a plan to rebuild it. The checkpoint remains authoritative for Instagram quotas and security halts.
+The active data directory's collector runtime ledger tracks web completions
+and model dispatches. Planning adds its own model attempts to accounting.
 
 The target-set digest identifies the frozen default config; drift is reported
 at replay, never used as permission to fetch plan URLs. Execution always uses

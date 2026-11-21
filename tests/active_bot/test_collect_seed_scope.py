@@ -13,7 +13,7 @@ from hanset_active.collect.plan import order_targets, run_plan, validate_plan
 from hanset_active.collect.store import connect, digest, web_target_history
 from hanset_active.fetcher import Fetcher, FetchResult, USER_AGENT
 from hanset_active.venues import seed, upsert_venue
-from tests.active_bot.test_collect_deepseek import HOURS, KEY
+from tests.active_bot.test_collect_deepseek import HOURS, enable_qwen
 from tests.active_bot.test_collect_plan import env, save_targets
 from tests.active_bot.test_collect_promotion import approval, policy
 from tests.active_bot.test_collect_subpages import html
@@ -45,7 +45,7 @@ def fake_http(monkeypatch, routes):
         return http_response(404) if urlsplit(url).path == '/robots.txt' else routes[url]
 
     monkeypatch.setattr(requests.Session, 'get', get)
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     monkeypatch.delenv('HANSET_WEB_PROXY', raising=False)
     return calls
 
@@ -115,7 +115,7 @@ def test_manual_authority_and_baselines_survive_third_party_seed(env, monkeypatc
     assert baseline_target['official_urls'] == urls
     calls = fake_http(monkeypatch, {url: http_response(200, html(text=HOURS + ' ' + 'Guest information. ' * 9))
                                   for url in urls})
-    assert service.run_web(settings, clock=clock, session=Model(), testing=True)['collected']
+    assert service.run_web(settings, clock=clock, qwen_session=Model(), testing=True)['collected']
     with closing(connect(settings.data_dir)) as receipts:
         baselines = receipts.execute('SELECT * FROM web_change_baselines ORDER BY source_identity').fetchall()
         assert len(baselines) == len(urls)
@@ -129,7 +129,7 @@ def test_manual_authority_and_baselines_survive_third_party_seed(env, monkeypatc
         assert targets.source_authorization(target, url) is None
     third_party_calls = fake_http(monkeypatch, {url: http_response(200, html(text=HOURS + ' ' + filler * 9))
                                                for url, filler in [(NAVER, 'Spa review. '), (OTA, 'Booking details. ')]})
-    result = service.run_web(settings, clock=clock, session=Model(), testing=True)
+    result = service.run_web(settings, clock=clock, qwen_session=Model(), testing=True)
     assert result['collected']
     assert calls.count(OWN) == 1
     assert OWN not in third_party_calls
@@ -148,9 +148,9 @@ def test_manual_authority_and_baselines_survive_third_party_seed(env, monkeypatc
                 claims[url]['verification_label']) == ('source_claim', 'third_party', 'internal_review_only', '미확인')
     candidate, = report['fact_candidates']
     assert candidate['status'] == 'fact_candidate' and candidate['rights'] == 'internal_review_only'
-    assert candidate['verification_label'] == '미확인'
+    assert report['facts'][0]['qualification_basis'] == 'independent_agreement'
     rationale, = candidate['independence_rationale']
-    assert rationale['official_web_required'] and {a['authority'] for a in rationale['source_approvals']} == {'review_only'}
+    assert rationale['web_source_required'] and {a['authority'] for a in rationale['source_approvals']} == {'review_only'}
 
 
 def test_declined_and_blog_pages_yield_claims_without_discovery_or_proposals(env, monkeypatch):
@@ -160,7 +160,7 @@ def test_declined_and_blog_pages_yield_claims_without_discovery_or_proposals(env
     page = html(f'<a href="/more">Price</a><a href="{INSTAGRAM}">Profile</a>',
                 HOURS + ' Transient RUNPORT site marker. ' * 7)
     calls = fake_http(monkeypatch, {url: http_response(200, page) for url in urls})
-    result = service.run_web(settings, clock=clock, session=Model(), testing=True)
+    result = service.run_web(settings, clock=clock, qwen_session=Model(), testing=True)
     assert result['collected']
     assert {url for url in calls if not url.endswith('/robots.txt')} == urls
     assert not (settings.data_dir / 'watchlist-proposals.json').exists()
@@ -195,7 +195,7 @@ def test_seed_redirect_scope_rejects_destination_before_requests(env, monkeypatc
     seed(db, [row('Seed Spa A', NAVER)], clock=clock)
     calls = fake_http(monkeypatch, {NAVER: http_response(302, Location=destination)})
     model = Model()
-    result = service.run_web(settings, clock=clock, session=model, testing=True)
+    result = service.run_web(settings, clock=clock, qwen_session=model, testing=True)
     assert result['pages'][-1] == {'url': NAVER, 'disposition': 'denied'} and not model.calls
     assert calls == [NAVER]
     if 'instagram.com' in destination or 'instagr.am' in destination:
@@ -212,10 +212,10 @@ def test_naver_block_is_held_for_fourteen_days(env, monkeypatch):
     seed(db, [row('Seed Spa A', NAVER)], clock=clock)
     calls = fake_http(monkeypatch, {NAVER: http_response(403)})
     model = Model()
-    service.run_web(settings, clock=clock, session=model, testing=True)
+    service.run_web(settings, clock=clock, qwen_session=model, testing=True)
     clock.sleep(13 * DAY)
-    held = service.run_web(settings, clock=clock, session=model, testing=True)
+    held = service.run_web(settings, clock=clock, qwen_session=model, testing=True)
     assert held['reason'] == 'recent_block_skipped' and calls.count(NAVER) == 1
     clock.sleep(DAY)
-    service.run_web(settings, clock=clock, session=model, testing=True)
+    service.run_web(settings, clock=clock, qwen_session=model, testing=True)
     assert calls.count(NAVER) == 2 and not model.calls

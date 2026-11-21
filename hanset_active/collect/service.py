@@ -3,6 +3,7 @@ import json
 import re
 import sqlite3
 from collections import OrderedDict
+from contextlib import closing
 from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -19,26 +20,31 @@ from hanset_active.util.urls import registrable_domain
 from hanset_twin.daemon import AlreadyRunning as CollectorBusy
 from hanset_twin.daemon import ProcessLock
 
-from . import CollectError
-from .config import IG_READ_MAX, MAX_TARGETS, PAGE_DAY_CAP, PAGE_RUN_CAP, SUBPAGE_MAX, CollectSettings, domain_allowed
-from .deepseek import OUTPUT_TOKENS, DeepSeek, credentials_present
-from .ground import INSTRUCTION, SUMMARY_INSTRUCTION, parse_items, payload_items, summary_items
+from . import CollectError, runtime
+from .config import IG_READ_MAX, SUBPAGE_MAX, CollectSettings, domain_allowed
+from .deepseek import DeepSeek, credentials_present
+from .ground import SUMMARY_INSTRUCTION, parse_items, secrets, summary_items
 from .ingest import load_watchlist, parse_batch, security_flag, within_window
+from .safety import venue_identity_safe
 from .state import State
 from .store import connect as claim_connect
 from .store import (digest, record, prune_web_target_blocks, recent_web_target_block,
-                    remember_web_target_block, remember_web_target_observation, web_target_history)
+                    remember_web_target_block, remember_web_target_observation, validated_authorization, web_target_history)
 from .targets import canonical_requested_url, fetch_url_allowed, resolve_jobs
 from .web import classify_page, select_subpages
+from .web_extraction import WebExtraction, batches_fit
 from ..crawl_policy import COLLECTION
 from .plan import assemble_targets, ensure_daily_plan, load_targets, local_target_order, order_targets
 from .watchlist_proposals import inspect_page, write_proposals
 
 RETRYABLE = frozenset({
     'model_timeout', 'model_transport', 'model_rate_limited', 'model_invalid',
-    'model_unavailable', 'model_auth', 'model_budget_exhausted',
+    'model_unavailable', 'model_auth', 'model_input_limit', 'missing_credentials',
     'model_insufficient_balance',
 })
+PAGE_SAMPLE = 200
+
+
 def _base(state_name, reason, *, success, collected, mode, pages=None, rejections=None):
     body = {
         'state': state_name,
@@ -57,7 +63,7 @@ def _base(state_name, reason, *, success, collected, mode, pages=None, rejection
 
 def public_result(result):
     pages = []
-    for page in result.get('pages') or []:
+    for page in (result.get('pages') or [])[:PAGE_SAMPLE]:
         if not isinstance(page, dict):
             continue
         url = page.get('url') if isinstance(page.get('url'), str) else ''
@@ -71,7 +77,7 @@ def public_result(result):
         'success': bool(result.get('success')),
         'collected': bool(result.get('collected')),
         'mode': result.get('mode') if result.get('mode') in ('web', 'instagram', 'status') else 'web',
-        'pages': pages[:PAGE_DAY_CAP],
+        'pages': pages,
         'counts': result.get('counts') if isinstance(result.get('counts'), dict) else {},
         'budgets': result.get('budgets') if isinstance(result.get('budgets'), dict) else {},
     }
@@ -79,16 +85,16 @@ def public_result(result):
         out['at'] = result['at']
     rejections = result.get('rejections')
     if isinstance(rejections, dict) and all(
-            isinstance(key, str) and key.replace('_', '').isalnum() and type(value) is int and 0 <= value <= 1000
+            isinstance(key, str) and key.replace('_', '').isalnum() and type(value) is int and 0 <= value
             for key, value in rejections.items()):
         out['rejections'] = dict(rejections)
     providers = result.get('provider')
     if isinstance(providers, dict) and all(
-            key in ('deepseek', 'qwen') and type(value) is int and 0 <= value <= 1000
+            key in ('deepseek', 'qwen') and type(value) is int and 0 <= value
             for key, value in providers.items()):
         out['provider'] = dict(providers)
-    if result.get('primary_skipped') == 'insufficient_balance':
-        out['primary_skipped'] = 'insufficient_balance'
+    if result.get('deepseek_skipped') == 'insufficient_balance':
+        out['deepseek_skipped'] = 'insufficient_balance'
     heal = result.get('proxy_heal')
     if (isinstance(heal, dict) and
             set(heal) == {'attempted', 'heal_exit', 'retries', 'recovered'} and
@@ -103,7 +109,6 @@ def public_result(result):
             and egress['reason'] == 'proxy_unavailable' and egress['phase'] in ('preflight', 'mid_run')):
         out['web_egress'] = dict(egress)
     blob = json.dumps(out, ensure_ascii=False)
-    from .ground import secrets
     for secret in secrets():
         blob = blob.replace(secret, '[redacted]')
     return json.loads(blob)
@@ -111,11 +116,11 @@ def public_result(result):
 
 def _finish(state, body, clock):
     body['at'] = kst_now(clock).isoformat()
-    body['counts'] = dict(state.data['counts'])
+    body['counts'] = {**state.data['counts'], **body.get('counts', {})}
     body['budgets'] = dict(state.data['budgets'])
     body['provider'] = dict(state.model_providers)
-    if state.primary_skipped == 'insufficient_balance':
-        body['primary_skipped'] = 'insufficient_balance'
+    if state.deepseek_skipped == 'insufficient_balance':
+        body['deepseek_skipped'] = 'insufficient_balance'
     if state.proxy_heal is not None:
         body['proxy_heal'] = dict(state.proxy_heal)
     clean = public_result(body)
@@ -128,103 +133,47 @@ def _prepare_dir(path):
     path.chmod(0o700)
 
 
-def _chunks(rows, *, kind):
-    encode = summary_items if kind == 'instagram' else payload_items
-    batches, current = [], []
-    for row in rows:
-        trial = current + [row]
-        encoded = encode([{'text': item['text']} for item in trial])
-        if current and len(json.dumps(encoded, ensure_ascii=False)) > 20_000:
-            batches.append(current)
-            current = [row]
-        else:
-            current = trial
-    if current:
-        batches.append(current)
-    return batches
-
-
-def _store_batch(db, rows, parsed, *, kind, clock, state):
-    pages = []
-    new_claims = 0
-    for row, (claims, _dropped) in zip(rows, parsed):
-        text_hash = digest(row['text'])
-        existing = db.execute(
-            'SELECT disposition FROM receipts WHERE source_kind=? AND source_url=? AND content_hash=?',
-            (kind, row['url'], text_hash)).fetchone()
-        if existing:
-            disposition, ids = 'duplicate', []
-        else:
-            disposition, ids = record(
-                db, kind=kind, url=row['url'], text_hash=text_hash, disposition='applied',
-                claims=claims, venue_id=row['venue_id'], venue_key=row['venue_key'],
-                seen_at=row['seen_at'], clock=clock, source_type=row.get('source_type'))
-        if kind == 'web':
-            _observe_stored(db, row, text_hash, disposition)
-            state.complete(row['url'], disposition)
-        else:
-            state.data['counts']['ig_reads'] += 1
-            state.complete(row['url'], disposition)
-        state.data['counts']['claims'] += len(ids)
-        new_claims += len(ids)
-        state.save()
-        pages.append({'url': row['url'], 'disposition': disposition})
-    return pages, new_claims
-
-
-def _observe_stored(db, row, text_hash, disposition):
-    from .changes import insert_observation
-    from .store import read_claims
-    remember_web_target_observation(
-        db, row['url'], disposition, content_hash=text_hash, observed_at=row['seen_at'],
-        testing=row.get('_testing', False))
-    from hanset_active.util.urls import is_excluded
-    # Keep evidence for declined venues out of the change feeds used by
-    # publication and outreach workflows.
-    if is_excluded(row.get('name', ''), row['url'], row.get('final_url', '')):
-        return
-    claims = [claim for claim in read_claims(db) if claim['content_hash'] == text_hash
-              and claim['source_url'] == row['url'] and claim['venue_id'] == row['venue_id']
-              and claim['venue_key'] == row['venue_key']]
-    insert_observation(db, {**row, 'content_hash': text_hash}, claims)
-
-
-def _extract(rows, *, kind, settings, state, session, clock):
-    db = claim_connect(settings.data_dir)
+def _extract_summaries(rows, *, settings, state, session, qwen_session, clock):
     pages, claims = [], 0
-    brain = DeepSeek(state, model=settings.model, session=session)
-    try:
-        for batch in _chunks(rows, kind=kind):
-            fresh = []
-            for row in batch:
-                text_hash = digest(row['text'])
-                if db.execute(
-                        'SELECT 1 FROM receipts WHERE source_kind=? AND source_url=? AND content_hash=?',
-                        (kind, row['url'], text_hash)).fetchone():
-                    if kind == 'instagram':
-                        state.data['counts']['ig_reads'] += 1
-                    else:
-                        _observe_stored(db, row, text_hash, 'duplicate')
-                    state.complete(row['url'], 'duplicate')
-                    pages.append({'url': row['url'], 'disposition': 'duplicate'})
-                else:
-                    fresh.append(row)
-            if not fresh:
-                continue
-            if not state.can_model(1, OUTPUT_TOKENS):
-                raise CollectError('model_budget_exhausted')
-            documents = [{'text': row['text']} for row in fresh]
-            if kind == 'instagram':
-                answer = brain.ask(summary_items(documents), instruction=SUMMARY_INSTRUCTION)
-            else:
-                answer = brain.ask(payload_items(documents), instruction=INSTRUCTION)
-            parsed = parse_items(answer, documents)
-            stored, added = _store_batch(db, fresh, parsed, kind=kind, clock=clock, state=state)
-            pages.extend(stored)
+    with (closing(claim_connect(settings.data_dir)) as db,
+          DeepSeek(state, model=settings.model, session=session, qwen_session=qwen_session) as router):
+
+        def commit(batch):
+            if not batch:
+                return
+            answer = router.ask(summary_items(batch), instruction=SUMMARY_INSTRUCTION)
+            try:
+                parsed = parse_items(answer, batch)
+            except CollectError:
+                router.reject_last()
+                raise
+            for row, (grounded, _) in zip(batch, parsed):
+                disposition, ids = record(
+                    db, kind='instagram', url=row['url'], text_hash=digest(row['text']), disposition='applied',
+                    claims=grounded, venue_id=row['venue_id'], venue_key=row['venue_key'],
+                    seen_at=row['seen_at'], clock=clock)
+                seen(row, disposition, len(ids))
+
+        def seen(row, disposition, added=0):
+            nonlocal claims
+            state.data['counts']['ig_reads'] += 1
+            state.data['counts']['claims'] += added
+            state.complete(row['url'], disposition)
             claims += added
-    finally:
-        brain.close()
-        db.close()
+            pages.append({'url': row['url'], 'disposition': disposition})
+
+        batch = []
+        for row in rows:
+            if db.execute(
+                "SELECT 1 FROM receipts WHERE source_kind='instagram' AND source_url=? AND content_hash=?",
+                (row['url'], digest(row['text']))).fetchone():
+                seen(row, 'duplicate')
+                continue
+            if not batches_fit(summary_items(batch + [row]), SUMMARY_INSTRUCTION):
+                commit(batch)
+                batch = []
+            batch.append(row)
+        commit(batch)
     return pages, claims
 
 
@@ -243,7 +192,7 @@ def _default_search(host_dir):
     return search
 
 
-def run_web(settings, *, targets_path=None, clock=None, session=None, search=None, testing=False,
+def run_web(settings, *, targets_path=None, clock=None, session=None, qwen_session=None, search=None, testing=False,
             planner=None, planner_session=None):
     clock = clock or Clock()
     mode = 'web'
@@ -253,7 +202,8 @@ def run_web(settings, *, targets_path=None, clock=None, session=None, search=Non
             recovery = _change_cycle(settings, targets_path=targets_path, testing=testing, export=False, clock=clock)
             try:
                 result = _run_web(settings, targets_path=targets_path, clock=clock, session=session, search=search,
-                                  testing=testing, planner=planner, planner_session=planner_session)
+                                  testing=testing, planner=planner, planner_session=planner_session,
+                                  qwen_session=qwen_session)
             finally:
                 changes = _change_cycle(settings, targets_path=targets_path, testing=testing, clock=clock)
             result['changes'] = changes
@@ -272,6 +222,8 @@ def run_web(settings, *, targets_path=None, clock=None, session=None, search=Non
         return public_result(_base('already_running', 'already_running', success=False, collected=False, mode=mode))
     except CollectError as error:
         return public_result(_base('error', error.reason, success=False, collected=False, mode=mode))
+    except (OSError, sqlite3.Error):
+        return public_result(_base('error', 'state_corrupt', success=False, collected=False, mode=mode))
 
 
 def _rotate_seed_jobs(pending, last_fetched):
@@ -292,8 +244,17 @@ def _rotate_seed_jobs(pending, last_fetched):
                                              for url, job in revisits])
 
 
-def _run_web(settings, *, targets_path, clock, session, search, testing, planner=None, planner_session=None):
-    state = State(settings.data_dir, clock)
+def _run_web(settings, *, targets_path, clock, session, search, testing, planner=None,
+             planner_session=None, qwen_session=None):
+    state = State(settings.data_dir, clock, active_dir=settings.active_dir)
+    with (closing(runtime.connect(settings.active_dir)) as ledger,
+          DeepSeek(state, model=settings.model, session=session,
+                   qwen_session=qwen_session) as router):
+        return _drain_web(settings, state, ledger, router, targets_path=targets_path, clock=clock,
+                          search=search, testing=testing, planner=planner, planner_session=planner_session)
+
+
+def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, testing, planner, planner_session):
     state.proxy_heal = web_proxy.new_heal_status()
     path = Path(targets_path) if targets_path else settings.data_dir / 'web_targets.json'
     if targets_path:
@@ -309,7 +270,7 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
         targets, targets_status = assembled['targets'], assembled['targets_status']
         plan = ensure_daily_plan(settings, state, targets, targets_status, clock=clock,
                                  planner=planner, planner_session=planner_session, testing=testing,
-                                 assembled=assembled)
+                                 assembled=assembled, router=router)
         targets, planning_notes = order_targets(
             local_target_order(settings, assembled['authorization'], now=kst_now(clock), materialized=assembled['snapshot']), plan)
     if targets_status == 'invalid':
@@ -329,12 +290,16 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
     deferred_urls = set()
     unsafe = 0
     egress = None
+    extraction = None
 
     def finish_web(body):
         # Fetch/extraction results take precedence over cooldown notes in the
         # bounded public page list; the aggregate retains the full skip count.
         body['pages'].extend({'url': url, 'disposition': 'recent_block_skipped'} for url in skipped)
         rejections = dict(body.get('rejections') or {})
+        if extraction is not None:
+            body['counts'] = extraction.counts
+            rejections.update(extraction.rejections)
         if skipped:
             rejections['recent_block_skipped'] = len(skipped)
         if unsafe:
@@ -366,16 +331,9 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
         )
         last_fetched, unchanged = web_target_history(history, clock=clock, testing=testing)
         notes.extend({'url': '', 'disposition': note['code']} for note in planning_notes)
-        completed = set()
-        for url in state.data['completed']:
-            # The checkpoint is shared with same-day Instagram ingestion. Its
-            # denied instagram.com keys (and any other unsafe key) stay inert,
-            # exactly as with raw string membership; they never abort the run.
-            try:
-                completed.add(canonical_requested_url(url, testing=testing))
-            except (ValueError, TypeError):
-                continue
+        completed = runtime.web_completed(ledger, state, testing=testing)
         scheduled = {}
+        runtime_secrets = secrets()
         for job in jobs:
             try:
                 url = canonical_requested_url(job['url'], testing=testing)
@@ -387,6 +345,9 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 unsafe += 1
                 notes.append({'url': '', 'disposition': 'unsafe_url_skipped'})
                 continue
+            if not venue_identity_safe(job['venue_id'], job['venue_key'], runtime_secrets):
+                unsafe += 1
+                continue
             if cooling(url) or url in completed:
                 continue
             if url in scheduled:
@@ -395,6 +356,26 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 # A manual or gap URL owns this fetch even if the seed ranked first.
                 del scheduled[url]
             scheduled[url] = {**job, 'depth': 0}
+        # A child discovered before a crash can be resumed using its currently
+        # authorized parent, even when that parent already completed today.
+        parents = {}
+        for job in jobs:
+            auth = job['source_authorization']
+            if auth:
+                parents[(auth['requested_url'], job['venue_id'], job['venue_key'])] = job
+        for key, venue_id, venue_key, parent_url, fetch_url in ledger.execute(
+                '''SELECT requested_url,venue_id,venue_key,parent_url,fetch_url
+                   FROM extraction_retries WHERE retry_at<=? AND parent_url IS NOT NULL''',
+                (kst_now(clock).isoformat(),)):
+            if key in scheduled or key in completed or cooling(key):
+                continue
+            parent = parents.get((parent_url, venue_id, venue_key))
+            if (parent and registrable_domain(key) == registrable_domain(parent_url)
+                    and domain_allowed(key, parent['domains'])
+                    and fetch_url_allowed(fetch_url, scope_domains={registrable_domain(key)}, testing=testing)
+                    and canonical_requested_url(fetch_url, testing=testing) == key):
+                scheduled[key] = {**parent, 'url': fetch_url, 'parent_url': parent_url, 'depth': 1,
+                                  'source_authorization': None, 'discovered_subpage': True}
         pending, deferred = OrderedDict(), OrderedDict()
         for url, job in scheduled.items():
             # Canonical keys deduplicate work; explicit receipt URLs retain
@@ -406,15 +387,6 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
             queue[url] = job
         pending = _rotate_seed_jobs(pending, last_fetched)
         deferred = _rotate_seed_jobs(deferred, last_fetched)
-        # Apply the target window after cooldown filtering and fair rotation.
-        selected = set()
-        for queue in (pending, deferred):
-            for url, job in list(queue.items()):
-                key = (job['venue_id'], job['venue_key'])
-                if key not in selected and len(selected) >= MAX_TARGETS:
-                    del queue[url]
-                else:
-                    selected.add(key)
         if not pending and not deferred and skipped:
             return finish_web(_base('done', 'recent_block_skipped', success=True, collected=False, mode='web', pages=notes))
         if not pending and not deferred and jobs and unsafe == len(jobs):
@@ -424,12 +396,6 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
         if not pending and not deferred:
             reason = notes[0]['disposition'] if notes else 'no_urls'
             return finish_web(_base('stopped', reason, success=False, collected=False, mode='web', pages=notes))
-        if state.data['counts']['pages'] >= PAGE_DAY_CAP:
-            return finish_web(_base('stopped', 'daily_cap', success=False, collected=False, mode='web', pages=notes))
-        if not credentials_present():
-            return finish_web(_base('error', 'missing_credentials', success=False, collected=False, mode='web', pages=notes))
-        if not state.can_model(1, OUTPUT_TOKENS):
-            return finish_web(_base('stopped', 'model_budget_exhausted', success=False, collected=False, mode='web', pages=notes))
         try:
             proxy = web_proxy.configured()
         except ValueError:
@@ -441,25 +407,24 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 egress = {'mode': 'direct', 'reason': blocked, 'phase': 'preflight'}
             elif blocked:
                 return finish_web(_base('stopped', blocked, success=False, collected=False, mode='web', pages=notes))
-        ready, pages = [], list(notes)
+        pages = list(notes[:PAGE_SAMPLE])
         proposal_evidence = []
         stop_reason = None
+
+        def sample(url, disposition):
+            if len(pages) < PAGE_SAMPLE:
+                pages.append({'url': url, 'disposition': disposition})
+
+        extraction = WebExtraction(history, ledger, state, router, sample)
         try:
             with RunLock(active, active_settings.data_dir, 'collect-web', clock=clock):
                 fetcher = Fetcher(active_settings, active, clock, proxy=proxy, public_scope=True, policy=COLLECTION)
                 try:
-                    run_pages = 0
                     attempted, children = set(), {}
                     while pending or deferred:
                         job_key, job = (pending or deferred).popitem(last=False)
                         if cooling(job_key) or job_key in completed or job_key in attempted:
                             continue
-                        if state.data['counts']['pages'] >= PAGE_DAY_CAP:
-                            stop_reason = 'daily_cap'
-                            break
-                        if run_pages >= PAGE_RUN_CAP:
-                            stop_reason = 'run_cap'
-                            break
                         attempted.add(job_key)
                         scope = job['scope_domains'] & {registrable_domain(job_key)}
                         url_allowed = partial(fetch_url_allowed, scope_domains=scope, testing=testing)
@@ -467,35 +432,30 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                         fetched = fetcher.fetch(job['url'], subpage=bool(job.get('discovered_subpage')),
                                                 url_allowed=url_allowed, **fetch_options)
                         proxy_outage = fetched.outcome == 'error' and fetched.reason == 'proxy_unavailable'
-                        if proxy_outage:
+                        if proxy_outage or getattr(fetcher, 'proxy_failed', False) is True:
                             egress = {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'mid_run'}
                         if fetched.outcome == 'cap_reached':
                             stop_reason = 'active_body_cap'
                             break
                         seen_at = kst_now(clock).isoformat()
                         state.data['counts']['pages'] += 1
-                        run_pages += 1
                         state.save()
                         disposition, text = classify_page(fetched, scope)
-                        final = fetched.url or job['url']
-                        authorization = job['source_authorization']
-                        if authorization:
-                            try:
-                                final_key = canonical_requested_url(final, testing=testing)
-                            except (ValueError, TypeError):
-                                authorization = None
-                            else:
-                                authorization = ({**authorization, 'final_url': final_key}
-                                                 if registrable_domain(final_key) in scope
-                                                 and domain_allowed(final_key, job['domains']) else None)
+                        try:
+                            final = canonical_requested_url(fetched.url or job['url'], testing=testing)
+                        except ValueError:
+                            final = job_key
+                            disposition, text = 'denied', None
+                        auth = job['source_authorization']
+                        authorization = validated_authorization(
+                            job['url'], final, {**auth, 'final_url': final} if auth and
+                            registrable_domain(final) in scope else None, job['domains'], testing=testing)
                         remember_web_target_block(history, job['url'], disposition,
                                                   status=fetched.status, clock=clock, testing=testing)
-                        # A failed extraction must leave a retryable latest outcome,
-                        # rather than cooling on an older successful receipt.
-                        remember_web_target_observation(
-                            history, job['url'], 'pending_extraction' if disposition == 'ready' else disposition,
-                            content_hash=digest(text) if text is not None else (fetched.content_hash or None),
-                            observed_at=seen_at, testing=testing)
+                        if disposition != 'ready':
+                            remember_web_target_observation(
+                                history, job['url'], disposition, content_hash=fetched.content_hash or None,
+                                observed_at=seen_at, testing=testing)
                         target_key = (job['venue_id'], job['venue_key'])
                         if (job['depth'] == 0 and authorization and fetched.outcome == 'ok'
                                 and disposition in ('ready', 'empty_body')
@@ -522,7 +482,9 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                                 child = queue.get(child_key)
                                 if child is None:
                                     child = {**job, 'url': fetch_url, 'source_authorization': None,
-                                             'discovered_subpage': True}
+                                             'parent_url': job_key, 'discovered_subpage': True}
+                                    runtime.retry_web(ledger, {**child, 'requested_url': child_key},
+                                                      clock, 'pending_fetch')
                                 queue[child_key] = {**child, 'depth': 1}
                                 if queue is deferred:
                                     deferred_urls.add(child_key)
@@ -533,15 +495,16 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                             children[target_key] = children.get(target_key, 0) + len(selected)
                         if disposition != 'ready':
                             if not proxy_outage:
-                                state.complete(job['url'], disposition)
-                            pages.append({'url': job['url'], 'disposition': disposition})
+                                runtime.complete_web(ledger, state.data['day'], job_key, disposition)
+                            sample(job['url'], disposition)
                             continue
-                        row = {**job, 'source_authorization': authorization,
+                        row = {**job, 'requested_url': job_key, 'source_authorization': authorization,
                                'source_type': 'own_site' if authorization else 'third_party',
                                'text': text, 'seen_at': seen_at, 'final_url': final, '_testing': testing}
                         proposal_evidence.extend(inspect_page(
                             row, fetched, observed_at=seen_at, disposition=disposition))
-                        ready.append(row)
+                        extraction.offer(row)
+                    extraction.flush()
                 finally:
                     fetcher.close()
         except ActiveBusy:
@@ -553,20 +516,10 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
                 # Proposals are a side artifact; never abort extraction of pages
                 # that were already fetched and passed every guard.
                 pages.append({'url': '', 'disposition': 'proposals_invalid'})
-        extracted, claims = [], 0
-        if ready:
-            try:
-                extracted, claims = _extract(ready, kind='web', settings=settings, state=state, session=session, clock=clock)
-            except CollectError as error:
-                pages.extend(extracted)
-                reason = error.reason if error.reason in RETRYABLE else 'runtime_error'
-                return finish_web(_base('partial', reason, success=False, collected=claims > 0, mode='web', pages=pages))
-        pages.extend(extracted)
-        if stop_reason == 'run_cap':
-            return finish_web(_base('done', 'run_cap', success=True, collected=claims > 0, mode='web', pages=pages))
-        if stop_reason:
-            return finish_web(_base('partial', stop_reason, success=False, collected=claims > 0, mode='web', pages=pages))
-        return finish_web(_base('done', 'ok', success=True, collected=claims > 0, mode='web', pages=pages))
+        state.save()
+        reason = stop_reason or extraction.reason
+        return finish_web(_base('partial' if reason else 'done', reason or 'ok', success=reason is None,
+                                collected=extraction.added > 0, mode='web', pages=pages))
     except (sqlite3.Error, ValueError, TypeError):
         raise CollectError('state_corrupt') from None
     finally:
@@ -575,14 +528,14 @@ def _run_web(settings, *, targets_path, clock, session, search, testing, planner
         active.close()
 
 
-def run_ingest(settings, *, inbox_file=None, clock=None, session=None):
+def run_ingest(settings, *, inbox_file=None, clock=None, session=None, qwen_session=None):
     clock = clock or Clock()
     mode = 'instagram'
     try:
         _prepare_dir(settings.data_dir)
         _prepare_dir(settings.inbox)
         with ProcessLock(settings.data_dir / 'daemon.lock'):
-            return _run_ingest(settings, inbox_file=inbox_file, clock=clock, session=session)
+            return _run_ingest(settings, inbox_file=inbox_file, clock=clock, session=session, qwen_session=qwen_session)
     except CollectorBusy:
         return public_result(_base('already_running', 'already_running', success=False, collected=False, mode=mode))
     except CollectError as error:
@@ -605,8 +558,8 @@ def _select_inbox(settings, inbox_file):
     return path
 
 
-def _run_ingest(settings, *, inbox_file, clock, session):
-    state = State(settings.data_dir, clock)
+def _run_ingest(settings, *, inbox_file, clock, session, qwen_session):
+    state = State(settings.data_dir, clock, active_dir=settings.active_dir)
     if state.halted():
         return _finish(state, _base('halted_today', state.data['halt']['reason'], success=False, collected=False, mode='instagram'), clock)
     if not within_window(clock):
@@ -648,7 +601,8 @@ def _run_ingest(settings, *, inbox_file, clock, session):
     if not credentials_present():
         return _finish(state, _base('error', 'missing_credentials', success=False, collected=False, mode='instagram'), clock)
     try:
-        pages, claims = _extract(documents, kind='instagram', settings=settings, state=state, session=session, clock=clock)
+        pages, claims = _extract_summaries(documents, settings=settings, state=state, session=session,
+                                          qwen_session=qwen_session, clock=clock)
     except CollectError as error:
         reason = error.reason if error.reason in RETRYABLE else 'runtime_error'
         return _finish(state, _base('partial', reason, success=False, collected=False, mode='instagram'), clock)
@@ -660,10 +614,8 @@ def _run_ingest(settings, *, inbox_file, clock, session):
 
 def _review_result(report):
     """Keep deterministic IDs usable while redacting external evidence strings."""
-    from .ground import secrets
-
-    identifier_keys = {'claim_id', 'claim_ids', 'newest_claim_ids', 'supporting_claim_ids',
-                       'eligible_supporting_claim_ids', 'candidate_id', 'conflict_id',
+    identifier_keys = {'venue_id', 'claim_id', 'claim_ids', 'newest_claim_ids', 'supporting_claim_ids',
+                       'eligible_supporting_claim_ids', 'current_supporting_claim_ids', 'candidate_id', 'conflict_id',
                        'policy_fingerprint', 'assessment_fingerprint', 'assessment_digest', 'content_hash'}
     identifier_keys.update({'change_id', 'change_ids', 'observation_id', 'observation_ids',
                            'event_id', 'event_ids', 'old_observation_id', 'new_observation_id',
@@ -695,7 +647,7 @@ def _review_result(report):
 
 def _review_error(reason):
     return {'state': 'error', 'reason': reason, 'claims': [], 'conflicts': [],
-            'fact_candidates': [], 'rights': 'internal_review_only', 'auto_publish_to_site': False}
+            'fact_candidates': [], 'facts': [], 'rights': 'internal_review_only', 'auto_publish_to_site': False}
 
 
 def _assess_review(db, policy, clock):

@@ -339,8 +339,7 @@ def test_derived_cap_priority_and_manual_at_cap_reports_truncation(env):
     rows = [{'enabled': False}] * (MAX_TARGETS + 1)
     path = settings.data_dir / 'web_targets.json'
     path.write_text(json.dumps({'schema_version': 1, 'targets': rows}))
-    with pytest.raises(CollectError, match='targets_invalid'):
-        parse_targets(path, testing=True)
+    assert parse_targets(path, testing=True) == []
 
 
 @pytest.mark.parametrize('status', ['missing', 'empty', 'invalid'])

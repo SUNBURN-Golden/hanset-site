@@ -10,6 +10,7 @@ from hanset_active.collect.web import select_subpages
 from hanset_active.fetcher import FetchResult
 from hanset_active.search.tavily import SearchLead, SearchOutcome
 from hanset_active.util.timeutil import FakeClock
+from tests.active_bot.test_collect_deepseek import enable_qwen
 from tests.active_bot.test_collect_web import _settings, _targets
 
 ROOT = 'https://venue.example'
@@ -48,13 +49,17 @@ def fake_pages(monkeypatch, documents):
 def capture_extraction(monkeypatch):
     rows = []
 
-    def extract(batch, **kwargs):
-        rows.extend(batch)
-        for row in batch:
-            kwargs['state'].complete(row['url'], 'empty_extraction')
-        return [{'url': row['url'], 'disposition': 'empty_extraction'} for row in batch], 0
+    offer = service.WebExtraction.offer
 
-    monkeypatch.setattr(service, '_extract', extract)
+    def capture(self, row):
+        rows.append(row.copy())
+        offer(self, row)
+
+    def empty(self, documents, **kwargs):
+        return {'items': [{'index': item['index'], 'claims': []} for item in documents]}
+
+    monkeypatch.setattr(service.WebExtraction, 'offer', capture)
+    monkeypatch.setattr(service.DeepSeek, 'ask', empty)
     return rows
 
 
@@ -164,7 +169,7 @@ def test_unguarded_pages_never_supply_children(tmp_path, monkeypatch, kind):
     assert calls == [ROOT]
 
 
-def test_actual_ten_and_twenty_page_caps_include_children(tmp_path, monkeypatch):
+def test_all_authorized_parents_and_children_run_in_one_pass(tmp_path, monkeypatch):
     settings, path = setup_run(tmp_path, monkeypatch)
     data, documents = [], {}
     for n in range(8):
@@ -178,36 +183,12 @@ def test_actual_ten_and_twenty_page_caps_include_children(tmp_path, monkeypatch)
     capture_extraction(monkeypatch)
     clock = FakeClock()
     first = service.run_web(settings, targets_path=path, clock=clock, testing=True)
-    assert first['reason'] == 'run_cap' and len(calls) == 10
-    assert sum(url.endswith(('/price', '/about')) for url in calls) == 6
+    assert first['success'] and len(calls) == 24
+    assert sum(url.endswith(('/price', '/about')) for url in calls) == 16
     second = service.run_web(settings, targets_path=path, clock=clock, testing=True)
-    assert second['reason'] == 'daily_cap' and len(calls) == 20
-    assert second['counts']['pages'] == 20
-    assert len(set(calls)) == 20
-
-
-@pytest.mark.parametrize('limit', ['run', 'day', 'active'])
-def test_children_respect_caps(tmp_path, monkeypatch, limit):
-    settings, path = setup_run(tmp_path, monkeypatch)
-    calls = fake_pages(monkeypatch, {ROOT: html('<a href="/price">Price</a><a href="/about">About</a>'),
-                                     ROOT + '/price': html(), ROOT + '/about': html()})
-    capture_extraction(monkeypatch)
-    clock = FakeClock()
-    if limit == 'run':
-        monkeypatch.setattr(service, 'PAGE_RUN_CAP', 2)
-    elif limit == 'day':
-        state = State(settings.data_dir, clock)
-        state.data['counts']['pages'] = 19
-        state.save()
-    else:
-        def capped(self, url, *, subpage=False, url_allowed=None):
-            calls.append(url)
-            return FetchResult(url, 'ok', status=200, content=html('<a href="/price">Price</a>'), content_type='text/html') if url == ROOT else FetchResult(url, 'cap_reached')
-        monkeypatch.setattr(service.Fetcher, 'fetch', capped)
-    result = service.run_web(settings, targets_path=path, clock=clock, testing=True)
-    assert result['reason'] == {'run': 'run_cap', 'day': 'daily_cap', 'active': 'active_body_cap'}[limit]
-    assert len(calls) == (1 if limit == 'day' else 2)
-    assert result['counts']['pages'] == {'run': 2, 'day': 20, 'active': 1}[limit]
+    assert second['reason'] == 'already_complete' and len(calls) == 24
+    assert second['counts']['pages'] == 24
+    assert len(set(calls)) == 24
 
 
 @pytest.mark.parametrize('completed_path', ['/facilities', '/facilities/'])
@@ -229,9 +210,9 @@ def test_slash_children_use_canonical_checkpoint_and_attempted_keys(tmp_path, mo
 
 def test_fake_http_slash_children_produce_grounded_sauna_claim(tmp_path, monkeypatch):
     from types import SimpleNamespace
-    from tests.active_bot.test_collect_deepseek import HOURS, KEY, Session, _envelope, _hours_value
+    from tests.active_bot.test_collect_deepseek import HOURS, Session, _envelope, _hours_value
 
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     settings, path = setup_run(tmp_path, monkeypatch)
     calls = []
     routes = {
@@ -259,24 +240,24 @@ def test_fake_http_slash_children_produce_grounded_sauna_claim(tmp_path, monkeyp
         {'index': 2, 'claims': []},
     ]}))
     clock = FakeClock()
-    first = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
+    first = service.run_web(settings, targets_path=path, clock=clock, qwen_session=session, testing=True)
     assert first['success'] and first['collected'] and first['counts']['pages'] == 3
     assert calls == [ROOT, ROOT + '/sauna/', ROOT + '/facilities/']
     with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
         assert db.execute('SELECT source_url,status,rights,evidence_origin FROM claims').fetchone() == (
             ROOT + '/sauna/', 'source_claim', 'internal_review_only', 'web_verbatim')
-    again = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
+    again = service.run_web(settings, targets_path=path, clock=clock, qwen_session=session, testing=True)
     assert again['reason'] == 'already_complete' and len(calls) == 3
     clock.sleep(86400)
-    tomorrow = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
+    tomorrow = service.run_web(settings, targets_path=path, clock=clock, qwen_session=session, testing=True)
     assert tomorrow['success'] and tomorrow['counts']['pages'] == 3
-    assert sum(page['disposition'] == 'duplicate' for page in tomorrow['pages']) == 3
+    assert sum(page['disposition'] == 'unchanged' for page in tomorrow['pages']) == 3
     assert len(session.calls) == 1
 
 
 def test_real_fetcher_loopback_children_claims_and_duplicate(server, tmp_path, monkeypatch):
-    from tests.active_bot.test_collect_deepseek import HOURS, KEY
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    from tests.active_bot.test_collect_deepseek import HOURS
+    enable_qwen(monkeypatch)
     settings, path = setup_run(tmp_path, monkeypatch, [server.base + '/root'])
     server.add('/root', html('<a href="/price">Price</a>'))
     server.add('/price', html(text=HOURS + ' ' + TEXT))
@@ -285,35 +266,35 @@ def test_real_fetcher_loopback_children_claims_and_duplicate(server, tmp_path, m
     from tests.active_bot.test_collect_deepseek import Session, _envelope, _hours_value
     session = Session(_envelope({'items': [{'index': 0, 'claims': []}, {'index': 1, 'claims': [
         {'field': 'hours', 'value': _hours_value(), 'quote': HOURS}]}]}))
-    result = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
+    result = service.run_web(settings, targets_path=path, clock=clock, qwen_session=session, testing=True)
     assert result['success'] and result['counts']['pages'] == 2 and result['collected']
     with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
         claim = db.execute('SELECT source_url,status,rights,evidence_origin FROM claims').fetchone()
         assert claim == (server.base + '/price', 'source_claim', 'internal_review_only', 'web_verbatim')
         assert db.execute('SELECT count(*) FROM web_change_observations').fetchone()[0] == 1
     clock.sleep(86400)
-    again = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
+    again = service.run_web(settings, targets_path=path, clock=clock, qwen_session=session, testing=True)
     assert again['success'] and again['counts']['pages'] == 2
-    assert sum(page['disposition'] == 'duplicate' for page in again['pages']) == 2
+    assert sum(page['disposition'] == 'unchanged' for page in again['pages']) == 2
     assert len(session.calls) == 1
 
 
 def test_explicit_receipt_identity_survives_canonical_queue_dedup(server, tmp_path, monkeypatch):
-    from tests.active_bot.test_collect_deepseek import HOURS, KEY
+    from tests.active_bot.test_collect_deepseek import HOURS
     from tests.active_bot.test_collect_web import _session
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     url = server.base + '/hours/'
     settings, path = setup_run(tmp_path, monkeypatch, [url, url + '#info'])
     server.add('/hours', html(text=HOURS + ' ' + TEXT))
     clock, session = FakeClock(), _session()
-    first = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
+    first = service.run_web(settings, targets_path=path, clock=clock, qwen_session=session, testing=True)
     assert first['success'] and first['counts']['pages'] == 1
     with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
         assert db.execute('SELECT source_url FROM receipts').fetchone()[0] == url
     clock.sleep(86400)
-    again = service.run_web(settings, targets_path=path, clock=clock, session=session, testing=True)
+    again = service.run_web(settings, targets_path=path, clock=clock, qwen_session=session, testing=True)
     assert again['success'] and len(session.calls) == 1
-    assert any(page['url'] == url and page['disposition'] == 'duplicate' for page in again['pages'])
+    assert any(page['url'] == url and page['disposition'] == 'unchanged' for page in again['pages'])
 
 
 def _lead_target(path):
@@ -402,8 +383,7 @@ def _defer_children(settings, clock, paths):
     clock.sleep(86400)
 
 
-@pytest.mark.parametrize('cap', [3, 10])
-def test_deferred_children_use_slots_and_yield_to_fresh_roots(tmp_path, monkeypatch, cap):
+def test_deferred_children_use_slots_and_yield_to_fresh_roots(tmp_path, monkeypatch):
     settings, path = setup_run(tmp_path, monkeypatch, [ROOT, ROOT + '/manual'])
     clock = FakeClock()
     _defer_children(settings, clock, ['/price', '/rates'])
@@ -413,18 +393,15 @@ def test_deferred_children_use_slots_and_yield_to_fresh_roots(tmp_path, monkeypa
         ROOT + '/about': html(), ROOT + '/manual': html(), ROOT + '/price': html(),
     })
     rows = capture_extraction(monkeypatch)
-    monkeypatch.setattr(service, 'PAGE_RUN_CAP', cap)
     result = service.run_web(settings, targets_path=path, clock=clock, testing=True)
     # The fresh third-ranked child gets a slot, then the first deferred child.
     # No third child is queued, and fresh explicit jobs run before deferrals.
-    expected = [ROOT, ROOT + '/about', ROOT + '/manual']
-    if cap > 3:
-        expected.append(ROOT + '/price')
+    expected = [ROOT, ROOT + '/about', ROOT + '/manual', ROOT + '/price']
     assert result['success'] and calls == expected
     assert ROOT + '/rates' not in calls
     assert result['rejections'] == {'recent_unchanged_deferred': 1}
     children = [row for row in rows if row['depth'] == 1]
-    assert len(children) == (2 if cap > 3 else 1)
+    assert len(children) == 2
     assert all(row['source_authorization'] is None for row in children)
 
 
@@ -459,8 +436,7 @@ def test_deferred_explicit_child_promotion_preserves_tier_and_authorization(
     assert result['rejections'] == {'recent_unchanged_deferred': 2}
 
 
-@pytest.mark.parametrize('cap', [2, 3])
-def test_deferred_child_runs_after_unseen_job_from_another_target(tmp_path, monkeypatch, cap):
+def test_deferred_child_runs_after_unseen_job_from_another_target(tmp_path, monkeypatch):
     settings, path = setup_run(tmp_path, monkeypatch)
     data = json.loads(path.read_text())
     other = 'https://other.example'
@@ -474,8 +450,31 @@ def test_deferred_child_runs_after_unseen_job_from_another_target(tmp_path, monk
         ROOT: html('<a href="/price">Price</a>'), ROOT + '/price': html(), other: html(),
     })
     capture_extraction(monkeypatch)
-    monkeypatch.setattr(service, 'PAGE_RUN_CAP', cap)
     result = service.run_web(settings, targets_path=path, clock=clock, testing=True)
-    assert result['success'] and calls == [ROOT, other, ROOT + '/price'][:cap]
+    assert result['success'] and calls == [ROOT, other, ROOT + '/price']
     assert result['rejections'] == {'recent_unchanged_deferred': 1}
-    assert (ROOT + '/price' in State(settings.data_dir, clock).data['completed']) == (cap == 3)
+    assert result['counts']['committed'] == 3
+
+
+def test_discovered_child_retries_with_original_slash_after_parent_commits(tmp_path, monkeypatch):
+    from tests.active_bot.test_collect_deepseek import _envelope
+    from tests.active_bot.test_collect_web import WebModel
+
+    enable_qwen(monkeypatch)
+    parent = ROOT + '/home'
+    child = ROOT + '/price/'
+    settings, path = setup_run(tmp_path, monkeypatch, [parent])
+    calls = fake_pages(monkeypatch, {
+        parent: html('<a href="/price/">Price</a>'),
+        child: html(),
+    })
+    clock = FakeClock()
+    model = WebModel(lambda items, attempt: _envelope({'items': [
+        {'index': item['index'], 'claims': []} for item in items
+    ] if attempt in (2, 4) else []}))
+    first = service.run_web(settings, targets_path=path, clock=clock, qwen_session=model, testing=True)
+    assert first['counts']['committed'] == first['counts']['pending'] == 1
+    assert calls == [parent, child]
+    second = service.run_web(settings, targets_path=path, clock=clock, qwen_session=model, testing=True)
+    assert second['success'] and second['counts']['committed'] == 1
+    assert calls == [parent, child, child]
