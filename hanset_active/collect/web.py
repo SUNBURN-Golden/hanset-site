@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 from hanset_active.extract import html as html_rules
 from hanset_active.util.urls import canonicalize, is_excluded
 
-from .ground import bounded_text
+from .ground import redact
 from .safety import POLICY_RE, asset_type, looks_like_security
 from .config import SUBPAGE_MAX, official_site, scope_allowed
 from .targets import _https_or_test, canonical_requested_url
@@ -96,7 +96,7 @@ def classify_page(fetched, scope_domains):
     title = document.get('title') or ''
     if POLICY_RE.search(title):
         return 'policy_page', None
-    text = bounded_text(document.get('text') or '')
+    text = redact(document.get('text') or '')
     if looks_like_security(text):
         return 'blocked', None
     if len(text) < 80:

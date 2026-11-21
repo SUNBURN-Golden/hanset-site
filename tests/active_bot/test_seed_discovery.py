@@ -26,7 +26,7 @@ from hanset_active.locks import RunLock
 from hanset_active.search import budget, tavily
 from hanset_active.util.timeutil import FakeClock
 from hanset_active.venues import seed
-from tests.active_bot.test_collect_deepseek import HOURS, KEY
+from tests.active_bot.test_collect_deepseek import HOURS, enable_qwen
 from tests.active_bot.test_collect_plan import env
 from tests.active_bot.test_collect_unchanged import Model
 from tests.active_bot.test_tavily import Response
@@ -439,7 +439,7 @@ def test_cross_process_domain_flock_serializes_robots_and_redirects(state):
 
 def test_web_collect_consumes_post_freeze_backlog_and_rotates(env, monkeypatch):
     settings, clock, db = env
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     active = Settings(data_dir=settings.active_dir, testing=True, min_interval=0, global_gap=0)
     assert run_plan(settings, clock=clock, testing=True, ranking='local')['state'] == 'done'
     plan_path = next((settings.data_dir / 'plans').glob('*.json'))
@@ -455,15 +455,14 @@ def test_web_collect_consumes_post_freeze_backlog_and_rotates(env, monkeypatch):
     fixed = {targets.target_fingerprint(row) for row in assembled['authorization']}
     planned_urls = {url for row in assembled['targets'] for url in row['urls']}
     calls = transport(monkeypatch, lambda url: page('Seed Spa B', raw=' Details for visitors. ' * 10))
-    for day in range(6):
-        result = service.run_web(settings, clock=clock, session=Model(), testing=True)
-        assert result['success'] or result['reason'] == 'daily_cap', result['reason']
-        if not day:
-            assert plan_path.read_bytes() == frozen
-        clock.sleep(86400)
-        result = service.run_web(settings, clock=clock, session=Model(), testing=True)
-        assert result['success'] or result['reason'] == 'daily_cap', result['reason']
-    assert len(set(calls)) >= 100 and set(calls) - planned_urls
+    result = service.run_web(settings, clock=clock, qwen_session=Model(), testing=True)
+    assert result['success'] and len(calls) == 105
+    assert plan_path.read_bytes() == frozen
+    assert len(set(calls)) == 105 and set(calls) - planned_urls
+    clock.sleep(86400)
+    model = Model()
+    resumed = service.run_web(settings, clock=clock, qwen_session=model, testing=True)
+    assert resumed['counts']['unchanged'] == 105 and not model.calls
     after = service._change_targets(settings, testing=True, clock=clock)
     assert {targets.target_fingerprint(row) for row in after} == fixed
     with closing(claim_connect(settings.data_dir)) as receipts:
@@ -501,7 +500,7 @@ def test_public_directories_fetch_korean_detail_and_verify_labelled_homepage(sta
 
 def test_promoted_targets_manual_suppression_and_slash_handoff(env, monkeypatch, tmp_path):
     settings, clock, db = env
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     active = Settings(data_dir=settings.active_dir)
     good = 'https://venue.example.test/sauna/'
     suppressed = 'https://unlisted.example.test/venue'
@@ -515,14 +514,14 @@ def test_promoted_targets_manual_suppression_and_slash_handoff(env, monkeypatch,
     manual.write_text(json.dumps({'schema_version': 1, 'targets': [{
         'enabled': False, 'venue_id': disabled['venue_id'], 'venue_key': disabled['venue_key']}]}))
     calls = transport(monkeypatch, {good: page('Seed Spa A', raw='Visitor information. ' * 8)})
-    result = service.run_web(settings, clock=clock, session=Model(), testing=True)
+    result = service.run_web(settings, clock=clock, qwen_session=Model(), testing=True)
     assert result['success'] and calls == [good]
     override = tmp_path / 'explicit.json'
     url = 'https://other.test/sauna'
     override.write_text(json.dumps({'schema_version': 1, 'targets': [
         {'venue_id': 'explicit', 'venue_key': 'explicit', 'name': 'Spa C', 'official_urls': [url]}
     ]}))
-    assert service.run_web(settings, targets_path=override, clock=clock, session=Model(), testing=True)['success']
+    assert service.run_web(settings, targets_path=override, clock=clock, qwen_session=Model(), testing=True)['success']
     assert calls == [good, url]
 
 
@@ -546,7 +545,7 @@ def test_known_venue_public_source_policy_leaves_gap_unverified(state, monkeypat
 
 def test_declined_listing_keeps_official_evidence_internal(env, monkeypatch):
     settings, clock, db = env
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     url = 'https://runport.example.test/sauna'
     store = Candidates(db, clock, profile=Settings(data_dir=settings.active_dir).profile)
     with db:
@@ -555,7 +554,7 @@ def test_declined_listing_keeps_official_evidence_internal(env, monkeypatch):
     target, = assemble_targets(settings, now=clock.now(), testing=True)['authorization']
     assert target['official_urls'] == [url]
     calls = transport(monkeypatch, {url: page('RUNPORT Box B', raw='Details for visitors. ' * 8)})
-    assert service.run_web(settings, clock=clock, session=Model(), testing=True)['collected']
+    assert service.run_web(settings, clock=clock, qwen_session=Model(), testing=True)['collected']
     assert calls == [url]
     with closing(claim_connect(settings.data_dir)) as receipts:
         assert [tuple(row) for row in receipts.execute('SELECT source_type,rights FROM claims')] == [

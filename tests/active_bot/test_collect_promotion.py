@@ -13,7 +13,7 @@ from hanset_active.collect import CollectError
 from hanset_active.collect.config import CollectSettings
 from hanset_active.collect.promotion_policy import load_policy
 from hanset_active.collect.service import run_promote, run_report
-from hanset_active.collect.store import connect, record
+from hanset_active.collect.store import connect, digest, record
 from hanset_active.util.timeutil import FakeClock
 from tests.active_bot.test_collect_provenance import OLD_SCHEMA
 
@@ -52,7 +52,7 @@ def add(settings, url, *, value=None, seen=SEEN, text_hash=None, field='hours', 
     db = connect(settings.data_dir)
     try:
         _, ids = record(db, kind='instagram' if 'instagram.com' in url else 'web', url=url,
-                        text_hash=text_hash or 'synthetic-' + url + json.dumps(value), disposition='applied',
+                        text_hash=digest(text_hash or 'synthetic-' + url + json.dumps(value)), disposition='applied',
                         claims=[{'field': field, 'value': value if value is not None else HOURS,
                                  'quote': 'SAMPLE minimal evidence', 'rule_id': 'sample.v1'}],
                         venue_id=identity.get('venue_id', 'sample'), venue_key=identity.get('venue_key', 'sample'),
@@ -80,6 +80,8 @@ def test_agree_rerun_corroboration_and_revocation(setup):
     assert first['state'] == 'ok' and first['auto_publish_to_site'] is False
     candidate = first['fact_candidates'][0]
     assert candidate['review_state'] == 'awaiting_review'
+    assert first['facts'][0]['supporting_claim_ids'] == sorted([a, b])
+    assert candidate['qualification_basis'] == 'independent_agreement'
     assert candidate['status'] == 'fact_candidate' and candidate['rights'] == 'internal_review_only'
     assert candidate['supporting_claim_ids'] == sorted([a, b]) and candidate['independence_rationale']
     before = persisted(settings)
@@ -97,6 +99,7 @@ def test_agree_rerun_corroboration_and_revocation(setup):
     assert persisted(settings)['fact_candidates'][0][9] == 'awaiting_review'
     held = run_promote(settings, policy_path=path, clock=clock)
     assert held['fact_candidates'][0]['review_state'] == 'evidence_hold'
+    assert held['facts'] == [] and held['fact_candidates'][0]['current_supporting_claim_ids'] == []
     assert set(held['fact_candidates'][0]['supporting_claim_ids']) == {a, b, c}
     assert not settings.active_dir.exists() and not settings.twin_dir.exists()
 
@@ -127,7 +130,10 @@ def test_review_only_web_approvals_require_independent_agreement(setup, kind):
     assert all(claim['verification_label'] == '미확인' for claim in report['claims'])
     assert len(report['fact_candidates']) == int(kind == 'independent')
     if kind == 'independent':
-        assert report['fact_candidates'][0]['verification_label'] == '미확인'
+        assert report['facts'][0]['qualification_basis'] == 'independent_agreement'
+        assert report['facts'][0]['status'] == 'fact'
+    else:
+        assert report['facts'] == []
 
 
 @pytest.mark.parametrize('row', [approval(IG_A, review_only=True), approval(IG_A, review_only=False),
@@ -225,7 +231,7 @@ def test_legacy_readonly_migration_and_nulls_untouched(setup):
     assert promoted['fact_candidates'] == [] and promoted['conflicts'][0]['state'] == '확인 필요'
     db = connect(settings.data_dir)
     row = tuple(db.execute("SELECT * FROM claims WHERE claim_id='legacy'").fetchone())
-    assert row[:len(before)] == before and row[len(before):] == (None, None, None)
+    assert row[:len(before)] == before and row[len(before):] == (None, None, None, None)
     assert db.execute('SELECT COUNT(*) FROM fact_candidates').fetchone()[0] == 0
     db.close()
 
@@ -400,3 +406,52 @@ def test_cli_dry_run_and_report_without_credentials_or_network(setup):
         assert len(body['fact_candidates']) == 1
     assert persisted(settings) == before
     assert not settings.active_dir.exists() and not settings.twin_dir.exists()
+
+
+@pytest.mark.parametrize('same_content', (True, False))
+def test_guarded_final_domain_official_qualification_and_rebinding(setup, monkeypatch, same_content):
+    from hanset_active.collect.service import run_web
+    from hanset_active.fetcher import FetchResult
+    from tests.active_bot.test_collect_deepseek import enable_qwen
+    from tests.active_bot.test_collect_web import WebModel, _hours_answer
+
+    settings, clock = setup
+    enable_qwen(monkeypatch)
+    settings.data_dir.mkdir()
+    target = settings.data_dir / 'web_targets.json'
+    final = 'https://hours.alpha.test/visit'
+    entry = {'venue_id': 'sample', 'venue_key': 'sample', 'name': 'Seed Spa A', 'official_urls': [A]}
+    target.write_text(json.dumps({'schema_version': 1, 'targets': [entry]}))
+    body = ('<main>운영시간 06:00-19:00. ' + 'Official venue information. ' * 6 + '</main>').encode()
+    monkeypatch.setattr('hanset_active.collect.service.Fetcher.fetch',
+                        lambda self, url, **kwargs: FetchResult(final, 'ok', status=200,
+                                                                content=body, content_type='text/html'))
+    model = WebModel(lambda items, _: _hours_answer(items))
+    collected = run_web(settings, targets_path=target, clock=clock, qwen_session=model, testing=True)
+    assert collected['collected']
+    path = policy(settings, approval(A))
+    dry = run_promote(settings, policy_path=path, dry_run=True, clock=clock)
+    promoted = run_promote(settings, policy_path=path, clock=clock)
+    assert dry['facts'][0]['qualification_basis'] == promoted['facts'][0]['qualification_basis'] == 'official'
+    fact = promoted['facts'][0]
+    assert fact['status'] == 'fact' and fact['rights'] == 'internal_review_only'
+    claim = promoted['claims'][0]
+    assert claim['source_url'] == A and claim['final_url'] == final and claim['source_kind'] == 'web'
+    assert claim['source_authorization']['final_url'] == final and claim['source_authorization']['requested_url'] == A
+    assert fact['supporting_claim_ids'] == [claim['claim_id']]
+    with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
+        basis, ids = db.execute('SELECT qualification_basis,current_supporting_claim_ids_json FROM fact_candidates').fetchone()
+        assert basis == 'official' and json.loads(ids) == [claim['claim_id']]
+    entry.update(venue_id='box-b', venue_key='box-b', name='Box B')
+    target.write_text(json.dumps({'schema_version': 1, 'targets': [entry]}))
+    if not same_content:
+        body = body.replace(b'06:00-19:00', b'06:00-20:00')
+    clock.sleep(86400)
+    collected = run_web(settings, targets_path=target, clock=clock, qwen_session=model, testing=True)
+    assert collected['counts']['unchanged' if same_content else 'committed'] == 1
+    assert len(model.calls) == (1 if same_content else 2)
+    held = run_promote(settings, policy_path=path, clock=clock)
+    assert held['facts'] == []
+    assert held['fact_candidates'][0]['review_state'] == 'evidence_hold'
+    original = next(item for item in held['claims'] if item['claim_id'] == claim['claim_id'])
+    assert original['seen_at'] == claim['seen_at']

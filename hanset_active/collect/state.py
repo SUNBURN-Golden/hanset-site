@@ -8,7 +8,7 @@ from pathlib import Path
 from hanset_active.util.timeutil import Clock, kst_day, kst_now
 
 from . import CollectError
-from .config import MODEL_CALL_CAP, MODEL_INPUT_CAP, MODEL_OUTPUT_CAP, outside
+from .config import outside
 
 SCHEMA = 2
 HALT_REASONS = frozenset({'security_check', 'login_warning', 'challenge'})
@@ -66,7 +66,7 @@ def _validate(saved, today):
     if not _ints(saved.get('budgets'), ('model_calls', 'input_chars', 'output_tokens')):
         raise ValueError
     completed = saved.get('completed')
-    if not isinstance(completed, dict) or len(completed) > 100:
+    if not isinstance(completed, dict):
         raise ValueError
     if not all(isinstance(key, str) and len(key) <= 500 and isinstance(item, str) and len(item) <= 80 for key, item in completed.items()):
         raise ValueError
@@ -80,15 +80,16 @@ def _validate(saved, today):
 
 
 class State:
-    def __init__(self, directory, clock=None):
+    def __init__(self, directory, clock=None, *, active_dir=None):
         self.directory = outside(directory)
+        self.active_dir = outside(active_dir or directory)
         self.clock = clock or Clock()
         self.path = self.directory / 'checkpoint.json'
         today = kst_day(self.clock)
         self.data = new_checkpoint(today)
         # Per-run diagnostics only; never part of checkpoint.json.
         self.model_providers = {}
-        self.primary_skipped = None
+        self.deepseek_skipped = None
         self.proxy_heal = None
         self.corrupt = False
         if not self.path.exists():
@@ -123,15 +124,7 @@ class State:
         halt = self.data.get('halt')
         return bool(halt) and halt.get('day') == self.data['day']
 
-    def can_model(self, chars, output_tokens):
-        budgets = self.data['budgets']
-        return (budgets['model_calls'] < MODEL_CALL_CAP and
-                budgets['input_chars'] + chars <= MODEL_INPUT_CAP and
-                budgets['output_tokens'] + output_tokens <= MODEL_OUTPUT_CAP)
-
     def reserve_model(self, chars, output_tokens):
-        if not self.can_model(chars, output_tokens):
-            raise CollectError('model_budget_exhausted')
         budgets = self.data['budgets']
         budgets['model_calls'] += 1
         budgets['input_chars'] += chars
@@ -143,7 +136,7 @@ class State:
             self.model_providers[name] = self.model_providers.get(name, 0) + 1
 
     def reconcile_output(self, reserved, used):
-        if type(used) is int and 0 <= used <= reserved:
+        if type(used) is int and used >= 0:
             self.data['budgets']['output_tokens'] -= reserved - used
             self.save()
 
@@ -160,16 +153,18 @@ class State:
             'collected': bool(result['collected']),
             'mode': result['mode'],
             'at': kst_now(self.clock).isoformat(),
-            'counts': self.data['counts'],
+            'counts': result.get('counts') or self.data['counts'],
             'budgets': self.data['budgets'],
             'halt': self.data.get('halt'),
             'pages': result.get('pages') or [],
             'provider': result.get('provider') or {},
         }
+        if 'rejections' in result:
+            body['rejections'] = dict(result['rejections'])
         if 'proxy_heal' in result:
             body['proxy_heal'] = dict(result['proxy_heal'])
         if 'web_egress' in result:
             body['web_egress'] = dict(result['web_egress'])
-        if result.get('primary_skipped') == 'insufficient_balance':
-            body['primary_skipped'] = 'insufficient_balance'
+        if result.get('deepseek_skipped') == 'insufficient_balance':
+            body['deepseek_skipped'] = 'insufficient_balance'
         atomic_json(self.directory / 'status.json', body)

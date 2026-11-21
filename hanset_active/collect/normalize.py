@@ -3,7 +3,9 @@ import json
 import math
 import re
 
-VERSION = 'source-claim-v1'
+LEGACY_VERSION = 'source-claim-v1'
+VERSION = 'source-claim-v2'
+AVAILABILITY_FIELDS = frozenset({'drop_in_available', 'parking', 'showers'})
 
 
 def stable_json(value):
@@ -11,7 +13,7 @@ def stable_json(value):
 
 
 def _number(value):
-    return type(value) in (int, float) and math.isfinite(value)
+    return type(value) is int or (type(value) is float and math.isfinite(value))
 
 
 def normalize_value(field, value):
@@ -26,7 +28,7 @@ def normalize_value(field, value):
     if field in ('hours', 'price_day_pass'):
         primary = 'hours' if field == 'hours' else 'amount'
         allowed = ({'hours', 'scope', 'facility'} if field == 'hours' else
-                   {'amount', 'currency', 'ticket', 'scope', 'audience', 'duration_hours'})
+                   {'amount', 'currency', 'ticket', 'scope', 'audience', 'duration_hours', 'facility'})
         if not isinstance(value, dict) or primary not in value or set(value) - allowed:
             return {'reason': reason, 'version': VERSION}
         qualifiers = {key: item for key, item in value.items() if key not in (primary, 'currency')}
@@ -63,7 +65,7 @@ def normalize_value(field, value):
                     parsed = int((match[1] or match[2]).replace(',', ''))
                     if parsed <= 100_000_000:
                         normalized = parsed
-    elif field == 'rapid_cold_plunge' and type(value) is bool:
+    elif (field == 'rapid_cold_plunge' or field in AVAILABILITY_FIELDS) and type(value) is bool:
         normalized = value
     elif field == 'tattoo_policy' and isinstance(value, str) and value in ('allowed', 'not_allowed', 'cover_required', 'conditional'):
         normalized = value

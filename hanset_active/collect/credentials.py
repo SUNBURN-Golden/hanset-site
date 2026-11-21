@@ -1,4 +1,4 @@
-"""Runtime-only Qwen backup credential. Never logged, persisted, or committed."""
+"""Runtime-only Qwen Token Plan credential. Never logged, persisted, or committed."""
 import functools
 import os
 import stat

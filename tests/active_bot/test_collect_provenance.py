@@ -13,7 +13,7 @@ from hanset_active.collect.ingest import load_watchlist
 from hanset_active.collect.service import run_ingest, run_report
 from hanset_active.collect.store import connect, evidence_report, record
 from hanset_active.extract import fields as field_rules
-from tests.active_bot.test_collect_deepseek import KEY, Session, _envelope
+from tests.active_bot.test_collect_deepseek import Session, _envelope, enable_qwen
 from tests.active_bot.test_collect_ingest import _blob, _clock, _settings
 
 LABEL = 'SAMPLE operator summary, not an original caption.'
@@ -125,7 +125,7 @@ def _no_choice(blob):
 
 
 def test_summary_is_not_an_original_quote_and_conflicts_stay(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     settings = _settings(tmp_path)
     _watch(settings)
     lines = [
@@ -135,7 +135,7 @@ def test_summary_is_not_an_original_quote_and_conflicts_stay(tmp_path, monkeypat
     ]
     path = _write(settings, lines)
     session = _model([_claim_item(0, QUOTE_A), _claim_item(1, QUOTE_B), _claim_item(2, QUOTE_WEEKEND)])
-    result = run_ingest(settings, clock=_clock(), session=session)
+    result = run_ingest(settings, clock=_clock(), qwen_session=session)
     assert result['success'] is True and result['collected'] is True
     assert not path.exists() and len(session.calls) == 1
     user = json.loads(session.calls[0]['json']['messages'][1]['content'])
@@ -166,22 +166,22 @@ def test_summary_is_not_an_original_quote_and_conflicts_stay(tmp_path, monkeypat
     weekend_id = by_quote[QUOTE_WEEKEND]['claim_id']
     assert weekend_id not in conflict['claim_ids']
     _write(settings, lines)
-    replay = run_ingest(settings, clock=_clock(), session=session)
+    replay = run_ingest(settings, clock=_clock(), qwen_session=session)
     assert replay['collected'] is False and len(session.calls) == 1
     assert [row['claim_id'] for row in _rows(settings)] == [row['claim_id'] for row in rows]
     assert [row['evidence_origin'] for row in _rows(settings)] == ['operator_summary'] * 3
 
 
 def test_later_summary_does_not_overwrite_evidence(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     settings = _settings(tmp_path)
     _watch(settings)
     first = _model([_claim_item(0, QUOTE_A)])
     _write(settings, [_line(_summary(QUOTE_A), POST_A)])
-    assert run_ingest(settings, clock=_clock(), session=first)['collected'] is True
+    assert run_ingest(settings, clock=_clock(), qwen_session=first)['collected'] is True
     second = _model([_claim_item(0, QUOTE_B)])
     _write(settings, [_line(_summary(QUOTE_B), POST_A)])
-    assert run_ingest(settings, clock=_clock(), session=second)['collected'] is True
+    assert run_ingest(settings, clock=_clock(), qwen_session=second)['collected'] is True
     rows = _rows(settings)
     assert {row['quote'] for row in rows} == {QUOTE_A, QUOTE_B}
     assert len({row['claim_id'] for row in rows}) == 2
@@ -191,36 +191,36 @@ def test_later_summary_does_not_overwrite_evidence(tmp_path, monkeypatch):
 
 
 def test_text_field_and_bad_provenance_store_nothing(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     settings = _settings(tmp_path)
     _watch(settings)
     session = _model([_claim_item(0, QUOTE_A)])
     caption = CAPTION + ' ' + QUOTE_A
     path = _write(settings, [_line(_summary(QUOTE_A), text=caption)])
-    refused = run_ingest(settings, clock=_clock(), session=session)
+    refused = run_ingest(settings, clock=_clock(), qwen_session=session)
     assert refused['reason'] == 'provenance_invalid' and refused['collected'] is False
     assert session.calls == [] and not path.exists()
     assert not (settings.data_dir / 'collector.sqlite3').exists()
     assert CAPTION.encode() not in _blob(settings.data_dir)
     path = _write(settings, [_line(_summary(QUOTE_A), provenance='web_verbatim')])
-    wrong = run_ingest(settings, clock=_clock(), session=session)
+    wrong = run_ingest(settings, clock=_clock(), qwen_session=session)
     assert wrong['reason'] == 'provenance_invalid' and session.calls == [] and not path.exists()
     body = json.loads(_line(_summary(QUOTE_A)))
     del body['provenance']
     path = _write(settings, [json.dumps(body)])
-    missing = run_ingest(settings, clock=_clock(), session=session)
+    missing = run_ingest(settings, clock=_clock(), qwen_session=session)
     assert missing['reason'] == 'provenance_required' and missing['rejections']['provenance_required'] == 1
     assert session.calls == [] and not path.exists()
     path = _write(settings, [_line('x' * 481)])
-    long = run_ingest(settings, clock=_clock(), session=session)
+    long = run_ingest(settings, clock=_clock(), qwen_session=session)
     assert long['reason'] == 'provenance_invalid' and session.calls == [] and not path.exists()
     path = _write(settings, [_line(_summary(QUOTE_A), note='extra')])
-    extra = run_ingest(settings, clock=_clock(), session=session)
+    extra = run_ingest(settings, clock=_clock(), qwen_session=session)
     assert extra['reason'] == 'input_invalid' and session.calls == [] and not path.exists()
     good = _line(_summary(QUOTE_A), POST_A)
     bad = _line(_summary(QUOTE_B), POST_B, text=caption)
     path = _write(settings, [good, bad])
-    mixed = run_ingest(settings, clock=_clock(), session=session)
+    mixed = run_ingest(settings, clock=_clock(), qwen_session=session)
     assert mixed['collected'] is True and mixed['rejections']['provenance_invalid'] == 1
     assert not path.exists() and len(session.calls) == 1
     sent = json.loads(session.calls[0]['json']['messages'][1]['content'])
@@ -231,12 +231,12 @@ def test_text_field_and_bad_provenance_store_nothing(tmp_path, monkeypatch):
 
 
 def test_unresolved_and_ambiguous_handles_store_nothing(tmp_path, monkeypatch):
-    monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
+    enable_qwen(monkeypatch)
     settings = _settings(tmp_path)
     _watch(settings)
     session = _model([_claim_item(0, QUOTE_A)])
     path = _write(settings, [_line(_summary(QUOTE_A), venue_key='other-venue')])
-    missed = run_ingest(settings, clock=_clock(), session=session)
+    missed = run_ingest(settings, clock=_clock(), qwen_session=session)
     assert missed['reason'] == 'unresolved_venue' and session.calls == [] and not path.exists()
     assert LABEL.encode() not in _blob(settings.data_dir)
     _watch(settings, [
@@ -249,7 +249,7 @@ def test_unresolved_and_ambiguous_handles_store_nothing(tmp_path, monkeypatch):
         {'enabled': True, 'venue_id': 'other-venue', 'venue_key': 'other-venue', 'name': 'Other Venue', 'handle': 'sample.venue'},
     ])
     path = _write(settings, [_line(_summary(QUOTE_A))])
-    ambiguous = run_ingest(settings, clock=_clock(), session=session)
+    ambiguous = run_ingest(settings, clock=_clock(), qwen_session=session)
     assert ambiguous['reason'] == 'watchlist_invalid' and path.exists() and session.calls == []
     assert not (settings.data_dir / 'collector.sqlite3').exists()
 
@@ -260,7 +260,7 @@ def test_legacy_rows_stay_unrecorded(tmp_path):
     raw = sqlite3.connect(path)
     raw.executescript(OLD_SCHEMA)
     raw.execute(
-        'INSERT INTO receipts VALUES (?,?,?,?,?,?)',
+        'INSERT INTO receipts (receipt_id,source_kind,source_url,content_hash,disposition,created_at) VALUES (?,?,?,?,?,?)',
         ('receipt-legacy', 'web', 'https://example.invalid/hours', 'hash-legacy', 'applied', SEEN))
     raw.execute(
         '''INSERT INTO claims (
@@ -293,7 +293,7 @@ def test_legacy_rows_stay_unrecorded(tmp_path):
              None, None, None))
     db.rollback()
     record(
-        db, kind='instagram', url=POST_A, text_hash='hash-summary', disposition='applied',
+        db, kind='instagram', url=POST_A, text_hash='a' * 64, disposition='applied',
         claims=[{'field': 'hours', 'value': _hours(QUOTE_A), 'quote': QUOTE_A, 'rule_id': 'hours.explicit.v1'}],
         venue_id='sample-venue', venue_key='sample-venue', seen_at=SEEN, clock=_clock())
     legacy = db.execute('SELECT quote, evidence_origin, evidence_role, verbatim_source FROM claims WHERE claim_id=?', ('claim-legacy',)).fetchone()
@@ -309,14 +309,14 @@ def test_legacy_rows_stay_unrecorded(tmp_path):
     assert found['evidence_origin'] is None and found['verbatim_source'] is None and found['original_caption'] is False
     again.close()
     source = Path(__file__).resolve().parents[2].joinpath('hanset_active', 'collect', 'store.py').read_text()
-    assert 'UPDATE claims' not in source and 'UPDATE receipts' not in source
+    assert 'UPDATE claims' not in source
 
 
 def test_new_database_rejects_an_unlabeled_claim(tmp_path):
     settings = _settings(tmp_path)
     db = connect(settings.data_dir)
     db.execute(
-        'INSERT INTO receipts VALUES (?,?,?,?,?,?)',
+        'INSERT INTO receipts (receipt_id,source_kind,source_url,content_hash,disposition,created_at) VALUES (?,?,?,?,?,?)',
         ('receipt-new', 'web', 'https://example.invalid/hours', 'hash-new', 'applied', SEEN))
     with pytest.raises(sqlite3.IntegrityError):
         db.execute(

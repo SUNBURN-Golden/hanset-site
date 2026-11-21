@@ -13,12 +13,13 @@ from hanset_active.util.timeutil import KST
 
 from .config import official_site
 from .ground import secrets
-from .normalize import VERSION as CLAIM_NORMALIZER, normalize_value, stable_json
+from .normalize import LEGACY_VERSION, normalize_value, stable_json
 from .store import digest, read_claims
 from .targets import source_authorization
 
 DETECTOR_VERSION = 'official-web-changes-v1'
-NORMALIZER_VERSION = 'web-change-v1:' + CLAIM_NORMALIZER
+# The change feed compares the same hours, price and closure shapes as before.
+NORMALIZER_VERSION = 'web-change-v1:' + LEGACY_VERSION
 FIELDS = ('hours', 'price_day_pass', 'closures')
 SCOPE = ('venue_id', 'venue_key', 'field', 'qualifier_key', 'source_identity', 'target_fingerprint')
 HEX = re.compile(r'^[0-9a-f]{64}$')

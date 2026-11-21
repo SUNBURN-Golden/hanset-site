@@ -1,9 +1,9 @@
-# Source claims to internal fact candidates
+# Source claims and internal facts
 
 `hanset_active.collect` can assess stored evidence without collecting anything.
-Two independent approved sources agreeing on a normalized value create an
-internal `fact_candidate`. Third-party claims and candidates whose eligible
-support is entirely third-party show `미확인`. Every result declares
+An exact approved venue source with persisted official-domain authority, or
+two independent approved sources agreeing on a normalized value, can qualify
+an internal fact. Unqualified source claims show `미확인`. Every result carries
 `rights: internal_review_only` and `auto_publish_to_site: false`. Publication
 requires official-source confirmation.
 
@@ -19,7 +19,7 @@ approvals. Unknown keys, malformed records, future approval dates, private
 hosts, HTTP web sources, and Instagram URLs represented as web sources fail
 closed. The exact
 URL, venue identity, reviewed domain boundary, origin group and approval date
-must all be present. No trust is inferred from `source_type`.
+must all be present. Official qualification requires the recorded authorization tuple and validation of the final URL against the approved domain.
 
 Synthetic policy example; replace the sources only after operator review:
 
@@ -95,13 +95,14 @@ reviewed origin groups, with at least one web source. Equal nonempty content
 hashes veto that pair. Repeated observations, pages or subdomains within one
 domain cannot manufacture agreement.
 
-The pure `source-claim-v1` normalizer never changes `claims.value_json`:
+The `source-claim-v2` normalizer never changes `claims.value_json`:
 
 | Field | Comparison |
 | --- | --- |
 | `hours` | Valid padded times, whitespace and range separator normalization; preserve exact scope/facility qualifiers. Overnight ranges are allowed. Equal endpoints, including midnight-to-midnight, are ambiguous; only explicit `24_hours` represents all-day hours. |
-| `price_day_pass` | Integer won in the established structured shape, or explicit `KRW`/`원` strings with valid grouping; preserve ticket, scope, audience and duration. Bare legacy strings and non-KRW currency are unsupported. |
+| `price_day_pass` | Integer won in the established structured shape, or explicit `KRW`/`원` strings with valid grouping; preserve ticket, scope, audience, duration, and facility. Bare legacy strings and non-KRW currency are unsupported. |
 | Policy enums / rapid plunge | Valid enum strings / strict boolean. |
+| Drop-in, parking, showers | Explicit Boolean availability. A quoted price alone does not establish availability. |
 | Temperatures | Finite typed number or ordered two-number range; no inferred equivalence between scalar and range. |
 | Bath composition | Nonempty string list, compared as a sorted set. |
 | Closures | Bounded nonempty text, exact equality; no semantic inference. |
@@ -116,13 +117,23 @@ Raw values and normalized values/qualifiers appear together in the report.
 Additive `fact_candidates` and `fact_candidate_claims` tables store deterministic
 candidate identities and append-only evidence links. IDs hash venue identity,
 field, qualifiers, normalized value and normalizer version. Every candidate
-retains constant internal rights and `status=fact_candidate`.
+retains constant internal rights and `status=fact_candidate`. Existing IDs
+remain stable for previously supported field shapes.
+
+`facts` exposes currently qualified records with `status=fact`. The candidate
+assessment persists `qualification_basis` and `current_supporting_claim_ids`.
+Historical evidence links remain append-only.
+
+| Qualification basis | Required evidence |
+| --- | --- |
+| `official` | An eligible first-party claim, exact reviewed approval, matching venue, and the persisted requested and final URL authorization tuple with a final URL on the approved domain. |
+| `independent_agreement` | Two eligible, independently reviewed sources that agree on the entity, field, exact qualifiers, and normalized value. Review-only web sources may qualify through this basis. |
 
 | Review state | Meaning |
 | --- | --- |
-| `awaiting_review` | Independent eligible agreement, no comparable disagreement. |
-| `needs_confirmation` | Agreement exists but comparable claims disagree; show `확인 필요`. |
-| `evidence_hold` | A previously qualifying candidate no longer has an eligible independent pair. It is retained, including all historical links. Any remaining conflict is still shown as `확인 필요`. |
+| `awaiting_review` | Qualifying evidence with no comparable disagreement. |
+| `needs_confirmation` | Potential support exists and comparable claims disagree; show `확인 필요`. |
+| `evidence_hold` | A previously qualifying candidate has lost its supporting evidence or approval. It is retained, including all historical links. Any remaining conflict is still shown as `확인 필요`. |
 
 All normalizable retained claims participate in disagreements, including NULL
 provenance and revisions of one page. Eligibility is displayed per claim.
@@ -162,7 +173,7 @@ missing state directories/databases, do not migrate old schemas, and reassess
 current policy without persisting. Without `--policy`, report still lists
 claims/conflicts, grants no eligibility, and shows existing candidates on hold.
 A supplied invalid policy returns only a safe error. The output preserves
-`claims` and `conflicts`, and adds `fact_candidates`, normalized evidence,
+`claims` and `conflicts`, and adds `facts`, `fact_candidates`, normalized evidence,
 independence rationales, diagnostic counts and policy/assessment fingerprints.
 The assessment fingerprint excludes time-dependent freshness labels. Reports
 can include newly qualifying proposed candidates before any write; only an
@@ -176,7 +187,7 @@ SQLite write transaction. Failure rolls back candidate changes. An identical
 rerun leaves IDs, counts and change timestamps unchanged. New corroboration
 appends links; revocation retains candidates on hold. No status/checkpoint,
 active or twin store is written. Migration alone generates no candidate and
-does not backfill claims or receipts. PR90's trigger still rejects new NULL
+does not rewrite claim evidence or infer legacy official authority. The trigger still rejects new NULL
 provenance inserts while existing NULL rows remain untouched.
 
 Daemon validation uses synthetic temporary databases only:

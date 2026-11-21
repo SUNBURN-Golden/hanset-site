@@ -186,7 +186,10 @@ def test_unsafe_free_text_is_held_and_secrets_never_exported(store, monkeypatch)
     observe(db, 'closures')
     # Construct contact-like synthetic input without placing contact details in fixtures.
     contact = 'example' + '@' + 'venue.example'
-    observe(db, 'closures', 'Closed Tuesday; ' + contact, 2)
+    from hanset_active.collect.store import read_claims
+    legacy = {**read_claims(db)[0], 'value': 'Closed Tuesday; ' + contact,
+              'quote': 'Closed Tuesday; ' + contact}
+    observe(db, 'closures', day=2, claims_override=[legacy])
     assert [e['review_reason'] for e in events(db)] == ['unsafe_evidence']
     assert events(db)[0]['new_value_json'] is None and not events(db)[0]['usable_for_viral']
     assert changes.change_report(db)['diagnostics'] == {'unsafe_evidence':1}

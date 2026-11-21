@@ -128,7 +128,8 @@ def independence(left, right):
     a, b = left['approval'], right['approval']
     if a['source_kind'] == b['source_kind'] == 'instagram':
         return None
-    if a['source_url'] == b['source_url'] or a['document_origin_group'] == b['document_origin_group']:
+    if (a['source_url'] == b['source_url'] or a['document_origin_group'] == b['document_origin_group']
+            or (left.get('final_url') and left['final_url'] == right.get('final_url'))):
         return None
     da, db = a['registrable_domain'], b['registrable_domain']
     if da == db or da.endswith('.' + db) or db.endswith('.' + da):
@@ -142,4 +143,4 @@ def independence(left, right):
                 for row in sorted((a, b), key=lambda row: row['source_url'])],
             'registrable_domains': sorted([da, db]),
             'document_origin_groups': sorted([a['document_origin_group'], b['document_origin_group']]),
-            'official_web_required': True}
+            'web_source_required': True}

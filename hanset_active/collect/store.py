@@ -13,7 +13,10 @@ from hanset_active.util.timeutil import kst_now
 
 from . import CollectError
 from .config import BLOCK_COOLDOWN_DAYS, UNCHANGED_COOLDOWN_DAYS, outside
-from .ground import secrets
+from .ground import FIELDS, secrets, valid_claim_value
+from .safety import evidence_rejection, venue_identity_safe
+
+FULL_HASH_VERSION = 'full-nfkc-1'
 
 SCHEMA = '''
 CREATE TABLE IF NOT EXISTS receipts (
@@ -179,8 +182,8 @@ def connect(directory):
     db.execute('PRAGMA journal_mode=WAL')
     db.execute('PRAGMA foreign_keys=ON')
     db.executescript(SCHEMA)
-    _migrate(db)
     db.executescript(CANDIDATE_SCHEMA)
+    _migrate(db)
     db.executescript(CHANGE_SCHEMA)
     db.executescript(BLOCK_SCHEMA)
     db.executescript(WEB_TARGET_SCHEMA)
@@ -189,16 +192,29 @@ def connect(directory):
 
 
 def _migrate(db):
-    """Add provenance columns. Existing rows stay NULL and are not relabeled."""
-    present = {row[1] for row in db.execute('PRAGMA table_info(claims)')}
-    columns = {
-        'evidence_origin': 'TEXT',
-        'evidence_role': 'TEXT',
-        'verbatim_source': 'INTEGER',
-    }
-    for name, declared in columns.items():
-        if name not in present:
-            db.execute(f'ALTER TABLE claims ADD COLUMN {name} {declared}')
+    """Add metadata without relabeling existing claim evidence."""
+    _add_columns(db, 'claims', {
+        'evidence_origin': 'TEXT', 'evidence_role': 'TEXT', 'verbatim_source': 'INTEGER',
+        'locator_json': 'TEXT',
+    })
+    new_receipt_keys = _add_columns(db, 'receipts', {
+        'final_url': 'TEXT', 'authorization_json': 'TEXT', 'hash_version': 'TEXT',
+        'requested_url': 'TEXT', 'venue_id': 'TEXT', 'venue_key': 'TEXT',
+        'binding_current': 'INTEGER',
+    })
+    if 'requested_url' in new_receipt_keys:
+        from .targets import canonical_requested_url
+        for row in db.execute("SELECT receipt_id, source_url FROM receipts WHERE source_kind='web'"):
+            try:
+                url = canonical_requested_url(row['source_url'], testing=True)
+            except ValueError:
+                continue
+            db.execute('UPDATE receipts SET requested_url=? WHERE receipt_id=?', (url, row['receipt_id']))
+    db.execute('CREATE INDEX IF NOT EXISTS receipts_by_request ON receipts(source_kind,requested_url,content_hash)')
+    db.execute('CREATE INDEX IF NOT EXISTS claims_by_receipt ON claims(receipt_id)')
+    _add_columns(db, 'fact_candidates', {
+        'qualification_basis': 'TEXT', 'current_supporting_claim_ids_json': 'TEXT',
+    })
     # Inserts after this point must name an origin. Existing NULL rows are not updated.
     db.execute('''
         CREATE TRIGGER IF NOT EXISTS claims_provenance_required
@@ -215,6 +231,14 @@ def _migrate(db):
         END
     ''')
     db.commit()
+
+
+def _add_columns(db, table, columns):
+    present = {row[1] for row in db.execute(f'PRAGMA table_info({table})')}
+    added = columns.keys() - present
+    for name in sorted(added):
+        db.execute(f'ALTER TABLE {table} ADD COLUMN {name} {columns[name]}')
+    return added
 
 
 def digest(text):
@@ -347,16 +371,65 @@ def recent_unchanged_web_targets(db, *, clock=None, testing=False):
     return web_target_history(db, clock=clock, testing=testing)[1]
 
 
-def _clean(value):
-    blob = json.dumps(value, ensure_ascii=False, sort_keys=True)
-    return not any(secret and secret in blob for secret in secrets())
+def web_receipt(db, requested_url, text_hash, legacy_hash=None):
+    """Find a committed receipt even if the runtime cache index missed its write."""
+    rows = db.execute("""
+        SELECT * FROM receipts WHERE source_kind='web' AND requested_url=? AND
+         ((content_hash=? AND hash_version=?) OR
+          (content_hash IN (?,?) AND hash_version IS NULL))
+        AND disposition IN ('applied','empty_extraction')
+        ORDER BY hash_version IS NULL, rowid
+        LIMIT 1
+        """, (requested_url, text_hash, FULL_HASH_VERSION, legacy_hash, text_hash))
+    return rows.fetchone()
+
+
+def validated_authorization(url, final, authorization, domains, *, testing=False):
+    from .config import domain_allowed
+    from .targets import canonical_requested_url
+
+    if not isinstance(authorization, dict) or set(authorization) != {
+            'source_identity', 'requested_url', 'final_url', 'target_fingerprint'}:
+        return None
+    try:
+        requested = canonical_requested_url(url, testing=testing)
+        final = canonical_requested_url(final, testing=testing)
+        if (requested == authorization['requested_url'] == authorization['source_identity']
+                and final == authorization['final_url'] and _valid_hash(authorization['target_fingerprint'])
+                and domain_allowed(requested, domains) and domain_allowed(final, domains)):
+            return authorization
+    except ValueError:
+        pass
+    return None
 
 
 def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key, seen_at,
-           clock=None, source_type=None):
+           clock=None, source_type=None, requested_url=None, final_url=None,
+           authorization=None, domains=(), hash_version=None, testing=False):
     """Insert one receipt and its grounded claims, or return the existing receipt."""
-    if kind not in ('web', 'instagram'):
+    credentials = secrets()
+    if kind not in ('web', 'instagram') or not _valid_hash(text_hash):
         raise CollectError('runtime_error')
+    if not venue_identity_safe(venue_id, venue_key, credentials):
+        raise CollectError('runtime_error')
+    if kind == 'web':
+        from .targets import canonical_requested_url
+        try:
+            canonical = canonical_requested_url(url, testing=testing)
+            if requested_url is not None and requested_url != canonical:
+                raise ValueError
+            requested_url = canonical
+            final_url = canonical_requested_url(final_url, testing=testing) if final_url else None
+        except ValueError:
+            raise CollectError('runtime_error') from None
+        authorization = validated_authorization(url, final_url, authorization, domains, testing=testing)
+        if hash_version == FULL_HASH_VERSION:
+            source_type = 'own_site' if authorization else 'third_party'
+    else:
+        from .config import canonical_instagram
+        canonical_instagram(url)
+        if evidence_rejection(url, credentials):
+            raise CollectError('runtime_error')
     if source_type is None:
         source_type = 'own_site' if kind == 'web' else 'sns'
     if source_type not in ({'own_site', 'third_party'} if kind == 'web' else {'sns'}):
@@ -370,40 +443,58 @@ def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key
             db.commit()
             return 'duplicate', []
         receipt_id = deterministic_id('collector-receipt', kind, url, text_hash)
-        kept = []
+        kept = {}
         for claim in claims:
-            if not _clean(claim['value']) or not _clean(claim['quote']) or len(claim['quote']) > 240:
+            field, value, quote = claim['field'], claim['value'], claim['quote']
+            if (field not in FIELDS or (hash_version and not valid_claim_value(field, value))
+                    or not 0 < len(quote) <= 240
+                    or evidence_rejection(quote + '\n' + json.dumps(value, ensure_ascii=False), credentials)):
                 continue
-            claim_id = deterministic_id('collector-claim', receipt_id, claim['field'], claim['value'])
-            kept.append((claim_id, claim))
+            claim_id = deterministic_id('collector-claim', receipt_id, field, value)
+            kept.setdefault(claim_id, claim)
         origin, role, verbatim = _PROVENANCE[kind]
         stored_as = 'applied' if kept else 'empty_extraction'
         db.execute(
-            'INSERT INTO receipts(receipt_id,source_kind,source_url,content_hash,disposition,created_at) VALUES (?,?,?,?,?,?)',
-            (receipt_id, kind, url, text_hash, stored_as, kst_now(clock).isoformat()))
-        for claim_id, claim in kept:
+            """INSERT INTO receipts (receipt_id,source_kind,source_url,content_hash,disposition,created_at,
+               requested_url,final_url,authorization_json,hash_version,venue_id,venue_key,binding_current)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (receipt_id, kind, url, text_hash, stored_as, kst_now(clock).isoformat(), requested_url,
+             final_url, json.dumps(authorization) if authorization else None, hash_version,
+             venue_id, venue_key, 1 if hash_version else None))
+        for claim_id, claim in kept.items():
+            locator = claim.get('locator', {}).get('char_offsets')
+            locator_json = (json.dumps({'char_offsets': locator}) if isinstance(locator, list)
+                            and len(locator) == 2 and all(type(n) is int for n in locator)
+                            and 0 <= locator[0] < locator[1] else None)
             db.execute(
-                '''INSERT INTO claims (
+                """INSERT INTO claims (
                     claim_id, receipt_id, venue_id, venue_key, field, value_json, quote,
                     source_url, source_kind, source_type, status, rights, rule_id, seen_at,
-                    content_hash, evidence_origin, evidence_role, verbatim_source
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
+                    content_hash, evidence_origin, evidence_role, verbatim_source, locator_json
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (claim_id, receipt_id, venue_id, venue_key, claim['field'],
-                 json.dumps(claim['value'], ensure_ascii=False, sort_keys=True), claim['quote'][:240],
+                 json.dumps(claim['value'], ensure_ascii=False, sort_keys=True), claim['quote'],
                  url, kind, source_type, 'source_claim', 'internal_review_only', claim['rule_id'],
-                 seen_at, text_hash, origin, role, verbatim))
+                 seen_at, text_hash, origin, role, verbatim, locator_json))
         db.commit()
-        return stored_as, [claim_id for claim_id, _ in kept]
+        return stored_as, list(kept)
     except Exception:
         db.rollback()
         raise
 
 
-def read_claims(db):
+def read_claims(db, *, receipt_id=None):
     """Read stored claims across schemas without relabeling NULL provenance."""
     if not db or not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='claims'").fetchone():
         return []
-    rows = db.execute('SELECT * FROM claims ORDER BY venue_key, field, seen_at, claim_id').fetchall()
+    present = {row[1] for row in db.execute('PRAGMA table_info(receipts)')}
+    metadata = ''.join(f',r.{name}' for name in ('final_url', 'authorization_json', 'binding_current') if name in present)
+    query = 'SELECT c.*' + metadata + ' FROM claims c JOIN receipts r ON r.receipt_id=c.receipt_id'
+    args = ()
+    if receipt_id is not None:
+        query += ' WHERE c.receipt_id=?'
+        args = (receipt_id,)
+    rows = db.execute(query + ' ORDER BY c.venue_key, c.field, c.seen_at, c.claim_id', args)
     claims = []
     for row in rows:
         row = dict(row)
@@ -428,6 +519,10 @@ def read_claims(db):
             'evidence_role': row['evidence_role'],
             'verbatim_source': verbatim,
             'original_caption': False,
+            'final_url': row.get('final_url'),
+            'source_authorization': json.loads(row['authorization_json']) if row.get('authorization_json') else None,
+            'binding_current': row.get('binding_current'),
+            'locator': json.loads(row['locator_json']) if row.get('locator_json') else None,
         })
     return claims
 
@@ -546,6 +641,8 @@ def stored_candidates(db):
         item = dict(row)
         item['qualifiers'] = json.loads(item.pop('qualifiers_json'))
         item['normalized_value'] = json.loads(item.pop('normalized_value_json'))
+        item.setdefault('qualification_basis', None)
+        item['current_supporting_claim_ids'] = json.loads(item.pop('current_supporting_claim_ids_json', None) or '[]')
         item['supporting_claim_ids'] = [link[0] for link in db.execute(
             'SELECT claim_id FROM fact_candidate_claims WHERE candidate_id=? ORDER BY claim_id', (item['candidate_id'],))]
         out.append(item)
@@ -560,12 +657,18 @@ def persist_candidates(db, candidates, *, at):
         params = (item['candidate_id'], item['venue_id'], item['venue_key'], item['field'],
                   stable_json(item['qualifiers']), stable_json(item['normalized_value']),
                   item['normalizer_version'], 'fact_candidate', 'internal_review_only',
-                  item['review_state'], item['assessment_digest'], at, at)
-        result = db.execute('''INSERT INTO fact_candidates VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  item['review_state'], item['assessment_digest'], at, at, item['qualification_basis'],
+                  stable_json(item['current_supporting_claim_ids']))
+        result = db.execute('''INSERT INTO fact_candidates (candidate_id,venue_id,venue_key,field,qualifiers_json,
+            normalized_value_json,normalizer_version,status,rights,review_state,assessment_digest,
+            created_at,changed_at,qualification_basis,current_supporting_claim_ids_json)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(candidate_id) DO UPDATE SET
                 review_state=excluded.review_state,
                 assessment_digest=excluded.assessment_digest,
-                changed_at=excluded.changed_at
+                changed_at=excluded.changed_at,
+                qualification_basis=excluded.qualification_basis,
+                current_supporting_claim_ids_json=excluded.current_supporting_claim_ids_json
             WHERE fact_candidates.review_state != excluded.review_state
                OR fact_candidates.assessment_digest != excluded.assessment_digest''', params)
         changed += result.rowcount

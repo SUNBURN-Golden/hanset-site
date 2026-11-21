@@ -16,9 +16,9 @@ from hanset_active.venues import is_article_title
 from hanset_twin.daemon import AlreadyRunning, ProcessLock
 
 from . import CollectError
-from .config import (IG_READ_MAX, MAX_TARGETS, MODEL_CALL_CAP, MODEL_INPUT_CAP, MODEL_OUTPUT_CAP,
+from .config import (IG_READ_MAX, MAX_TARGETS, PLAN_MODELS, QWEN_MODEL,
                      configured_model, handle_valid, outside)
-from .deepseek import DeepSeek, INPUT_LIMIT, OUTPUT_TOKENS, credentials_present
+from .deepseek import DeepSeek
 from .ground import redact
 from .ingest import load_watchlist
 from .state import State, atomic_json
@@ -44,7 +44,7 @@ RANK_REASONS = frozenset({
     'fallback_missing_credentials', 'fallback_budget_reserved', 'fallback_model_invalid',
     'fallback_model_timeout', 'fallback_model_transport', 'fallback_model_rate_limited',
     'fallback_model_unavailable', 'fallback_model_auth', 'fallback_model_budget_exhausted',
-    'fallback_model_insufficient_balance',
+    'fallback_model_insufficient_balance', 'fallback_model_input_limit',
 })
 
 
@@ -234,7 +234,8 @@ def assemble_targets(settings, *, now, testing=False, include_watchlist=True):
         db_status = 'missing' if not (settings.active_dir / 'active.sqlite3').is_file() else 'unreadable'
         notes = Counter({k: v for k, v in notes.items() if k.startswith('watchlist_')})
         notes['active_db_' + db_status] += 1
-        targets = authorization = manual
+        authorization = manual
+        targets = manual[:MAX_TARGETS]
         materialized = _snapshot_rows(None, targets, watchlist, now=now)
     finally:
         if db is not None:
@@ -250,7 +251,7 @@ class Ranker(Protocol):
     model: str | None
 
     def rank(self, candidates):
-        """Return (complete permutation of request indices, fixed reason)."""
+        """Return the index permutation, fixed reason, and optional producing model."""
 
 
 class LocalRanker:
@@ -287,49 +288,47 @@ def model_payload(candidates):
 class DeepSeekRanker:
     mode = 'model'
 
-    def __init__(self, state, *, model, session=None):
-        self.state, self.model, self.session = state, configured_model(model), session
+    model = QWEN_MODEL
+
+    def __init__(self, state, *, model, session=None, router=None):
+        self.state, self.fallback_model, self.session = state, configured_model(model), session
+        self.router = router
 
     def rank(self, candidates):
         local = list(range(len(candidates)))
         if not candidates:
-            return local, 'fallback_no_candidates'
-        if not credentials_present():
-            return local, 'fallback_missing_credentials'
-        payload = model_payload(candidates)
-        chars = len(json.dumps(payload, ensure_ascii=False, separators=(',', ':')))
-        budgets = self.state.data['budgets']
-        # Headroom: two ranking attempts (primary + one Qwen backup) plus one
-        # full extraction request. reserve_model still enforces caps per attempt.
-        if (chars > INPUT_LIMIT or not self.state.can_model(chars, OUTPUT_TOKENS)
-                or budgets['model_calls'] + 3 > MODEL_CALL_CAP
-                or budgets['input_chars'] + 2 * chars + INPUT_LIMIT > MODEL_INPUT_CAP
-                or budgets['output_tokens'] + 3 * OUTPUT_TOKENS > MODEL_OUTPUT_CAP):
-            return local, 'fallback_budget_reserved'
-        brain = DeepSeek(self.state, model=self.model, session=self.session)
+            return local, 'fallback_no_candidates', None
+        brain = self.router or DeepSeek(self.state, model=self.fallback_model, qwen_session=self.session)
+        original_session = brain.qwen_session
+        if self.session is not None:
+            brain.qwen_session = self.session
         try:
-            answer = brain.ask(payload, instruction=INSTRUCTION)
+            answer = brain.ask(model_payload(candidates), instruction=INSTRUCTION)
             if not valid_order(answer, len(candidates)):
-                return local, 'fallback_model_invalid'
-            return answer['order'], 'model_ranked'
+                brain.reject_last()
+                return local, 'fallback_model_invalid', None
+            return answer['order'], 'model_ranked', brain.last_model
         except CollectError as error:
             reason = 'fallback_' + error.reason
-            return local, reason if reason in RANK_REASONS else 'fallback_model_invalid'
+            return local, reason if reason in RANK_REASONS else 'fallback_model_invalid', None
         finally:
-            brain.close()
+            if self.session is not None:
+                brain.qwen_session = original_session
+            if self.router is None:
+                brain.close()
 
 
-def choose_ranker(settings, state, *, planner=None, planner_session=None, testing=False, ranking='model'):
+def choose_ranker(settings, state, *, planner=None, planner_session=None, testing=False,
+                  ranking='model', router=None):
     if planner is not None:
         if type(planner) is DeepSeekRanker:
-            # An injected ranker must charge this run's authoritative State,
-            # rather than an independently loaded checkpoint object.
-            return DeepSeekRanker(state, model=planner.model,
-                                  session=planner_session if planner_session is not None else planner.session)
+            return DeepSeekRanker(state, model=planner.fallback_model,
+                                  session=planner_session if planner_session is not None else planner.session,
+                                  router=router)
         return planner
     if testing or ranking == 'local':
         return LocalRanker('testing_local' if testing else 'local')
-    return DeepSeekRanker(state, model=settings.model, session=planner_session)
+    return DeepSeekRanker(state, model=settings.model, session=planner_session, router=router)
 
 
 def _safe_path(path):
@@ -416,10 +415,9 @@ def validate_plan(plan, day):
         if stamp.utcoffset() != timedelta(hours=9):
             return False
         rank = plan['ranking']
-        from .config import ALLOWED_MODELS
         if (not _keys(rank, 'mode model reason decision_digest candidate_count')
                 or rank['mode'] not in ('model', 'local') or rank['reason'] not in RANK_REASONS
-                or (rank['model'] is not None and rank['model'] not in ALLOWED_MODELS)
+                or (rank['model'] is not None and rank['model'] not in PLAN_MODELS)
                 or not _hash(rank['decision_digest']) or type(rank['candidate_count']) is not int
                 or not 0 <= rank['candidate_count'] <= 100):
             return False
@@ -526,24 +524,24 @@ def _apply_rank(rows, candidates, order):
         positions.get(identity(row), len(candidates)), -row['importance'], *identity(row)))
 
 
-def _decision(path, candidates, ranker):
+def _decision(path, candidates):
     try:
         saved = _read(path)
         if (not _keys(saved, 'policy_version model order decision_digest')
-                or saved['policy_version'] != POLICY or saved['model'] != ranker.model
+                or saved['policy_version'] != POLICY or saved['model'] not in PLAN_MODELS
                 or saved['decision_digest'] != digest({k: v for k, v in saved.items() if k != 'decision_digest'})
                 or not isinstance(saved['order'], list)
                 or any(not _keys(item, 'venue_id venue_key') for item in saved['order'])):
             return None
         lookup = {identity(row): index for index, row in enumerate(candidates)}
         order = [lookup[identity(row)] for row in saved['order']]
-        return order if valid_order({'order': order}, len(candidates)) else None
+        return (order, saved['model']) if valid_order({'order': order}, len(candidates)) else None
     except (OSError, ValueError, TypeError, KeyError):
         return None
 
 
 def ensure_daily_plan(settings, state, targets, targets_status, *, clock, day=None,
-                      planner=None, planner_session=None, testing=False, ranking='model', assembled=None):
+                      planner=None, planner_session=None, testing=False, ranking='model', assembled=None, router=None):
     now = kst_now(clock)
     day = day or now.date().isoformat()
     if date.fromisoformat(day).isoformat() != day:
@@ -571,7 +569,7 @@ def ensure_daily_plan(settings, state, targets, targets_status, *, clock, day=No
                                              else snapshot(settings, targets, watchlist, now=now))
     notes.update(snapshot_notes)
     ranker = choose_ranker(settings, state, planner=planner, planner_session=planner_session,
-                           testing=testing, ranking=ranking)
+                           testing=testing, ranking=ranking, router=router)
     base = digest({'policy_version': POLICY, 'day': day, 'snapshot': snapshot_digest,
                    'watchlist': watchlist, 'targets': target_digest, 'targets_status': targets_status,
                    'fields': KEY_FIELDS})
@@ -588,22 +586,23 @@ def ensure_daily_plan(settings, state, targets, targets_status, *, clock, day=No
     _write(marker, marker_body)
     candidates = [row for row in rows if row['gap_count'] and row['state'] != 'closed'][:100]
     cache = directory / 'decisions' / (input_digest + '.json')
-    order = _decision(cache, candidates, ranker) if ranker.mode == 'model' else None
-    reason = 'decision_cached'
-    if order is None:
-        order, reason = ranker.rank(candidates)
-        if not valid_order({'order': order}, len(candidates)) or reason not in RANK_REASONS:
-            order, reason = list(range(len(candidates))), 'fallback_model_invalid'
-        if reason == 'model_ranked':
-            decision = {'policy_version': POLICY, 'model': ranker.model,
-                        'order': [dict(zip(('venue_id', 'venue_key'), identity(candidates[i]))) for i in order]}
-            decision['decision_digest'] = digest(decision)
-            _write(cache, decision)
-    rows = _apply_rank(rows, candidates, order)
-    decision = {'policy_version': POLICY, 'model': ranker.model,
+    saved = _decision(cache, candidates) if ranker.mode == 'model' else None
+    if saved is not None:
+        order, producer = saved
+        reason = 'decision_cached'
+    else:
+        order, reason, *models = ranker.rank(candidates)
+        producer = models[0] if models else ranker.model
+        if (not valid_order({'order': order}, len(candidates)) or reason not in RANK_REASONS
+                or (reason == 'model_ranked' and producer not in PLAN_MODELS)):
+            order, reason, producer = list(range(len(candidates))), 'fallback_model_invalid', None
+    decision = {'policy_version': POLICY, 'model': producer,
                 'order': [dict(zip(('venue_id', 'venue_key'), identity(candidates[i]))) for i in order]}
+    if reason == 'model_ranked':
+        _write(cache, {**decision, 'decision_digest': digest(decision)})
+    rows = _apply_rank(rows, candidates, order)
     actual_mode = 'model' if reason in ('model_ranked', 'decision_cached') else 'local'
-    ranking_info = {'mode': actual_mode, 'model': ranker.model, 'reason': reason,
+    ranking_info = {'mode': actual_mode, 'model': producer, 'reason': reason,
                     'decision_digest': digest(decision),
                     'candidate_count': len(candidates)}
     rank_positions = {identity(row): i for i, row in enumerate(rows)}
@@ -681,7 +680,7 @@ def run_plan(settings, *, ranking='model', clock=None, planner=None, planner_ses
         settings.data_dir.mkdir(parents=True, exist_ok=True)
         settings.data_dir.chmod(0o700)
         with ProcessLock(settings.data_dir / 'daemon.lock'):
-            state = State(settings.data_dir, clock)
+            state = State(settings.data_dir, clock, active_dir=settings.active_dir)
             assembled = assemble_targets(settings, now=now, testing=testing)
             targets, status = assembled['targets'], assembled['targets_status']
             plan = ensure_daily_plan(settings, state, targets, status, clock=clock, day=day,
@@ -695,10 +694,10 @@ def run_plan(settings, *, ranking='model', clock=None, planner=None, planner_ses
                     'ranked_count': len(plan['ranked_venues']), 'web_target_count': len(plan['web_targets']),
                     'ig_list_count': len(plan['ig_read_list']), 'ranking_mode': plan['ranking']['mode'],
                     'ranking_reason': plan['ranking']['reason'], 'auto_publish_to_site': False,
-                    # Transient per-run diagnostics; plan artifacts keep the DeepSeek id.
+                    # The plan records the producing model alongside the decision.
                     'provider': dict(state.model_providers)}
-            if state.primary_skipped == 'insufficient_balance':
-                result['primary_skipped'] = 'insufficient_balance'
+            if state.deepseek_skipped == 'insufficient_balance':
+                result['deepseek_skipped'] = 'insufficient_balance'
             return result
     except AlreadyRunning:
         return {'state': 'already_running', 'reason': 'already_running', 'auto_publish_to_site': False}
