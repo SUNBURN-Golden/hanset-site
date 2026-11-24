@@ -23,6 +23,11 @@ def timestamp(value):
         return None
 
 
+def _observed_at(claim):
+    dates = (timestamp(claim.get(key)) for key in ('seen_at', 'confirmed_at'))
+    return max((date for date in dates if date is not None), default=None)
+
+
 def _identity(claim):
     return all(isinstance(claim.get(key), str) and claim[key].strip() and
                claim[key].casefold() not in ('unknown', 'unresolved', '확인 중')
@@ -31,6 +36,8 @@ def _identity(claim):
 
 def _eligibility(claim, policy):
     reasons = []
+    if claim.get('superseded'):
+        reasons.append('superseded_evidence')
     if claim.get('status') != 'source_claim' or claim.get('rights') != 'internal_review_only':
         reasons.append('claim_not_internal_source')
     if not _identity(claim):
@@ -77,8 +84,8 @@ def _assessment_evidence(value):
 def assess(claims, existing, policy, *, now):
     """Reassess stored candidates even when approvals are absent or revoked.
 
-    All normalizable claims participate in disagreements, including legacy and
-    same-page observations. Invalid values are diagnostic evidence, never votes.
+    Current normalizable claims participate in disagreements, including legacy
+    and same-page observations. Historical claims remain diagnostic evidence.
     """
     evaluated, groups = [], defaultdict(list)
     reasons = Counter()
@@ -90,13 +97,13 @@ def assess(claims, existing, policy, *, now):
         item['eligibility_reasons'] = errors
         item['approval'] = approval
         item['verification_label'] = '미확인'
-        seen = timestamp(item.get('seen_at'))
+        seen = _observed_at(item)
         item['date_basis'] = 'seen_at'
         item['checked'] = seen.astimezone(KST).date().isoformat() if seen else None
         item['freshness'] = ('오래됨' if now - seen > timedelta(days=90) else 'fresh') if seen else 'unranked'
         reasons.update(errors)
         evaluated.append(item)
-        if not item['normalization']['reason']:
+        if not item['normalization']['reason'] and not item.get('superseded'):
             groups[_group_key(item)].append(item)
 
     conflicts, conflicting_keys = [], set()
@@ -109,11 +116,11 @@ def assess(claims, existing, policy, *, now):
         conflict_id = deterministic_id('collector-conflict', VERSION, group_key)
         if is_conflict:
             conflicting_keys.add(group_key)
-            dates = [parsed for item in items if (parsed := timestamp(item.get('seen_at'))) is not None]
+            dates = [parsed for item in items if (parsed := _observed_at(item)) is not None]
             newest = max(dates) if dates else None
             observations = []
             for item in items:
-                seen = timestamp(item.get('seen_at'))
+                seen = _observed_at(item)
                 observations.append({key: value for key, value in item.items() if key != 'approval'} |
                                     {'is_newest': seen is not None and seen == newest})
             conflicts.append({'conflict_id': conflict_id, 'venue_id': group_key[0],

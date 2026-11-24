@@ -94,6 +94,10 @@ def normalize(text):
     return re.sub(r'\s+', ' ', text).strip()
 
 
+def quote_pattern(quote):
+    return r'\s+'.join(re.escape(part) for part in normalize(quote).split(' '))
+
+
 def bounded_text(text):
     clean = redact(text or '')
     if not isinstance(clean, str):
@@ -147,7 +151,7 @@ def ground(text, claims, *, base_offset=0, web=False):
         if not valid_claim_value(field, value):
             dropped.append('ungrounded_value')
             continue
-        pattern = r'\s+'.join(re.escape(part) for part in normalize(quote).split(' '))
+        pattern = quote_pattern(quote)
         rules = [row for row in field_rules.extract(quote)
                  if row['field'] == field and not row['ambiguous'] and _same(field, value, row['value'])]
         if not rules:

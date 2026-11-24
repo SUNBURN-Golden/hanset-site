@@ -69,6 +69,7 @@ def closure_state(value):
 
 def eligible(claim):
     return (bool(HEX.fullmatch(claim.get('claim_id') or ''))
+            and not claim.get('superseded') and claim.get('model_confirmed') is not False
             and claim.get('source_kind') == 'web' and claim.get('source_type') == 'own_site'
             and claim.get('status') == 'source_claim' and claim.get('rights') == 'internal_review_only'
             and claim.get('evidence_origin') == 'web_verbatim'

@@ -220,6 +220,9 @@ def test_legacy_readonly_migration_and_nulls_untouched(setup):
     report = run_promote(settings, policy_path=path, dry_run=True, clock=clock)
     assert report['state'] == 'ok' and report['claims'][0]['evidence_origin'] is None
     assert report['claims'][0]['eligibility_reasons'] == ['legacy_provenance_unrecorded']
+    assert report['claims'][0]['model_confirmed'] is True
+    assert report['claims'][0]['extraction_method'] is None
+    assert report['claims'][0]['reconciliation'] is None
     db = sqlite3.connect(settings.data_dir / 'collector.sqlite3')
     assert db.execute('SELECT sql FROM sqlite_master ORDER BY name').fetchall() == schema
     db.close()
@@ -231,7 +234,7 @@ def test_legacy_readonly_migration_and_nulls_untouched(setup):
     assert promoted['fact_candidates'] == [] and promoted['conflicts'][0]['state'] == '확인 필요'
     db = connect(settings.data_dir)
     row = tuple(db.execute("SELECT * FROM claims WHERE claim_id='legacy'").fetchone())
-    assert row[:len(before)] == before and row[len(before):] == (None, None, None, None)
+    assert row[:len(before)] == before and row[len(before):] == (None,) * 6
     assert db.execute('SELECT COUNT(*) FROM fact_candidates').fetchone()[0] == 0
     db.close()
 

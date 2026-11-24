@@ -492,18 +492,22 @@ def test_malformed_batch_splits_once_and_restart_retries_only_failed_half(tmp_pa
     assert set(fetched) == retry and len(model.items[-1]) == 3
 
 
-def test_both_down_queues_pages_and_balance_failure_stops_deepseek(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize('matching', [False, True])
+def test_both_down_and_balance_failure_stops_deepseek(tmp_path, monkeypatch, capsys, matching):
     import sqlite3
     from tests.active_bot.test_collect_deepseek import healthy
 
     _qwen_key_file(tmp_path, monkeypatch)
     monkeypatch.setenv('DEEPSEEK_API_KEY', KEY)
     clock = FakeClock()
-    settings, path, _, _, _ = _fake_workset(tmp_path, monkeypatch, 8)
-    failing = Session(Response(503, b'PRIVATE_QWEN_BODY'))
+    source = None if matching else lambda _: 'Official venue information. ' * 6
+    settings, path, _, _, _ = _fake_workset(tmp_path, monkeypatch, 8, source=source)
+    failing = Session(Response(429, b'PRIVATE_QWEN_BODY'))
     fallback = Session(Response(402, b'PRIVATE_DEEPSEEK_BODY'), probe=healthy())
     result = run_web(settings, targets_path=path, clock=clock, qwen_session=failing, session=fallback, testing=True)
-    assert result['state'] == 'partial' and result['counts']['pending'] == 8
+    assert result['state'] == 'partial' and result['counts']['pending'] == (0 if matching else 8)
+    assert result['counts']['rules_fallback'] == (8 if matching else 0)
+    assert result['counts']['claims'] == (8 if matching else 0)
     assert result['deepseek_skipped'] == 'insufficient_balance'
     assert len(fallback.probes) == len(fallback.calls) == 1
     assert len(failing.calls) == 2 and result['provider'] == {'qwen': 2, 'deepseek': 1}
@@ -512,6 +516,13 @@ def test_both_down_queues_pages_and_balance_failure_stops_deepseek(tmp_path, mon
     repaired = WebModel(lambda items, _: _hours_answer(items))
     recovered = run_web(settings, targets_path=path, clock=clock, qwen_session=repaired, session=fallback, testing=True)
     assert recovered['success'] and recovered['counts']['committed'] == 8
+    assert recovered['counts']['rules_fallback'] == 0 and recovered['counts']['claims'] == result['counts']['claims']
+    assert not recovered['collected'] and len(repaired.calls) == 2
+    with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
+        assert db.execute('SELECT count(*) FROM claims').fetchone()[0] == result['counts']['claims']
+        assert db.execute(
+            "SELECT count(*) FROM claim_reconciliations WHERE disposition='model_confirmed'").fetchone()[0] == (
+                8 if matching else 0)
     assert len(fallback.probes) == len(fallback.calls) == 1
     output = capsys.readouterr()
     blob = _stored_text(settings.data_dir) + _stored_text(settings.active_dir) + (output.out + output.err).encode()

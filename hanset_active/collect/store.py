@@ -79,6 +79,20 @@ CREATE TABLE IF NOT EXISTS fact_candidate_claims (
 CREATE INDEX IF NOT EXISTS fact_candidates_review ON fact_candidates(review_state);
 CREATE INDEX IF NOT EXISTS fact_candidate_claims_claim ON fact_candidate_claims(claim_id);
 '''
+RECONCILIATION_SCHEMA = '''
+CREATE TABLE IF NOT EXISTS claim_reconciliations (
+    claim_id TEXT PRIMARY KEY REFERENCES claims(claim_id),
+    disposition TEXT NOT NULL CHECK (disposition IN ('model_confirmed','superseded')),
+    at TEXT NOT NULL,
+    source_receipt_id TEXT NOT NULL REFERENCES receipts(receipt_id),
+    extractor TEXT NOT NULL CHECK (extractor = 'model'),
+    rules_version TEXT
+);
+CREATE TRIGGER IF NOT EXISTS claim_reconciliations_immutable_update BEFORE UPDATE ON claim_reconciliations
+BEGIN SELECT RAISE(ABORT, 'immutable_reconciliation'); END;
+CREATE TRIGGER IF NOT EXISTS claim_reconciliations_immutable_delete BEFORE DELETE ON claim_reconciliations
+BEGIN SELECT RAISE(ABORT, 'immutable_reconciliation'); END;
+'''
 _PROVENANCE = {
     'web': ('web_verbatim', 'page_span', 1),
     'instagram': ('operator_summary', 'summary_span', 0),
@@ -195,7 +209,7 @@ def _migrate(db):
     """Add metadata without relabeling existing claim evidence."""
     _add_columns(db, 'claims', {
         'evidence_origin': 'TEXT', 'evidence_role': 'TEXT', 'verbatim_source': 'INTEGER',
-        'locator_json': 'TEXT',
+        'locator_json': 'TEXT', 'extraction_method': 'TEXT', 'rules_version': 'TEXT',
     })
     new_receipt_keys = _add_columns(db, 'receipts', {
         'final_url': 'TEXT', 'authorization_json': 'TEXT', 'hash_version': 'TEXT',
@@ -230,7 +244,7 @@ def _migrate(db):
             SELECT RAISE(ABORT, 'provenance_required');
         END
     ''')
-    db.commit()
+    db.executescript(RECONCILIATION_SCHEMA)
 
 
 def _add_columns(db, table, columns):
@@ -372,7 +386,7 @@ def recent_unchanged_web_targets(db, *, clock=None, testing=False):
 
 
 def web_receipt(db, requested_url, text_hash, legacy_hash=None):
-    """Find a committed receipt even if the runtime cache index missed its write."""
+    """Find model coverage even if the runtime cache index missed its write."""
     rows = db.execute("""
         SELECT * FROM receipts WHERE source_kind='web' AND requested_url=? AND
          ((content_hash=? AND hash_version=?) OR
@@ -382,6 +396,13 @@ def web_receipt(db, requested_url, text_hash, legacy_hash=None):
         LIMIT 1
         """, (requested_url, text_hash, FULL_HASH_VERSION, legacy_hash, text_hash))
     return rows.fetchone()
+
+
+def stored_receipt(db, kind, url, text_hash):
+    """Find a receipt by storage identity, including rules-only evidence."""
+    return db.execute(
+        'SELECT * FROM receipts WHERE source_kind=? AND source_url=? AND content_hash=?',
+        (kind, url, text_hash)).fetchone()
 
 
 def validated_authorization(url, final, authorization, domains, *, testing=False):
@@ -406,9 +427,10 @@ def validated_authorization(url, final, authorization, domains, *, testing=False
 def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key, seen_at,
            clock=None, source_type=None, requested_url=None, final_url=None,
            authorization=None, domains=(), hash_version=None, testing=False, facts_only=False):
-    """Insert one receipt and its grounded claims, or return the existing receipt."""
+    """Store grounded evidence and return the disposition and newly inserted claim IDs."""
     credentials = secrets()
-    if kind not in ('web', 'instagram') or not _valid_hash(text_hash):
+    if (kind not in ('web', 'instagram') or not _valid_hash(text_hash)
+            or disposition not in ('applied', 'rules_only')):
         raise CollectError('runtime_error')
     if not venue_identity_safe(venue_id, venue_key, credentials):
         raise CollectError('runtime_error')
@@ -434,15 +456,21 @@ def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key
         source_type = 'own_site' if kind == 'web' else 'sns'
     if source_type not in ({'own_site', 'third_party'} if kind == 'web' else {'sns'}):
         raise CollectError('runtime_error')
+    auth_json = json.dumps(authorization) if authorization else None
+    binding = (venue_id, venue_key, final_url, auth_json, hash_version)
+    rules_only = disposition == 'rules_only'
     db.execute('BEGIN IMMEDIATE')
     try:
-        existing = db.execute(
-            'SELECT disposition FROM receipts WHERE source_kind=? AND source_url=? AND content_hash=?',
-            (kind, url, text_hash)).fetchone()
+        existing = stored_receipt(db, kind, url, text_hash)
         if existing:
-            db.commit()
-            return 'duplicate', []
-        receipt_id = deterministic_id('collector-receipt', kind, url, text_hash)
+            if existing['disposition'] != 'rules_only' or rules_only:
+                db.commit()
+                return 'duplicate', []
+            if tuple(existing[key] for key in ('venue_id', 'venue_key', 'final_url',
+                                               'authorization_json', 'hash_version')) != binding:
+                db.commit()
+                return 'binding_changed', []
+        receipt_id = existing['receipt_id'] if existing else deterministic_id('collector-receipt', kind, url, text_hash)
         kept = {}
         for claim in claims:
             field, value, quote = claim['field'], claim['value'], claim['quote']
@@ -452,15 +480,29 @@ def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key
                 continue
             claim_id = deterministic_id('collector-claim', receipt_id, field, value)
             kept.setdefault(claim_id, claim)
+        if rules_only and not kept:
+            db.commit()
+            return 'no_rule_claims', []
         origin, role, verbatim = _PROVENANCE[kind]
-        stored_as = 'applied' if kept else 'empty_extraction'
-        db.execute(
-            """INSERT INTO receipts (receipt_id,source_kind,source_url,content_hash,disposition,created_at,
-               requested_url,final_url,authorization_json,hash_version,venue_id,venue_key,binding_current)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (receipt_id, kind, url, text_hash, stored_as, kst_now(clock).isoformat(), requested_url,
-             final_url, json.dumps(authorization) if authorization else None, hash_version,
-             venue_id, venue_key, 1 if hash_version else None))
+        stored_as = disposition if kept else 'empty_extraction'
+        if existing:
+            prior = list(db.execute('SELECT claim_id,rules_version FROM claims WHERE receipt_id=?', (receipt_id,)))
+            db.executemany(
+                """INSERT OR IGNORE INTO claim_reconciliations
+                   (claim_id,disposition,at,source_receipt_id,extractor,rules_version)
+                   VALUES (?,?,?,?,'model',?)""",
+                [(claim_id, 'model_confirmed' if claim_id in kept else 'superseded', seen_at, receipt_id, version)
+                 for claim_id, version in prior])
+            for claim_id, _ in prior:
+                kept.pop(claim_id, None)
+            db.execute('UPDATE receipts SET disposition=? WHERE receipt_id=?', (stored_as, receipt_id))
+        else:
+            db.execute(
+                """INSERT INTO receipts (receipt_id,source_kind,source_url,content_hash,disposition,created_at,
+                   requested_url,final_url,authorization_json,hash_version,venue_id,venue_key,binding_current)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (receipt_id, kind, url, text_hash, stored_as, kst_now(clock).isoformat(), requested_url,
+                 final_url, auth_json, hash_version, venue_id, venue_key, 1 if hash_version else None))
         for claim_id, claim in kept.items():
             locator = claim.get('locator', {}).get('char_offsets')
             locator_json = (json.dumps({'char_offsets': locator}) if isinstance(locator, list)
@@ -475,12 +517,14 @@ def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key
                 """INSERT INTO claims (
                     claim_id, receipt_id, venue_id, venue_key, field, value_json, quote,
                     source_url, source_kind, source_type, status, rights, rule_id, seen_at,
-                    content_hash, evidence_origin, evidence_role, verbatim_source, locator_json
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    content_hash, evidence_origin, evidence_role, verbatim_source, locator_json,
+                    extraction_method, rules_version
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (claim_id, receipt_id, venue_id, venue_key, claim['field'],
                  json.dumps(claim['value'], ensure_ascii=False, sort_keys=True), '' if facts_only else claim['quote'],
                  url, kind, source_type, 'source_claim', 'internal_review_only', claim['rule_id'],
-                 seen_at, text_hash, origin, role, verbatim, locator_json))
+                 seen_at, text_hash, origin, role, verbatim, locator_json,
+                 'rules' if rules_only else 'model', claim['rules_version'] if rules_only else None))
         db.commit()
         return stored_as, list(kept)
     except Exception:
@@ -488,17 +532,27 @@ def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key
         raise
 
 
-def read_claims(db, *, receipt_id=None):
+def read_claims(db, *, receipt_id=None, include_superseded=False):
     """Read stored claims across schemas without relabeling NULL provenance."""
     if not db or not db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='claims'").fetchone():
         return []
     present = {row[1] for row in db.execute('PRAGMA table_info(receipts)')}
-    metadata = ''.join(f',r.{name}' for name in ('final_url', 'authorization_json', 'binding_current') if name in present)
-    query = 'SELECT c.*' + metadata + ' FROM claims c JOIN receipts r ON r.receipt_id=c.receipt_id'
+    metadata = ',r.disposition AS receipt_disposition'
+    metadata += ''.join(f',r.{name}' for name in ('final_url', 'authorization_json', 'binding_current') if name in present)
+    joins = ' FROM claims c JOIN receipts r ON r.receipt_id=c.receipt_id'
+    filters = []
+    if db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='claim_reconciliations'").fetchone():
+        metadata += ',x.disposition AS reconciliation,x.at AS reconciled_at'
+        joins += ' LEFT JOIN claim_reconciliations x ON x.claim_id=c.claim_id'
+        if not include_superseded:
+            filters.append("coalesce(x.disposition,'') != 'superseded'")
+    query = 'SELECT c.*' + metadata + joins
     args = ()
     if receipt_id is not None:
-        query += ' WHERE c.receipt_id=?'
+        filters.append('c.receipt_id=?')
         args = (receipt_id,)
+    if filters:
+        query += ' WHERE ' + ' AND '.join(filters)
     rows = db.execute(query + ' ORDER BY c.venue_key, c.field, c.seen_at, c.claim_id', args)
     claims = []
     for row in rows:
@@ -506,6 +560,9 @@ def read_claims(db, *, receipt_id=None):
         for name in ('evidence_origin', 'evidence_role', 'verbatim_source'):
             row.setdefault(name, None)
         verbatim = None if row['verbatim_source'] is None else int(row['verbatim_source'])
+        method, reconciliation = row.get('extraction_method'), row.get('reconciliation')
+        superseded = reconciliation == 'superseded'
+        confirmed = reconciliation == 'model_confirmed'
         claims.append({
             'claim_id': row['claim_id'],
             'venue_id': row['venue_id'],
@@ -528,6 +585,14 @@ def read_claims(db, *, receipt_id=None):
             'source_authorization': json.loads(row['authorization_json']) if row.get('authorization_json') else None,
             'binding_current': row.get('binding_current'),
             'locator': json.loads(row['locator_json']) if row.get('locator_json') else None,
+            'receipt_disposition': row['receipt_disposition'],
+            'extraction_method': method,
+            'rules_version': row.get('rules_version'),
+            'reconciliation': reconciliation,
+            'confirmed_at': row.get('reconciled_at') if confirmed else None,
+            'superseded_at': row.get('reconciled_at') if superseded else None,
+            'superseded': superseded,
+            'model_confirmed': method in (None, 'model') or confirmed,
         })
     return claims
 

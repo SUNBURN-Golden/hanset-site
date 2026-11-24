@@ -11,6 +11,7 @@ from hanset_active.collect import CollectError
 from hanset_active.collect.config import CollectSettings
 from hanset_active.collect.deepseek import (
     BALANCE_ENDPOINT, ENDPOINT, INPUT_LIMIT, OUTPUT_TOKENS_PER_ITEM, QWEN_ENDPOINT, QWEN_MODEL, DeepSeek,
+    _response,
 )
 from hanset_active.collect.ground import bounded_text, ground
 from hanset_active.collect.state import State
@@ -106,6 +107,40 @@ def _envelope(payload, usage=20, extra=''):
     body = {'choices': [{'message': {'content': json.dumps(payload), 'reasoning_content': 'REASONING_TRACE_DO_NOT_STORE'}}], 'usage': {'completion_tokens': usage}}
     raw = json.dumps(body).encode() + extra.encode()
     return Response(200, raw)
+
+
+@pytest.mark.parametrize('status,code,reason', [
+    (302, None, 'model_transport'),
+    (400, None, 'model_invalid'),
+    (401, None, 'model_auth'),
+    (402, None, 'model_insufficient_balance'),
+    (403, None, 'model_auth'),
+    (404, None, 'model_unavailable'),
+    (408, None, 'model_timeout'),
+    (422, None, 'model_transport'),
+    (429, None, 'model_rate_limited'),
+    (500, None, 'model_transport'),
+    (503, None, 'model_transport'),
+    (400, 'insufficient_balance', 'model_insufficient_balance'),
+    (400, 'insufficient_quota', 'model_insufficient_balance'),
+    (429, 'quota_exceeded', 'model_insufficient_balance'),
+    (429, 'usage_exhausted', 'model_insufficient_balance'),
+    (402, 'billing_hard_limit_reached', 'model_insufficient_balance'),
+    (400, 'invalid_api_key', 'model_auth'),
+    (400, 'model_not_found', 'model_unavailable'),
+    (400, 'rate_limit_exceeded', 'model_rate_limited'),
+    (503, 'service_unavailable', 'model_unavailable'),
+    (503, 'provider_unavailable', 'model_unavailable'),
+    (302, 'provider_unavailable', 'model_unavailable'),
+    (402, 'invalid_api_key', 'model_auth'),
+    (200, 'provider_unavailable', 'model_unavailable'),
+])
+def test_response_classifies_provider_error(status, code, reason):
+    body = {'error': {'code': code}} if code else {}
+    response = Response(status, json.dumps(body).encode())
+    with pytest.raises(CollectError, match=f'^{reason}$'):
+        _response(lambda *_args, **_kwargs: response, ENDPOINT, KEY, timeout=1)
+    assert response.closed
 
 
 def test_paths_and_model_allowlist(tmp_path):
