@@ -3,7 +3,7 @@ from urllib.parse import unquote
 import pytest
 from hanset_active import __version__
 from hanset_active.config import Settings, REPO_ROOT, load_profile
-from hanset_active.util.urls import canonicalize, registrable_domain, is_denied, is_excluded, literal_private
+from hanset_active.util.urls import canonicalize, registrable_domain, is_denied, is_excluded, literal_private, same_fetch_target
 from hanset_active.util.timeutil import FakeClock, kst_now, kst_day
 
 def test_url_identity():
@@ -25,6 +25,22 @@ def test_opt_in_fetch_path_preserves_encoding_and_slashes(path):
 def test_path_preservation_never_repairs_private_urls(suffix):
     with pytest.raises(ValueError):
         canonicalize('https://venue-a.test' + suffix, preserve_path=True)
+
+@pytest.mark.parametrize(('a', 'b', 'expected'), [
+    ('https://venue.example/a/보', 'https://venue.example/a/%EB%B3%B4', True),
+    ('https://venue.example/a/%EB%B3%B4', 'https://venue.example/a/%eb%b3%b4', True),
+    ('https://venue.example/a/보', 'https://venue.example/a/%eb%b3%b4/', False),
+    ('https://venue.example/a%2Fb', 'https://venue.example/a/b', False),
+    ('https://venue.example', 'https://venue.example/', True),
+    ('https://venue.example/?x=1', 'https://venue.example/?x=2', False),
+    ('https://venue.example/?x=&x=1', 'https://venue.example/?x=1&x=', False),
+    ('http://venue.example/a', 'https://venue.example/a', False),
+    ('https://VENUE.example:443/a', 'https://venue.example/a', True),
+    ('https://venue.example:443/a', 'https://venue.example:444/a', False),
+    ('https://venue.example/a', 'https://other.example/a', False),
+])
+def test_same_fetch_target(a, b, expected):
+    assert same_fetch_target(a, b) is expected
 
 def test_denial_and_exclusion():
     for host in ('naver.com','booking.naver.com','naver.me','a.naver.co.kr','pstatic.net','instagram.com','www.instagram.com'):

@@ -292,6 +292,53 @@ def test_daily_body_cap_and_freshness(bot,server,tmp_path):
     assert bot.db.execute("SELECT count(*) FROM tasks WHERE task_class='freshness'").fetchone()[0]>0
 
 
+def test_redirect_identity_is_reused(bot, server):
+    identity, effective = server.base + '/kr', server.base + '/kr/'
+    content = page(name='Example Sauna')
+    server.add('/kr', '', 301, {'Location': '/kr/'})
+    server.add('/kr/', content)
+    executor = Executor(bot, providers=[])
+
+    first = executor.get(identity)
+    assert first.ok and first.url == effective and first.identity_url == identity
+    assert effective in executor.documents
+    observations = bot.db.execute('SELECT DISTINCT source_url FROM observations').fetchall()
+    assert [row[0] for row in observations] == [effective]
+
+    server.add('/kr', content)
+    second = executor.get(effective)
+    assert second.ok and second.url == identity and second.identity_url == identity
+
+    raw = bot.db.execute('SELECT url, canonical_url FROM raw_documents').fetchall()
+    assert [tuple(row) for row in raw] == [(effective, identity)]
+    baselines = bot.db.execute('SELECT page_type FROM structure_baselines').fetchall()
+    assert [row[0] for row in baselines] == ['/kr']
+    assert not bot.db.execute('SELECT 1 FROM structure_alerts').fetchone()
+    assert bot.db.execute('SELECT url FROM sources').fetchone()[0] == identity
+    trials = bot.db.execute('SELECT url FROM source_trials').fetchall()
+    assert [row[0] for row in trials] == [identity]
+    assert [r['path'] for r in server.log] == ['/robots.txt', '/kr', '/kr/', '/kr']
+
+
+def test_redirect_checkpoint_returns_effective_url(bot, server):
+    bot.facts_only = True
+    identity, effective = server.base + '/kr', server.base + '/kr/'
+    server.add('/kr', '', 301, {'Location': '/kr/'})
+    server.add('/kr/', page(name='Example Sauna'))
+    task_id = enqueue(bot.db, kind='fetch', url=identity)
+    executor = Executor(bot, providers=[])
+    executor.task = dict(bot.db.execute('SELECT * FROM tasks WHERE task_id=?', (task_id,)).fetchone())
+    assert executor.get(identity).ok
+
+    resumed = Executor(bot, providers=[])
+    resumed.task = executor.task
+    result = resumed.get(identity)
+
+    assert result.ok and result.url == effective and result.identity_url == identity
+    assert effective in resumed.documents
+    assert [r['path'] for r in server.log] == ['/robots.txt', '/kr', '/kr/']
+
+
 def test_canonical_elsewhere_is_not_own_fact(bot,server):
     server.add('/venue',page(extra='<link rel="canonical" href="https://original.test/info">'))
     enqueue(bot.db,kind='fetch',url=server.base+'/venue')

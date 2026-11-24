@@ -75,7 +75,8 @@ def bootstrap(fetcher):
     for raw in db.execute('SELECT * FROM raw_documents r WHERE fetched_at=(SELECT max(fetched_at) FROM raw_documents WHERE canonical_url=r.canonical_url)').fetchall():
         source = db.execute('SELECT state FROM sources WHERE source_id=?',(raw['source_id'],)).fetchone()
         if source and source[0]=='inaccessible': continue
-        observed = [r[0] for r in db.execute('SELECT DISTINCT field FROM observations WHERE source_url=?',(raw['canonical_url'],))]
+        observed = [r[0] for r in db.execute('SELECT DISTINCT field FROM observations WHERE source_url=? OR raw_id=?',
+            (raw['url'] or raw['canonical_url'], raw['raw_id']))]
         days = min((refresh_days(f,deprioritized=bool(source and source[0]=='deprioritized')) for f in observed),default=30)
         if (now-datetime.fromisoformat(raw['fetched_at'])).total_seconds()>=days*86400:
             enqueue(db,kind='fetch',url=raw['canonical_url'],task_class='freshness',clock=clock,

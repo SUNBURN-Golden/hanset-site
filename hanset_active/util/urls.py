@@ -2,7 +2,7 @@
 import ipaddress
 import re
 import socket
-from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, unquote
+from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, unquote, unquote_to_bytes
 from .pii import strip_pii
 
 DENIED = ('naver.com', 'naver.me', 'pstatic.net', 'naver.net', 'instagram.com', 'instagr.am', 'cdninstagram.com')
@@ -32,6 +32,18 @@ def canonicalize(url: str, base: str | None = None, *, preserve_path: bool = Fal
             raise ValueError('Unsafe fetch URL')
         return normalized
     return strip_pii(normalized)
+
+def same_fetch_target(a: str, b: str) -> bool:
+    """Compare HTTP targets after decoding escapes within each path segment."""
+    def target(url):
+        parts = urlsplit(url)
+        port = parts.port if parts.port is not None else {'http': 80, 'https': 443}.get(parts.scheme)
+        # Split before decoding to distinguish an escaped slash from a separator.
+        segments = tuple(unquote_to_bytes(part) for part in (parts.path or '/').split('/'))
+        return (parts.scheme, parts.hostname, port,
+                segments, parse_qsl(parts.query, keep_blank_values=True))
+
+    return target(a) == target(b)
 
 def registrable_domain(url: str) -> str:
     host = (urlsplit(url).hostname if '://' in url else url).lower().rstrip('.')
