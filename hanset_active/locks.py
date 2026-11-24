@@ -5,6 +5,7 @@ import os
 import re
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import urlsplit
 from .util.timeutil import Clock, kst_now
 
 class AlreadyRunning(RuntimeError):
@@ -68,14 +69,24 @@ class RunLock:
                 self.file = None
 
 
+def _normalize_hostname(value):
+    return value.lower().encode('idna').decode('ascii').rstrip('.')
+
+
+def hostname(url):
+    return _normalize_hostname(urlsplit(url).hostname or '')
+
+
 @contextmanager
-def host_lock(data_dir, domain):
-    """Hold one domain per process/thread, releasing it before a cross-domain hop."""
-    if not re.fullmatch(r'[a-z0-9.:-]+', domain):
+def host_lock(data_dir, host, *, robots=False):
+    """Serialize requests, or serialize robots policy refreshes across hops."""
+    host = _normalize_hostname(host)
+    if not re.fullmatch(r'[a-z0-9.:-]+', host):
         raise ValueError('invalid_host')
     directory = Path(data_dir) / 'host-locks'
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-    fd = os.open(directory / (domain + '.lock'), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    suffix = '~robots.lock' if robots else '.lock'
+    fd = os.open(directory / (host + suffix), os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX)
         yield

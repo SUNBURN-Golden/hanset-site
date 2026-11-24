@@ -366,7 +366,7 @@ def _derive(db, observation):
                (diagnostic, observation['observation_id']))
 
 
-def process_pending(db, targets, *, testing=False):
+def process_pending(db, targets, *, testing=False, complete=True):
     if needs_rebaseline(db):
         put_meta(db, 'diagnostic', 'rebaseline_required')
         db.commit()
@@ -375,7 +375,7 @@ def process_pending(db, targets, *, testing=False):
         return {'reason': 'targets_invalid', 'processed': 0}
     _versions(db)
     retired = 0
-    for raw in db.execute("SELECT * FROM web_change_baselines WHERE state='active'").fetchall():
+    for raw in (db.execute("SELECT * FROM web_change_baselines WHERE state='active'").fetchall() if complete else ()):
         baseline = dict(raw)
         auth = _authorized(targets, baseline, testing=testing)
         if not auth or auth['target_fingerprint'] != baseline['target_fingerprint']:
@@ -391,11 +391,14 @@ def process_pending(db, targets, *, testing=False):
         source_scope = tuple(observation[k] for k in ('venue_id', 'venue_key', 'source_identity'))
         if source_scope in blocked:
             continue
+        auth = _authorized(targets, observation, testing=testing)
+        current = auth and auth['target_fingerprint'] == observation['target_fingerprint']
+        if not current and not complete:
+            continue
         db.execute('BEGIN IMMEDIATE')
         db.execute('SAVEPOINT detect')
         try:
-            auth = _authorized(targets, observation, testing=testing)
-            if not auth or auth['target_fingerprint'] != observation['target_fingerprint']:
+            if not current:
                 _event(db, observation, 'authorization_changed', '', '{}', reason='authorization_changed')
                 db.execute("UPDATE web_change_observations SET processed=2,diagnostic='authorization_changed' WHERE observation_id=?",
                            (observation['observation_id'],))
@@ -406,7 +409,7 @@ def process_pending(db, targets, *, testing=False):
                 current_authorization = db.execute('''SELECT 1 FROM web_change_baselines WHERE
                     venue_id=? AND venue_key=? AND target_fingerprint=? AND state='active' LIMIT 1''',
                     (observation['venue_id'], observation['venue_key'], observation['target_fingerprint'])).fetchone()
-                if previous_authorizations and not current_authorization:
+                if complete and previous_authorizations and not current_authorization:
                     _event(db, observation, 'authorization_changed', '', '{}', reason='authorization_changed')
                     db.execute('''UPDATE web_change_baselines SET state='needs_rebaseline' WHERE
                         venue_id=? AND venue_key=? AND target_fingerprint!=?''',

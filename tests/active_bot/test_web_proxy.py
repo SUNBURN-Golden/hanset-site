@@ -509,11 +509,18 @@ def test_web_defaults_do_not_reuse_previous_heal(mocked_web, monkeypatch):
     ('', '', ''), ('192.0.2.1', '192.0.2.1', ''),
     ('192.0.2.1', '192.0.2.2', 'proxy_exit_mismatch'),
 ])
-def test_preflight_connectivity_check_requires_expected_exit(monkeypatch, expected, observed, reason):
+def test_preflight_connectivity_check_requires_expected_exit(monkeypatch, tmp_path, expected, observed, reason):
+    from tests.active_bot.test_collect_retry4 import assert_host_locked
+
     monkeypatch.setattr(web_proxy, 'reachable', Mock(return_value=True))
     session = Mock()
-    session.get.return_value = SimpleNamespace(status_code=200, text=observed)
-    result = web_proxy.preflight(PROXY, environ={web_proxy.EXIT_ENV: expected}, session=session)
+
+    def get(url, **kwargs):
+        assert_host_locked(tmp_path, url)
+        return SimpleNamespace(status_code=200, text=observed)
+
+    session.get.side_effect = get
+    result = web_proxy.preflight(PROXY, environ={web_proxy.EXIT_ENV: expected}, session=session, host_dir=tmp_path)
     assert result == reason
     if expected:
         assert session.trust_env is False

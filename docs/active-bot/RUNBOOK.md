@@ -15,6 +15,12 @@ A path inside the checkout, including a symlink into it, is rejected. Back up
 SQLite with SQLite's backup API, together with `raw/`; do not copy a live WAL
 file independently. No collected data is published to the service site.
 
+`hanset_active init` is the explicit bootstrap for `active.sqlite3`.
+Manual web targets can run during an authorization database outage. The web
+collector uses `collect-fetch.sqlite3` for fallback request audits and shared
+host policy, and `collect-leases.sqlite3` for its run lease. Scheduled active
+and seed jobs defer until the authorization snapshot can be read.
+
 ## Commands
 
 ```sh
@@ -179,4 +185,4 @@ Tests use loopback HTTP and fake clocks. PDF/OCR tests skip when their system
 binary is unavailable; the crash test kills a test subprocess after a persisted
 raw insert. The legacy `run` queue retains its production spacing. Discovery and web
 collection apply robots and crawl spacing to Korean news hosts. All three
-entry points use the per-domain request lock.
+entry points use the exact-hostname request lock.

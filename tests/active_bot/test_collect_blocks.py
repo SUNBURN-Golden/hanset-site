@@ -157,8 +157,7 @@ def test_collection_bypasses_legacy_body_budget_for_subpages(tmp_path, monkeypat
     result = service.run_web(settings, targets_path=path, clock=FakeClock(), testing=True)
     assert result['success'] and result['counts']['pages'] == 3
     assert requests == [ROOT, ROOT + '/price', ROOT + '/about']
-    with sqlite3.connect(settings.active_dir / 'active.sqlite3') as db:
-        assert db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone() is None
+    assert not (settings.active_dir / 'active.sqlite3').exists()
 
 
 def test_pruning_timezone_validation_and_additive_schema(tmp_path):

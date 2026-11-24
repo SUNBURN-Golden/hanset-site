@@ -200,7 +200,8 @@ def connect(directory):
     _migrate(db)
     db.executescript(CHANGE_SCHEMA)
     db.executescript(BLOCK_SCHEMA)
-    db.executescript(WEB_TARGET_SCHEMA)
+    from .web_grants import SCHEMA as GRANT_SCHEMA
+    db.executescript(GRANT_SCHEMA)
     os.chmod(path, 0o600)
     return db
 
@@ -215,6 +216,7 @@ def _migrate(db):
         'final_url': 'TEXT', 'authorization_json': 'TEXT', 'hash_version': 'TEXT',
         'requested_url': 'TEXT', 'venue_id': 'TEXT', 'venue_key': 'TEXT',
         'binding_current': 'INTEGER',
+        'identity_mode': 'TEXT',
     })
     if 'requested_url' in new_receipt_keys:
         from .targets import canonical_requested_url
@@ -226,6 +228,8 @@ def _migrate(db):
             db.execute('UPDATE receipts SET requested_url=? WHERE receipt_id=?', (url, row['receipt_id']))
     db.execute('CREATE INDEX IF NOT EXISTS receipts_by_request ON receipts(source_kind,requested_url,content_hash)')
     db.execute('CREATE INDEX IF NOT EXISTS claims_by_receipt ON claims(receipt_id)')
+    db.executescript(WEB_TARGET_SCHEMA)
+    _add_columns(db, 'web_target_observations', {'identity_mode': 'TEXT'})
     _add_columns(db, 'fact_candidates', {
         'qualification_basis': 'TEXT', 'current_supporting_claim_ids_json': 'TEXT',
     })
@@ -284,19 +288,19 @@ def prune_web_target_blocks(db, *, clock=None):
         _prune_web_target_blocks(db, kst_now(clock))
 
 
-def recent_web_target_block(db, url, *, clock=None, testing=False):
+def recent_web_target_block(db, url, *, clock=None, testing=False, identity_mode=None):
     from .targets import canonical_requested_url
-    key = digest(canonical_requested_url(url, testing=testing))
+    key = digest(canonical_requested_url(url, testing=testing, identity_mode=identity_mode))
     row = db.execute('SELECT * FROM web_target_blocks WHERE url_hash=?', (key,)).fetchone()
     return bool(row and kst_now(clock) < _block_expiry(row))
 
 
-def remember_web_target_block(db, url, disposition, *, status, clock=None, testing=False):
+def remember_web_target_block(db, url, disposition, *, status, clock=None, testing=False, identity_mode=None):
     """Only per-URL evaluations establish holds; collateral domain stops do not."""
     if disposition not in _BLOCK_DISPOSITIONS or (disposition != 'robots_disallowed' and status is None):
         return
     from .targets import canonical_requested_url
-    key = digest(canonical_requested_url(url, testing=testing))
+    key = digest(canonical_requested_url(url, testing=testing, identity_mode=identity_mode))
     now = kst_now(clock)
     with db:
         _prune_web_target_blocks(db, now)
@@ -315,29 +319,29 @@ def _observation_time(value):
 
 
 def remember_web_target_observation(db, url, disposition, *, observed_at, content_hash=None,
-                                    testing=False):
+                                    testing=False, identity_mode=None):
     """Scheduling metadata only; never refresh or relabel historical evidence."""
     from .targets import canonical_requested_url
-    key = digest(canonical_requested_url(url, testing=testing))
+    key = digest(canonical_requested_url(url, testing=testing, identity_mode=identity_mode))
     at = _observation_time(observed_at)
     if at is None or (content_hash is not None and not _valid_hash(content_hash)):
         raise CollectError('state_corrupt')
     with db:
         db.execute('''INSERT INTO web_target_observations
-                        (url_hash,content_hash,disposition,observed_at) VALUES (?,?,?,?)
+                        (url_hash,content_hash,disposition,observed_at,identity_mode) VALUES (?,?,?,?,?)
                       ON CONFLICT(url_hash) DO UPDATE SET
                         content_hash=excluded.content_hash,disposition=excluded.disposition,
-                        observed_at=excluded.observed_at''',
-                   (key, content_hash, disposition, at.isoformat()))
+                        observed_at=excluded.observed_at,identity_mode=excluded.identity_mode''',
+                   (key, content_hash, disposition, at.isoformat(), identity_mode))
 
 
 def web_target_history(db, *, clock=None, testing=False):
     """Return last fetch times and unchanged deferrals by canonical URL hash."""
     from .targets import canonical_requested_url
     @cache
-    def safe_key(url):
+    def safe_key(url, identity_mode=None):
         try:
-            return digest(canonical_requested_url(url, testing=testing))
+            return digest(canonical_requested_url(url, testing=testing, identity_mode=identity_mode))
         except (ValueError, TypeError, UnicodeError):
             return None
 
@@ -351,9 +355,9 @@ def web_target_history(db, *, clock=None, testing=False):
             history[key] = (content_hash, disposition, at)
 
     for row in db.execute(
-            "SELECT source_url,content_hash,disposition,created_at FROM receipts "
+            "SELECT source_url,content_hash,disposition,created_at,identity_mode FROM receipts "
             "WHERE source_kind='web' ORDER BY rowid"):
-        key = safe_key(row['source_url'])
+        key = safe_key(row['source_url'], row['identity_mode'])
         at = _observation_time(row['created_at'])
         if key is None or at is None or not _valid_hash(row['content_hash']):
             continue
@@ -426,7 +430,8 @@ def validated_authorization(url, final, authorization, domains, *, testing=False
 
 def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key, seen_at,
            clock=None, source_type=None, requested_url=None, final_url=None,
-           authorization=None, domains=(), hash_version=None, testing=False, facts_only=False):
+           authorization=None, domains=(), hash_version=None, testing=False, facts_only=False, identity_mode=None,
+           grant_scope=None, parent_url=None):
     """Store grounded evidence and return the disposition and newly inserted claim IDs."""
     credentials = secrets()
     if (kind not in ('web', 'instagram') or not _valid_hash(text_hash)
@@ -437,11 +442,11 @@ def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key
     if kind == 'web':
         from .targets import canonical_requested_url
         try:
-            canonical = canonical_requested_url(url, testing=testing)
+            canonical = canonical_requested_url(url, testing=testing, identity_mode=identity_mode)
             if requested_url is not None and requested_url != canonical:
                 raise ValueError
             requested_url = canonical
-            final_url = canonical_requested_url(final_url, testing=testing) if final_url else None
+            final_url = canonical_requested_url(final_url, testing=testing, identity_mode=identity_mode) if final_url else None
         except ValueError:
             raise CollectError('runtime_error') from None
         authorization = validated_authorization(url, final_url, authorization, domains, testing=testing)
@@ -499,10 +504,15 @@ def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key
         else:
             db.execute(
                 """INSERT INTO receipts (receipt_id,source_kind,source_url,content_hash,disposition,created_at,
-                   requested_url,final_url,authorization_json,hash_version,venue_id,venue_key,binding_current)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   requested_url,final_url,authorization_json,hash_version,venue_id,venue_key,binding_current,identity_mode)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (receipt_id, kind, url, text_hash, stored_as, kst_now(clock).isoformat(), requested_url,
-                 final_url, auth_json, hash_version, venue_id, venue_key, 1 if hash_version else None))
+                 final_url, auth_json, hash_version, venue_id, venue_key, 1 if hash_version else None, identity_mode))
+        if grant_scope is not None:
+            from .web_grants import record_receipt_scope
+            record_receipt_scope(db, grant_scope, receipt_id, parent_url)
+            if existing:
+                db.execute('UPDATE receipts SET binding_current=1 WHERE receipt_id=?', (receipt_id,))
         for claim_id, claim in kept.items():
             locator = claim.get('locator', {}).get('char_offsets')
             locator_json = (json.dumps({'char_offsets': locator}) if isinstance(locator, list)

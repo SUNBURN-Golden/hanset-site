@@ -49,6 +49,10 @@ def connect(directory):
         os.chmod(path, 0o600)
         db.execute('PRAGMA journal_mode=WAL')
         db.executescript(_SCHEMA)
+        with db:
+            db.execute('BEGIN IMMEDIATE')
+            if not any(row[1] == 'identity_mode' for row in db.execute('PRAGMA table_info(extraction_retries)')):
+                db.execute('ALTER TABLE extraction_retries ADD COLUMN identity_mode TEXT')
         return db
     except BaseException:
         db.close()
@@ -127,7 +131,8 @@ def retry_web(db, row, clock, reason, *, delay=0):
     fetch_url = canonicalize(row['url'], preserve_path=True)
     with db:
         db.execute('''INSERT OR REPLACE INTO extraction_retries
-            (requested_url, venue_id, venue_key, content_hash, reason, retry_at, parent_url, fetch_url)
-            VALUES (?,?,?,?,?,?,?,?)''',
+            (requested_url, venue_id, venue_key, content_hash, reason, retry_at, parent_url, fetch_url, identity_mode)
+            VALUES (?,?,?,?,?,?,?,?,?)''',
             (row['requested_url'], row['venue_id'], row['venue_key'], row.get('content_hash'), reason,
-             (kst_now(clock) + timedelta(seconds=delay)).isoformat(), row.get('parent_url'), fetch_url))
+             (kst_now(clock) + timedelta(seconds=delay)).isoformat(), row.get('parent_url'), fetch_url,
+             row.get('identity_mode')))

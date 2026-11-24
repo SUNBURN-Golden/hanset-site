@@ -29,19 +29,25 @@ def migrate(conn: sqlite3.Connection) -> None:
                 conn.execute(script[start:])
             conn.execute('INSERT INTO schema_version(version) VALUES (?)', (path.name,))
 
-def connect(path: str | Path) -> sqlite3.Connection:
+def connect(path: str | Path, *, create=True) -> sqlite3.Connection:
     if str(path) != ':memory:':
         from .config import REPO_ROOT
         resolved = Path(path).resolve()
         if resolved == REPO_ROOT or REPO_ROOT in resolved.parents:
             raise ValueError('Database must be outside checkout')
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute('PRAGMA journal_mode=WAL')
-    conn.execute('PRAGMA foreign_keys=ON')
-    migrate(conn)
-    return conn
+        if create:
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+    location = str(path) if create else Path(path).absolute().as_uri() + '?mode=rw'
+    conn = sqlite3.connect(location, uri=not create, timeout=30, check_same_thread=False)
+    try:
+        conn.row_factory = sqlite3.Row
+        conn.execute('PRAGMA journal_mode=WAL')
+        conn.execute('PRAGMA foreign_keys=ON')
+        migrate(conn)
+        return conn
+    except BaseException:
+        conn.close()
+        raise
 
 def consume_budget(conn, kind: str, cap: int, clock=None) -> bool:
     if kind not in ('candidates','bodies','aux'):

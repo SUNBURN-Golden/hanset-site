@@ -211,7 +211,8 @@ def test_manual_or_disabled_seed_selector_never_extends_authorization(env, match
               'tavily': {'venue_id': target['venue_id'], 'field': 'hours'}}
     path = settings.data_dir / 'web_targets.json'
     save_targets(path, [manual])
-    assert assembly(env)['targets'] == [first_party(manual)]
+    assert assembly(env)['targets'] == [{**first_party(manual),
+                                        'tavily_specs': [(manual['tavily'], frozenset(manual['domains']))]}]
     path.write_text(json.dumps({'schema_version': 1, 'targets': [
         {'enabled': False, 'venue_id': 'old-id', 'venue_key': 'Seed Spa A'},
     ]}))

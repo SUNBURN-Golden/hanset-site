@@ -182,9 +182,9 @@ same approved domain. A proposal is evidence for manual review.
 The external collector DB adds `web_target_blocks` without modifying historical
 rows. It stores only a SHA-256 hash of the safely canonicalized requested URL,
 the terminal disposition, and a timezone-aware timestamp from the collector
-clock. `robots_disallowed` always establishes a hold. `login_wall` and `blocked`
-establish holds only when a real response status exists, including security text
-on a 200 response. A later URL stopped collaterally by the fetcher's in-run domain
+clock. A confirmed robots rule denial establishes a hold. `login_wall` and other
+terminal refusals establish holds when a response confirms them, including security
+text on a 200 response. A later URL stopped collaterally by the fetcher's in-run domain
 stop has `blocked` with no status: it still counts this run, but gets no hold and
 can be retried next run. A blocked homepage therefore does not create a cooldown
 for an independently approved venue subpage.
@@ -199,25 +199,26 @@ preserves real results; `rejections.recent_block_skipped` reports the total.
 When no unfinished URL remains outside cooldown, the result is successful with
 `collected: false`, reason `recent_block_skipped`, before proxy preflight or model dispatch.
 
-Search leads are only scheme/domain-checked upstream. A lead whose identity fails
-the safe-URL check (credential params such as `?sid=`/`?key=`, redaction markers,
-over-length) skips that one job with an `unsafe_url_skipped` note and a
-`rejections.unsafe_url_skipped` count; it is never fetched and its raw URL is not
-echoed into status. Other jobs in the same run proceed normally. If every job is
-unsafe, the run stops with reason `unsafe_url_skipped` before proxy preflight or model dispatch.
+Search leads must pass both the approved-domain and safe-URL checks. A rejected
+identity produces an `unsafe_url_skipped` note without exposing the URL.
 
 Web collection applies robots.txt, Crawl-delay and per-site spacing to the
-Korean news hosts listed in `hanset_active/profiles/kr_news_domains.txt`. Naver
-news hosts follow this policy. Naver blogs and place listings use serialized
-requests without crawl spacing. A robots or access refusal stops fetching for
-the affected scope in the current run. Only an evaluated URL receives a
-14-day hold. A confirmed proxy outage leaves robots cache and block holds
-alone and the fetcher continues on the box's own IP.
+Korean news hosts listed in `hanset_active/profiles/kr_news_domains.txt`. News
+requests wait at least five seconds or the longer applicable Crawl-delay.
+The collector reserves the robots request before dispatch and caches terminal
+200, 404 or 410 policies by origin for 24 hours. Failed attempts can be retried.
+The request lock is shared by all schemes and ports of the same hostname.
+Naver blogs and place listings use that lock without crawl spacing. A 429 or
+503 stops the hostname for the run. The collector records Retry-After and
+applies a 14-day hold to a resource after repeated blocks. A confirmed proxy
+outage allows the fetcher to continue on the box's own IP.
 
-A target with a `tavily` venue/field pair may call the known-venue hook. The
-collector may fetch one lead from that target's approved `official_domains`.
-The shared ledger records usage. Provider quota exhaustion stops Tavily calls
-for the invocation. [Tavily ledger](IG_DAEMON.md#persistent-usage-ledger)
+A search-only target can fetch every safe lead in its approved domains. Each
+`tavily` venue and field pair retains its own grant even when two searches find
+the same page. On a complete authorization scan, a receipt loses its current
+binding when its last grant is removed. Search results remain third-party
+claims. The shared ledger records usage. Provider quota exhaustion stops Tavily
+calls for the invocation. [Tavily ledger](IG_DAEMON.md#persistent-usage-ledger)
 
 ### Seven-day soft deferral of unchanged pages
 

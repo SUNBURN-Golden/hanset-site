@@ -200,6 +200,7 @@ def assemble_targets(settings, *, now, testing=False, include_watchlist=True, bo
             'SELECT * FROM seed_venues WHERE seed_id=? ORDER BY seed_venue_id', (seed_id,))]
         seed_domains = [dict(r) for r in db.execute(
             'SELECT * FROM seed_domains WHERE seed_id=? ORDER BY seed_domain_id', (seed_id,))]
+        promoted = promoted_rows(db)
         ownership = ownership_index(venues, aliases)
         derived = []
         if status != 'invalid':
@@ -227,7 +228,7 @@ def assemble_targets(settings, *, now, testing=False, include_watchlist=True, bo
             derived.sort(key=lambda pair: _local_key(pair[1]))
             authorization = merge_targets(
                 manual, [t for t, _ in derived], disabled, ownership, notes, seeds=seed_targets,
-                promoted=derive_promoted_targets(promoted_rows(db), testing=testing),
+                promoted=derive_promoted_targets(promoted, testing=testing),
                 testing=testing, complete=True)
             notes['derived_truncated'] += max(0, len(authorization) - MAX_TARGETS)
             targets = authorization[:MAX_TARGETS]
@@ -247,7 +248,7 @@ def assemble_targets(settings, *, now, testing=False, include_watchlist=True, bo
     rows, fingerprint, snapshot_notes = materialized
     notes.update(snapshot_notes)
     return {'targets': targets, 'authorization': authorization, 'targets_status': status, 'db_status': db_status,
-            'watchlist': watchlist, 'snapshot': (rows, fingerprint, notes)}
+            'disabled': disabled, 'watchlist': watchlist, 'snapshot': (rows, fingerprint, notes)}
 
 
 class Ranker(Protocol):

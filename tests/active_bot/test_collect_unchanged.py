@@ -67,7 +67,8 @@ def seed_history(settings, url, clock, *, disposition='duplicate', text=TEXT):
 
 def observations(settings):
     with sqlite3.connect(settings.data_dir / 'collector.sqlite3') as db:
-        return db.execute('SELECT * FROM web_target_observations ORDER BY url_hash').fetchall()
+        return db.execute('SELECT url_hash,content_hash,disposition,observed_at '
+                          'FROM web_target_observations ORDER BY url_hash').fetchall()
 
 
 @pytest.mark.parametrize('disposition', ['duplicate', 'applied', 'empty_extraction'])
@@ -223,9 +224,9 @@ def test_seed_redirect_rejected_before_destination_request(env, monkeypatch, des
     def request(self, requested, kind, **kwargs):
         calls.append(requested)
         if requested == (robots if robots_redirect else url):
-            return SimpleNamespace(status_code=302, headers={'Location': destination}), b'', ''
+            return SimpleNamespace(status_code=302, headers={'Location': destination}), b'', '', None
         assert requested == robots
-        return SimpleNamespace(status_code=200, headers={}), b'User-agent: *\nDisallow:', ''
+        return SimpleNamespace(status_code=200, headers={}), b'User-agent: *\nDisallow:', '', None
 
     monkeypatch.setattr(service.Fetcher, '_request', request)
     result = service.run_web(settings, clock=clock, qwen_session=Model(empty=True), testing=True)

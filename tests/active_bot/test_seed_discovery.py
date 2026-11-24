@@ -139,11 +139,11 @@ def test_license_resume_inclusive_replay_and_privacy(state, tmp_path, monkeypatc
 
     calls = transport(monkeypatch, routes)
     first = invoke(state, ['licenses'])
-    assert first['new'] == 2 and first['sources']['licenses']['status'] == 'partial:license_request'
+    assert first['new'] == 1 and first['sources']['licenses']['status'] == 'partial:license_request'
     fail = False
     start = len(calls)
     second = invoke(state, ['licenses'])
-    assert second['new'] == 1 and parse_qs(urlsplit(calls[start]).query)['pageNo'] == ['2']
+    assert second['new'] == 2 and parse_qs(urlsplit(calls[start]).query)['pageNo'] == ['2']
     before = candidate_state(db)
     clock.sleep(7200)
     replay = invoke(state, ['licenses'])
@@ -352,7 +352,7 @@ def test_news_only_robots_spacing_terminal_block_and_direct_fallback(state, monk
         assert fetcher.fetch('https://block.example/blocked').outcome == 'blocked'
         assert fetcher.fetch('https://block.example/later').outcome == 'blocked'
         assert events[:2] == [(_BLOG, 0), (_BLOG + '/other', 0)]
-        assert events[2:5] == [(news + '/robots.txt', 0), (news + '/page', 2.5), (news + '/page2', 5)]
+        assert events[2:5] == [(news + '/robots.txt', 0), (news + '/page', 5), (news + '/page2', 10)]
         assert news + '/private' not in calls and 'https://block.example/later' not in calls
     finally:
         fetcher.close()
