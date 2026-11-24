@@ -31,15 +31,22 @@ QWEN_TIMEOUT = (5, 60)
 QWEN_EXTRAS = {'enable_thinking': False}
 
 _HTTP_ERRORS = {
-    400: 'model_unavailable', 404: 'model_unavailable', 401: 'model_auth', 403: 'model_auth',
-    402: 'model_insufficient_balance', 408: 'model_timeout', 429: 'model_rate_limited',
+    400: 'model_invalid', 401: 'model_auth', 402: 'model_insufficient_balance',
+    403: 'model_auth', 404: 'model_unavailable', 408: 'model_timeout', 429: 'model_rate_limited',
 }
 _API_ERRORS = {
     'insufficient_balance': 'model_insufficient_balance',
+    'insufficient_quota': 'model_insufficient_balance',
+    'quota_exceeded': 'model_insufficient_balance',
+    'usage_exhausted': 'model_insufficient_balance',
+    'billing_hard_limit_reached': 'model_insufficient_balance',
     'invalid_api_key': 'model_auth',
     'model_not_found': 'model_unavailable',
     'rate_limit_exceeded': 'model_rate_limited',
+    'service_unavailable': 'model_unavailable',
+    'provider_unavailable': 'model_unavailable',
 }
+AVAILABILITY_REASONS = frozenset({'model_rate_limited', 'model_insufficient_balance', 'model_unavailable'})
 
 
 def deepseek_key():
@@ -88,8 +95,6 @@ def _response(request, endpoint, key, *, timeout, **kwargs):
                            timeout=timeout, allow_redirects=False, stream=True, **kwargs)
         status = response.status_code
         http_error = _HTTP_ERRORS.get(status, 'model_transport') if status != 200 else None
-        if status == 402 or 300 <= status < 400:
-            raise CollectError(http_error)
         try:
             body = bytearray()
             for chunk in response.iter_content(8192):

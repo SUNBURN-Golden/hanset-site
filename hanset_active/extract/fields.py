@@ -1,7 +1,7 @@
 """Explicit bilingual field rules. Offsets refer to sanitized input text."""
 import re
 from ..util.pii import strip_pii
-VERSION = '1.8.0'
+VERSION = '1.9.0'
 # Shuttle/transport timetables are never opening hours.
 TRANSPORT_CUE = re.compile(r'운행|셔틀|픽업|배차|shuttle|\bbus\b|pick-?up', re.I)
 BREAK_CUE = re.compile(r'lunch\s*break|break\s*time|브레이크\s*타임|휴게\s*시간|점심\s*시간|청소\s*시간|cleaning\s*time', re.I)
@@ -127,7 +127,7 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
             emit(field,value,Offset(m),unit,ambiguous)
         money=list(matches(r'₩\s*[\d,]+|[\d,]+\s*KRW|(?:\d+만(?:\d+천|\d+)?|\d+천|만|[\d,]+)\s*원'))
         price_context=text[max(0,block.start()-60):block.end()]
-        if re.search(r'요금|이용료|입장료|1회|일일|이용권|day pass|single entry|admission|visit|price|'
+        if re.search(r'요금|이용료|입장료|1회|일일|1일권|이용권|day pass|single entry|admission|visit|price|'
                      + _DROP_IN_CUE, price_context, re.I):
             for m in money:
                 ticket = 'drop_in' if re.search(_DROP_IN_CUE, s, re.I) else 'day_pass'
@@ -206,7 +206,7 @@ def extract(text: str, *, locator=None, ocr_confidence=None) -> list[dict]:
                     value = _availability(s, m)
                     if value is not None:
                         add(field, value, m)
-        for m in matches(r'문신|tattoos?'):
+        for m in matches(r'문신|타투|tattoos?'):
             if USER_REVIEW.search(s): continue
             tail=re.split(r'[,;]',s[m.end():m.end()+160])[0]
             if re.search(r'커버.*(?:불필요|필요 없)|cover.*not required',tail,re.I): value='allowed'

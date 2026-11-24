@@ -15,6 +15,9 @@ def bath_tokens(text):
     'Prices/tattoo Not confirmed. 전화번호 게시하지 않음.',
     'Price not shown on official page',
     'Tattoo policy 미확인',
+    '1일권 가격 미정',
+    '타투 정책 확인 중',
+    '타투',
     'Hours 확인 안 됨',
     'unconfirmed from an official page',
     'Not applicable / not public',
@@ -27,9 +30,20 @@ def test_soft_hedge_stays_ambiguous_not_silent():
     rows = [r for r in extract('Day pass 25000 KRW maybe') if r['field'] == 'price_day_pass']
     assert rows and all(r['ambiguous'] for r in rows)  # kept for review, never a value
 
+
+def test_day_pass_cue_is_explicit_and_preserves_ambiguity():
+    rows = extract('1일권 20,000원')
+    assert len(rows) == 1 and not rows[0]['ambiguous']
+    assert rows[0]['field'] == 'price_day_pass'
+    assert rows[0]['value'] == {'amount': 20000, 'ticket': 'day_pass', 'scope': 'unspecified'}
+    ambiguous = extract('1일권 20,000원 또는 25,000원')
+    assert len(ambiguous) == 2 and all(row['ambiguous'] for row in ambiguous)
+
+
 @pytest.mark.parametrize('text,value', [
     ('Tattoos not admitted.', 'not_allowed'),
     ('문신·피부병 환자 출입금지', 'not_allowed'),
+    ('타투 입장 불가', 'not_allowed'),
     ('tattoo >15cm needs patch', 'cover_required'),
     ('tattoos 15x15cm or larger permitted only when covered with a patch or personal rash guard', 'cover_required'),
     ('문신 커버/스티커 필요', 'cover_required'),

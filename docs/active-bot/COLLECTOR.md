@@ -78,14 +78,17 @@ characters including the instruction allowance. A fragment carries up to
 4,000 characters. The response allowance is 1,200 tokens per item. Strict
 local validation requires one result per index and typed claims with grounded
 evidence. A malformed batch splits once into two independently validated
-halves. A page commits only after all its fragments validate.
+halves. The collector waits for all fragment results before deciding whether
+to commit the page.
 
-Applied and empty extractions are cached by canonical requested URL and
-content hash. A hit reports `unchanged`, preserves claim IDs and check dates,
-and records the new observation. The receipts database lets a restart recover
-a cache entry after a cache-index write is interrupted. Legacy short-text
-receipts count only when the legacy hash covered the full eligible text.
-Current venue binding and guarded final-URL authority govern reuse in review.
+The receipt dispositions `applied` and `empty_extraction` record model
+coverage and are cached by canonical requested URL and content hash. A hit
+reports `unchanged`, preserves claim IDs and check dates, and records the new
+observation. The receipts database lets a restart recover a cache entry after
+a cache-index write is interrupted. Legacy short-text receipts count only
+when the legacy hash covered the full eligible text. Current venue binding
+and guarded final-URL authority govern reuse in review. A `rules_only` receipt
+retains the retry. The model pass writes the cache and completion ledger.
 
 The runtime database also stores same-day web completions and retry metadata.
 It imports safe same-day web completion keys from the old checkpoint.
@@ -94,6 +97,40 @@ fetcher. A partial result includes full `counts.committed`, `counts.unchanged`,
 and `counts.pending` for the invocation, with up to 200 page outcomes sampled
 in status. The ledger retains all completions and retry entries. The checkpoint
 continues to track Instagram completions, the read limit and security halts.
+
+### Rule fallback during provider outage
+
+When all failed fragments on a page report provider availability errors
+(`model_rate_limited`, `model_insufficient_balance`, or `model_unavailable`),
+the collector runs the deterministic field rules over the whole sanitized
+page. Explicit provider error codes for quota, exhausted usage, balance, and
+unavailability can override the HTTP status. A bare 503 remains a transport
+error. Invalid model output, input limits, authentication failures, timeouts,
+transport errors, and missing credentials leave the page pending. A page
+also stays pending if the rules find no safe, unambiguous claim.
+
+A rules-only commit stores only matched fields. Exact-authorized own-domain
+evidence follows the existing manual promotion policy. Third-party evidence
+stays `미확인` unless it meets the existing independent-agreement policy.
+`extraction_method` and `rules_version` on the claim record extractor
+provenance. Fields version 1.9.0 recognizes `1일권` and `타투` across the
+collector's model grounding, active evaluation and evidence validation, and
+twin CSV extraction.
+
+`counts.rules_fallback` counts pages covered by rules in this invocation,
+including repeats. It is available in the run JSON and status. The run keeps
+the outage reason and remains `partial` even when `counts.pending` is zero.
+Rules-only receipts defer change observations and baselines until model
+coverage. When a valid model pass arrives for the same source binding, it
+confirms matching claim IDs, adds any new claims, and supersedes omitted rule
+claims. Superseded claims remain historical evidence and are excluded from
+current assessment and change detection. Daily `claims_new` metrics still use
+the receipt creation date, so any new model claims on an upgraded receipt are
+attributed to the original rules day.
+
+These receipts live in `collector.sqlite3`. The scheduled twin reads
+`active.sqlite3`. A separate handoff is required before the scheduled twin can
+ingest the collector's rule evidence.
 
 ### Information subpages and URL cooldowns
 
@@ -201,8 +238,10 @@ already in the deferred queue keeps its place there.
 The external SQLite table `web_target_observations` stores the latest fetch
 timestamp, disposition, and available content hash under the SHA-256 digest of
 the safely canonicalized requested URL. A ready page records
-`pending_extraction` at fetch time. A completed extraction records `applied`,
-`duplicate`, or `empty_extraction` with the same timestamp. Both duplicate
+`pending_extraction` at fetch time. A rules-only commit retains that
+disposition and normal retry priority while model extraction is unfinished.
+A completed model extraction records `applied`, `duplicate`, or
+`empty_extraction` with the same timestamp. Both duplicate
 paths and discovered children update this history. A failed fetch or unfinished
 extraction gives the URL normal priority when it is eligible to retry.
 
