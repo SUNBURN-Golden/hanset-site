@@ -11,11 +11,12 @@ import logging
 import requests
 from bs4 import BeautifulSoup
 from .config import Settings
-from .db import connect, consume_budget
+from .db import connect, consume_budget, deterministic_id
 from .crawl_policy import LEGACY, KoreanNewsRobots, korean_news
 from .locks import host_lock
 from .util.timeutil import Clock, kst_now, kst_day
-from .util.urls import canonicalize, registrable_domain, is_collect_denied, is_denied, is_excluded, literal_private
+from .util.urls import (canonicalize, registrable_domain, is_collect_denied, is_denied, is_excluded,
+                        literal_private, same_fetch_target)
 from .util.pii import strip_pii
 from .util.hashing import content_hash
 
@@ -29,6 +30,10 @@ _CREDENTIAL_QUERY = frozenset({
 
 def _safe_public_query(url):
     return not any(key.casefold() in _CREDENTIAL_QUERY for key, _ in parse_qsl(urlsplit(unquote(url)).query))
+
+
+def _normalize_percent_case(value):
+    return re.sub(r'%[0-9A-Fa-f]{2}', lambda match: match[0].upper(), value)
 
 
 def _safe_transport_log(record):
@@ -53,6 +58,8 @@ class FetchResult:
     source_ref: dict = field(default_factory=dict)
     extractor_version: str = '1.0.0'
     retry_after: str | None = None
+    # Persistence uses the caller's URL normalization when it differs from the fetch URL.
+    identity_url: str = ''
     @property
     def text(self):
         return self.content.decode('utf-8',errors='replace')
@@ -124,7 +131,7 @@ class Fetcher:
         else:
             if is_denied(url,self.settings.profile['denied_domains']) or is_denied(url):
                 return 'denied host'
-            if is_excluded(url):
+            if is_excluded(url, unquote(url)):
                 return 'excluded'
         if literal_private(url):
             host=urlsplit(url).hostname
@@ -138,6 +145,29 @@ class Fetcher:
         # API query strings can contain a venue query. The URL stored in the
         # request ledger is restricted to the endpoint in facts-only mode.
         return bool(evidence_rejection(unquote(url.split('?', 1)[0] if kind == 'api' else url)))
+
+    def _audit_url(self, url, kind, *, preserve_encoding=False):
+        if kind == 'api' and getattr(self, 'facts_only', False):
+            url = url.split('?', 1)[0]
+        if preserve_encoding or self.public_scope:
+            decoded = unquote(url)
+            if strip_pii(decoded) == decoded:
+                return url
+        return strip_pii(url)
+
+    def _resolve_taskless_errors(self, *urls):
+        candidates = set(urls)
+        for url in urls:
+            try:
+                candidates.add(canonicalize(url))
+            except (ValueError, UnicodeError):
+                pass
+        with self._guard, self.db:
+            self.db.executemany(
+                "UPDATE failures SET state='resolved' "
+                "WHERE failure_id=? AND task_id IS NULL AND reason='error' AND state='pending'",
+                ((deterministic_id(self._audit_url(url, 'body'), None, 'error'),)
+                 for url in candidates))
 
     def _stop_scope(self,url):
         return (urlsplit(url).hostname or '').lower().rstrip('.') if self.policy.news_only else registrable_domain(url)
@@ -183,7 +213,6 @@ class Fetcher:
             with self.db:
                 if self.db.execute('SELECT 1 FROM tasks WHERE dedupe_key=?',(url,)).fetchone():
                     return False
-                from .db import deterministic_id
                 day=kst_day(self.clock)
                 used=self.db.execute("SELECT used FROM budgets_daily WHERE day=? AND kind='candidates'",(day,)).fetchone()
                 if (used[0] if used else 0)>=self.settings.candidate_cap:
@@ -192,7 +221,6 @@ class Fetcher:
                 self.db.execute("INSERT INTO tasks(task_id,dedupe_key,url,domain,task_class,kind,priority,novelty,source_quality,created_at,updated_at) VALUES (?,?,?,?,'discover','trial',0.35,1,0.5,?,?)",(deterministic_id(url),url,url,registrable_domain(url),kst_now(self.clock).isoformat(),kst_now(self.clock).isoformat()))
                 return True
     def _inaccessible(self,domain,reason):
-        from .db import deterministic_id
         self._stopped[domain]=reason
         with self._guard, self.db:
             self.db.execute("INSERT INTO sources(source_id,domain,state,reason) VALUES (?,?,'inaccessible',?) ON CONFLICT(domain) DO UPDATE SET state='inaccessible',reason=excluded.reason",(deterministic_id(domain),domain,reason))
@@ -243,8 +271,7 @@ class Fetcher:
                 if response is not None:
                     response.close()
                 with self._guard, self.db:
-                    logged_url = url.split('?', 1)[0] if kind == 'api' and getattr(self, 'facts_only', False) else url
-                    args=(strip_pii(logged_url),domain,kst_now(self.clock).isoformat(),status,kind,len(body))
+                    args=(self._audit_url(url,kind,preserve_encoding=True),domain,kst_now(self.clock).isoformat(),status,kind,len(body))
                     self.db.execute('''INSERT INTO request_log(url,domain,ts,status,kind,bytes,transfer_complete,run_id)
                                        VALUES (?,?,?,?,?,?,?,?)''', (*args, int(transfer_complete), self.run_id))
                     if audit_source:
@@ -318,7 +345,7 @@ class Fetcher:
                     with self._guard,self.db:
                         self.db.execute('INSERT OR REPLACE INTO robots_cache VALUES (?,?,?,?,?,?,?)',(origin,body,status,now.isoformat(),expires.isoformat(),int(allowed),'' if allowed else 'robots unavailable'))
                 if self.policy.news_only:
-                    parser=KoreanNewsRobots(body if allowed else 'User-agent: *\nDisallow: /')
+                    parser=KoreanNewsRobots(_normalize_percent_case(body) if allowed else 'User-agent: *\nDisallow: /')
                     delay=parser.delay
                 else:
                     parser=RobotFileParser()
@@ -326,7 +353,8 @@ class Fetcher:
                     delay=parser.crawl_delay(USER_AGENT) or parser.crawl_delay('*') or 0
                 self._delay[self._stop_scope(url)]=delay
                 self._robots[origin]=(expires,parser,allowed,status)
-            if not allowed or not parser.can_fetch(USER_AGENT,url):
+            robots_url = _normalize_percent_case(url) if self.policy.news_only else url
+            if not allowed or not parser.can_fetch(USER_AGENT,robots_url):
                 if mark_inaccessible:
                     self._inaccessible(self._stop_scope(url),'robots_disallowed')
                 elif status is None or 500<=status<600:
@@ -341,17 +369,25 @@ class Fetcher:
                             or urlsplit(url).scheme!='https' or not self.public_scope):
             raise ValueError('invalid_license_request')
         ref=dict(parent_url=strip_pii(parent_url) if parent_url else None,task_id=task_id if task_id and self.db.execute('SELECT 1 FROM tasks WHERE task_id=?',(task_id,)).fetchone() else None,discovered_via=strip_pii(discovered_via) if discovered_via else None)
-        def result(outcome,reason='',**kw):
-            audit_url = url.split('?', 1)[0] if kind == 'api' and getattr(self, 'facts_only', False) else url
-            decoded = unquote(audit_url)
-            safe_url = audit_url if self.public_scope and strip_pii(decoded) == decoded else strip_pii(audit_url)
-            if outcome not in ('ok','denied','cap_reached'):
-                from .db import deterministic_id
-                with self._guard,self.db:
-                    self.db.execute('INSERT INTO failures(failure_id,task_id,url,domain,reason,state,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(failure_id) DO NOTHING',
-                        (deterministic_id(safe_url,ref['task_id'],outcome),ref['task_id'],safe_url,registrable_domain(url),outcome,'dead' if outcome in ('blocked','login_wall','robots_disallowed') else 'pending',kst_now(self.clock).isoformat()))
-            return FetchResult(safe_url,outcome,reason=reason,fetched_at=kst_now(self.clock).isoformat(),source_ref=ref,**kw)
         preserve_path = preserve_path or subpage or self.policy.preserve_path
+        request_identity = None
+        def result(outcome,reason='',**kw):
+            identity_url = ''
+            if request_identity is not None:
+                identity_url = url if url == request_identity else canonicalize(url, preserve_path=preserve_path)
+                identity_url = self._audit_url(identity_url, kind)
+            if outcome not in ('ok','denied','cap_reached'):
+                safe_url = self._audit_url(url, kind)
+                with self._guard,self.db:
+                    self.db.execute("""INSERT INTO failures(failure_id,task_id,url,domain,reason,state,created_at)
+                        VALUES (?,?,?,?,?,?,?) ON CONFLICT(failure_id) DO UPDATE SET state='pending'
+                        WHERE failures.task_id IS NULL AND failures.reason='error' AND failures.state='resolved'""",
+                        (deterministic_id(safe_url,ref['task_id'],outcome),ref['task_id'],safe_url,registrable_domain(url),outcome,'dead' if outcome in ('blocked','login_wall','robots_disallowed') else 'pending',kst_now(self.clock).isoformat()))
+            elif outcome == 'ok' and kind == 'body' and ref['task_id'] is None:
+                self._resolve_taskless_errors(request_identity, identity_url, url)
+            effective_url = self._audit_url(url, kind, preserve_encoding=True)
+            return FetchResult(effective_url,outcome,reason=reason,fetched_at=kst_now(self.clock).isoformat(),source_ref=ref,identity_url=identity_url,**kw)
+
         try:
             if self.public_scope and (not _safe_public_query(url) or
                                       self._unsafe_public_url(url, kind)):
@@ -361,6 +397,7 @@ class Fetcher:
             url=canonicalize(url,preserve_path=preserve_path)
         except (ValueError,UnicodeError):
             return result('denied','invalid URL')
+        request_identity = url
         auth_origin=(urlsplit(url).scheme,urlsplit(url).netloc)
         initial_domain=registrable_domain(url)
         redirect_limit=2 if subpage else 5
@@ -388,7 +425,10 @@ class Fetcher:
                                 if kind != 'robots' and self.policy.robots(url) else (True,''))
                 if not allowed and reason=='robots_unavailable' and urlsplit(url).scheme=='http' and not https_probed:
                     https_probed=True
-                    upgraded=canonicalize(urlsplit(url)._replace(scheme='https').geturl(),preserve_path=preserve_path)
+                    try:
+                        upgraded=canonicalize(urlsplit(url)._replace(scheme='https').geturl(),preserve_path=True)
+                    except (ValueError,UnicodeError):
+                        return result('denied','invalid URL')
                     denied=self._reason_denied(upgraded)
                     if denied:
                         return result('denied',denied)
@@ -417,19 +457,25 @@ class Fetcher:
                 if 300<=status<400:
                     if status not in (301,302,303,307,308):
                         return result('error','redirect_status',status=status)
-                    if hop==redirect_limit or not response.headers.get('Location'):
+                    location=response.headers.get('Location')
+                    if not location:
                         return result('error','redirect limit',status=status)
                     try:
-                        destination=urljoin(url,response.headers['Location'])
+                        destination=urljoin(url,location)
                         if ((self.public_scope and (not _safe_public_query(destination) or
                                                       self._unsafe_public_url(destination, kind)))
                                 or (url_allowed and not url_allowed(destination))):
                             return result('denied','unsafe redirect',status=status)
-                        redirect=canonicalize(destination,preserve_path=preserve_path)
+                        # Keep the request path separate from its persistence identity.
+                        redirect=canonicalize(destination,preserve_path=True)
                     except (ValueError,UnicodeError):
-                        return result('denied','invalid redirect')
+                        return result('denied','invalid redirect',status=status)
                     if subpage and (urlsplit(redirect).scheme!='https' or registrable_domain(redirect)!=initial_domain):
                         return result('denied','unsafe subpage redirect',status=status)
+                    if same_fetch_target(redirect,url):
+                        return result('error','redirect_self_loop',status=status)
+                    if hop==redirect_limit:
+                        return result('error','redirect limit',status=status)
                     url=redirect
                     hop+=1
                     continue

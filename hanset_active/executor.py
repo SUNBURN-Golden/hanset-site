@@ -123,13 +123,17 @@ class Executor:
         saved = self.db.execute('SELECT cursor FROM run_checkpoints WHERE checkpoint_id=?',(checkpoint_id,)).fetchone() if task.get('task_id') else None
         if saved:
             raw = self.db.execute('SELECT * FROM raw_documents WHERE raw_id=?',(saved[0],)).fetchone()
-            if (self.facts_only and raw and raw['canonical_url'] in self.documents
-                    and task.get('kind') not in ('search', 'directory')
-                    and self.db.execute('SELECT 1 FROM active_evidence_ready WHERE raw_id=?', (saved[0],)).fetchone()):
-                return FetchResult(raw['canonical_url'], 'ok')
-            if not self.facts_only and raw and raw['blob_path'] and Path(raw['blob_path']).is_file():
-                return FetchResult(raw['url'],'ok',status=raw['http_status'],content=Path(raw['blob_path']).read_bytes(),
-                    content_type=raw['content_type'],content_hash=raw['content_hash'],fetched_at=raw['fetched_at'],fetch_method=raw['fetch_method'])
+            if raw:
+                identity_url = raw['canonical_url']
+                effective_url = raw['url'] or identity_url
+                if (self.facts_only and (effective_url in self.documents or identity_url in self.documents)
+                        and task.get('kind') not in ('search', 'directory')
+                        and self.db.execute('SELECT 1 FROM active_evidence_ready WHERE raw_id=?', (saved[0],)).fetchone()):
+                    return FetchResult(effective_url, 'ok', identity_url=identity_url)
+                if not self.facts_only and raw['blob_path'] and Path(raw['blob_path']).is_file():
+                    return FetchResult(effective_url,'ok',status=raw['http_status'],content=Path(raw['blob_path']).read_bytes(),
+                        content_type=raw['content_type'],content_hash=raw['content_hash'],fetched_at=raw['fetched_at'],
+                        fetch_method=raw['fetch_method'],identity_url=identity_url)
         result = self._original_fetch(url, kind=kind, _browser_shell=True,
             parent_url=task.get('parent_url'), task_id=task.get('task_id'),
             discovered_via=task.get('discovered_via'), **kwargs)
@@ -174,15 +178,15 @@ class Executor:
             return
         task = self.task or {}
         unavailable = doc.get('status') in ('unavailable', 'not_notice')
+        identity_url = result.identity_url or result.url
         domain = registrable_domain(result.url)
         now = kst_now(self.clock).isoformat()
         source_id = deterministic_id(domain)
         raw_hash = result.content_hash or content_hash(result.content, result.content_type)
-        raw_id = deterministic_id(result.url, raw_hash)
         if self.facts_only:
             # Keep legacy captures and observation IDs intact.
             raw_hash = deterministic_id('facts-only-v1', raw_hash)
-            raw_id = deterministic_id(result.url, raw_hash)
+        raw_id = deterministic_id(identity_url, raw_hash)
         # Legacy manual collection retains its existing storage format.
         blob, blob_path = b'', None
         if not self.facts_only:
@@ -201,7 +205,7 @@ class Executor:
         page_type = items[0]['value']
         with self.db:
             self.db.execute('INSERT OR IGNORE INTO raw_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                (raw_id,result.url,result.url,domain,result.fetched_at or now,result.status,result.content_type,raw_hash,len(blob),str(blob_path) if blob_path else None,source_id,task.get('parent_url'),task.get('task_id'),result.fetch_method,doc['extractor_version'],'ok'))
+                (raw_id,result.url,identity_url,domain,result.fetched_at or now,result.status,result.content_type,raw_hash,len(blob),str(blob_path) if blob_path else None,source_id,task.get('parent_url'),task.get('task_id'),result.fetch_method,doc['extractor_version'],'ok'))
             self.db.execute('INSERT OR IGNORE INTO extractions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (eid,raw_id,doc['extractor'],doc['extractor_version'],page_type,doc.get('lang'),'' if self.facts_only else doc.get('title',''),content_hash(text),
                  '{}' if self.facts_only else json.dumps({**doc.get('structured',{}),'_active_page':page},ensure_ascii=False),
@@ -247,9 +251,9 @@ class Executor:
                 seed_domains=[r[0] for r in self.db.execute('SELECT domain FROM seed_domains')])
             with self.db:
                 self.db.execute('INSERT INTO sources(source_id,domain,url,state,reason,quality,first_seen_at,last_seen_at) VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(domain) DO UPDATE SET state=excluded.state,reason=excluded.reason,quality=excluded.quality,last_seen_at=excluded.last_seen_at',
-                    (source_id,domain,result.url,scores['decision'],scores['reason'],scores['total'],now,now))
+                    (source_id,domain,identity_url,scores['decision'],scores['reason'],scores['total'],now,now))
                 self.db.execute('INSERT OR IGNORE INTO source_trials VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-                    (deterministic_id(source_id,result.url),source_id,result.url,*(scores[k] for k in ('relevance','novelty','extractability','original','total','decision','reason')),now))
+                    (deterministic_id(source_id,identity_url),source_id,identity_url,*(scores[k] for k in ('relevance','novelty','extractability','original','total','decision','reason')),now))
             source = self.db.execute('SELECT * FROM sources WHERE domain=?',(domain,)).fetchone()
         if rejected_directory:
             return None if self.facts_only else raw_id
@@ -294,7 +298,7 @@ class Executor:
                         for tid in followups(self.db,venue,gap['field'],[page],strategy=strategy,clock=self.clock):
                             gaps.record_attempt(self.db,gap['gap_id'],strategy,task_id=tid,url=tid,state='pending',clock=self.clock)
         if doc['extractor'] in ('html','browser'):
-            self.check_structure(source_id,urlsplit(result.url).path or '/',raw_id,result.content,{e['field'] for e in evidence},page)
+            self.check_structure(source_id,urlsplit(identity_url).path or '/',raw_id,result.content,{e['field'] for e in evidence},page)
         state = source['state']
         if state == 'registered' and not directory_detail:
             links.discover(self.context,doc,parent_url=result.url,venue_id=venue['venue_id'] if venue else None,depth=task.get('depth',0),source_state=state)
@@ -419,7 +423,8 @@ class Executor:
                 if result.reason == 'excluded': return
                 terminal = result.outcome in ('blocked','login_wall','robots_disallowed','denied')
                 raise TaskFailure(result.outcome,terminal=terminal,retry_after=result.retry_after)
-            if result.url not in self.documents and result.reason != 'excluded': return
+            if (result.url not in self.documents and result.identity_url not in self.documents
+                    and result.reason != 'excluded'): return
         with self.db:
             self.db.execute("UPDATE gap_attempts SET state='done' WHERE task_id=?",(task['task_id'],))
         for row in self.db.execute('SELECT DISTINCT venue_id FROM gaps').fetchall(): self.update_gaps(row[0])
