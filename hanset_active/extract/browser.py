@@ -73,7 +73,8 @@ def fetch(fetcher, url: str) -> FetchResult:
             def route_request(route):
                 request=route.request
                 document=_document_request(request)
-                if proxy and not document and getattr(request,'resource_type','') in HEAVY_RESOURCES:
+                if (not document and getattr(request, 'resource_type', '') in HEAVY_RESOURCES
+                        and (proxy or getattr(fetcher, 'facts_only', False))):
                     # Images, fonts, and media never cross the metered proxy.
                     _drop_request(route); return
                 if request.method!='GET':
@@ -111,9 +112,9 @@ def fetch(fetcher, url: str) -> FetchResult:
                 return FetchResult(strip_pii(url),failure[0] if failure else 'error',reason='render failed',fetch_method=NAME)
             if failure:
                 return FetchResult(strip_pii(url),failure[0],fetch_method=NAME)
-            if is_excluded(body.decode()):
+            if not getattr(fetcher, 'public_scope', False) and is_excluded(body.decode()):
                 return FetchResult(strip_pii(url),'denied',reason='excluded',fetch_method=NAME)
-            outcome=detect_outcome(body,'text/html',200)
+            outcome=detect_outcome(body,'text/html',200,public_scope=getattr(fetcher, 'public_scope', False))
             return FetchResult(strip_pii(url),outcome,status=200,content=body if outcome=='ok' else b'',content_type='text/html',content_hash=content_hash(body,'text/html') if outcome=='ok' else '',fetch_method=NAME,fetched_at=kst_now(fetcher.clock).isoformat())
         finally:
             browser.close()

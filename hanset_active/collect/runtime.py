@@ -121,7 +121,7 @@ def complete_web(db, day, key, disposition):
         db.execute('DELETE FROM extraction_retries WHERE requested_url=?', (key,))
 
 
-def retry_web(db, row, clock, reason):
+def retry_web(db, row, clock, reason, *, delay=0):
     from hanset_active.util.urls import canonicalize
 
     fetch_url = canonicalize(row['url'], preserve_path=True)
@@ -130,4 +130,4 @@ def retry_web(db, row, clock, reason):
             (requested_url, venue_id, venue_key, content_hash, reason, retry_at, parent_url, fetch_url)
             VALUES (?,?,?,?,?,?,?,?)''',
             (row['requested_url'], row['venue_id'], row['venue_key'], row.get('content_hash'), reason,
-             kst_now(clock).isoformat(), row.get('parent_url'), fetch_url))
+             (kst_now(clock) + timedelta(seconds=delay)).isoformat(), row.get('parent_url'), fetch_url))

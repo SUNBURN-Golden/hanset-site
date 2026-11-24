@@ -15,6 +15,7 @@ def _env(tmp_path, ig):
     for name in ('DEEPSEEK_API_KEY', 'TAVILY_API_KEY', 'HANSET_DEEPSEEK_MODEL', 'HANSET_IG_SESSION'):
         env.pop(name, None)
     env['PATH'] = str(tmp_path / 'bin') + os.pathsep + env['PATH']
+    env['HANSET_DATA_DIR'] = str(tmp_path)
     env['HANSET_IG_DIR'] = str(ig)
     env['HANSET_ACTIVE_DIR'] = str(tmp_path / 'active')
     env['HANSET_TWIN_DIR'] = str(tmp_path / 'twin')
@@ -30,7 +31,9 @@ def _fake_python(tmp_path):
     program = bindir / 'python3'
     program.write_text(
         '#!' + sys.executable + '\n'
-        'import os, time\n'
+        'import os, sys, time\n'
+        "if sys.argv[2:3] == ['hanset_active.collect.scheduled'] and '--payload' not in sys.argv:\n"
+        '    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])\n'
         'from pathlib import Path\n'
         "key = os.environ.get('DEEPSEEK_API_KEY', '')\n"
         "expect = os.environ.get('EXPECT_KEY', '')\n"

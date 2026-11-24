@@ -110,6 +110,15 @@ has its own CLI and operational state. The operations runbook covers the
 external `HANSET_ACTIVE_DIR` and normal operation. The collector runbook
 covers the `collect` subcommands. [Operations runbook](docs/active-bot/RUNBOOK.md#commands) · [Collector runbook](docs/active-bot/COLLECTOR.md#commands)
 
+After merge, operations can preview the KST cron additions with
+`scripts/install_collect_crons.sh --dry-run` and apply them with
+`scripts/install_collect_crons.sh` once the publication handoff is confirmed.
+Use `--uninstall --dry-run` to preview removal and `--uninstall` to remove
+the managed entries. The existing 04:15 collection, active, twin and Linux
+crawler entries stay in the crontab. Read the latest appended metrics line
+with `tail -n 1 /workspace/hanset-data/metrics/collect-daily.jsonl`.
+[Scheduler and metrics runbook](docs/active-bot/RUNBOOK.md#cron)
+
 From the repository root, use a Python 3.11+ test environment. On Linux, use
 Bash and `flock` for cron coverage, `pdftotext` from Poppler for PDF coverage,
 and Tesseract with English and Korean language data for OCR coverage.

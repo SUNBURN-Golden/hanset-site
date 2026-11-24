@@ -405,7 +405,7 @@ def validated_authorization(url, final, authorization, domains, *, testing=False
 
 def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key, seen_at,
            clock=None, source_type=None, requested_url=None, final_url=None,
-           authorization=None, domains=(), hash_version=None, testing=False):
+           authorization=None, domains=(), hash_version=None, testing=False, facts_only=False):
     """Insert one receipt and its grounded claims, or return the existing receipt."""
     credentials = secrets()
     if kind not in ('web', 'instagram') or not _valid_hash(text_hash):
@@ -466,6 +466,11 @@ def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key
             locator_json = (json.dumps({'char_offsets': locator}) if isinstance(locator, list)
                             and len(locator) == 2 and all(type(n) is int for n in locator)
                             and 0 <= locator[0] < locator[1] else None)
+            if facts_only:
+                locator_json = json.dumps({**json.loads(locator_json or '{}'),
+                                           'grounding': {'version': 1, 'span_hash': digest(claim['quote']),
+                                                         'value_literal': isinstance(claim['value'], str)
+                                                         and claim['value'] in claim['quote']}})
             db.execute(
                 """INSERT INTO claims (
                     claim_id, receipt_id, venue_id, venue_key, field, value_json, quote,
@@ -473,7 +478,7 @@ def record(db, *, kind, url, text_hash, disposition, claims, venue_id, venue_key
                     content_hash, evidence_origin, evidence_role, verbatim_source, locator_json
                 ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (claim_id, receipt_id, venue_id, venue_key, claim['field'],
-                 json.dumps(claim['value'], ensure_ascii=False, sort_keys=True), claim['quote'],
+                 json.dumps(claim['value'], ensure_ascii=False, sort_keys=True), '' if facts_only else claim['quote'],
                  url, kind, source_type, 'source_claim', 'internal_review_only', claim['rule_id'],
                  seen_at, text_hash, origin, role, verbatim, locator_json))
         db.commit()

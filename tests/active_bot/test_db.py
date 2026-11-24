@@ -9,7 +9,7 @@ def test_schema_and_idempotent_migration(tmp_path):
     migrate(db); migrate(db)
     assert db.execute('PRAGMA journal_mode').fetchone()[0]=='wal'
     assert db.execute('PRAGMA foreign_keys').fetchone()[0]==1
-    assert db.execute('SELECT count(*) FROM schema_version').fetchone()[0]==3
+    assert db.execute('SELECT count(*) FROM schema_version').fetchone()[0]==4
     tables={r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert set('raw_documents fetch_log extractions labels observations venues venue_aliases venue_links venue_fields field_changes confirmations seed_venues seed_domains sources source_trials tasks gaps gap_attempts review_queue failures runs run_checkpoints run_lease structure_baselines structure_alerts budgets_daily request_log robots_cache provider_state taxonomy_candidates'.split())<=tables
     db.close()

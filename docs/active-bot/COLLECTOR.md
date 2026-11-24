@@ -303,42 +303,69 @@ HANSET_TWIN_DIR=/workspace/hanset-data/twin \
 bash scripts/run_collect_cron.sh
 ```
 
-That is the web run. It loads `deepseek.env` when the file is present, takes
-`cron.lock`, and runs `python3 -m hanset_active collect web` for at most 25
-minutes. A second overlapping run logs `already_running` and exits 0.
-`collect status` prints the last public status and does not collect.
+The wrapper loads the private `deepseek.env` when present and supervises the
+04:15 KST web job. Collection holds the existing overlap locks and has a
+25-minute timeout. The wide invocation uses the same web service and
+completion ledger, reads the live target set, and picks up new targets and
+due retries. The wide wrapper sets up the review handoff when
+`HANSET_AUTO_PUBLISH=1` and operations readiness is present. Keep the
+existing 04:15 line and use the managed installer after merge.
+[Scheduler, stamps and daily metrics](RUNBOOK.md#cron)
 
-Exit 0 is only `done`, `already_complete`, `already_running`, or idle status.
-`done` with `collected: false` finished without a new claim (robots refusal or
-an empty extraction, for example). Exit 2 means the run did not finish that
-way, for example because of a missing key, invalid targets, shared-lock deferral, or a model error.
-
-The cron line is not installed by this change. After review, an operator on a
-host whose cron timezone is Asia/Seoul can add:
-
-```cron
-15 4 * * * HANSET_IG_DIR=/workspace/hanset-data/ig HANSET_ACTIVE_DIR=/workspace/hanset-data/active HANSET_TWIN_DIR=/workspace/hanset-data/twin /workspace/hanset-site/scripts/run_collect_cron.sh
-```
-
-The variables name existing directories. They are not secret. Do not put
-`DEEPSEEK_API_KEY` in the crontab. Confirm the host timezone before enabling
-the line. Web collection is not restricted to 13:00 KST. If the active
-collector is inside its own run, this job returns `active_busy` and can be
-repeated later. It does not start Instagram.
-
-Direct inspection without the wrapper, when the key is already in the
-environment:
+The direct CLI remains available for manual web runs and status inspection.
 
 ```sh
 python3 -m hanset_active collect web
 python3 -m hanset_active collect status
 ```
 
+## Operations publication handoff
+
+Operations first verifies the v1 contract against the actual consumer in a
+non-publishing check. After confirmation, operations owns
+`/workspace/hanset-data/publication/v1/readiness.json` with integer
+`schema_version` equal to 1, a nonempty `consumer_version`,
+`non_publishing_check` equal to `passed`, and a timezone-aware
+`confirmed_at`. The installer requires this file to enable the added
+schedule. The watchdog skips wide dispatch when readiness is missing or
+invalid.
+
+The collector stages immutable review artifacts under
+`generations/<generation_digest>/`, using the SHA-256 of the manifest as the
+generation digest. Each manifest identifies the artifact hashes and sizes.
+After a durable collection checkpoint, the collector exposes
+`requests/<request_id>.json` with `schema_version`, `request_id`, KST
+`slot`, `generation_digest`, and sorted unique `change_ids`. Job, slot,
+and generation determine the request ID. Replay reuses that ID. A completed
+wide run stamps after a verified no-change outcome or durable request
+exposure. A saved checkpoint can finish an interrupted exposure for its
+original slot.
+
+Operations verifies the generation and rechecks current official-source
+confirmation, source URL, checked date, site venue mapping, and review holds.
+Independent-source agreement qualifies internal facts only. A durable
+operations ledger keyed by stable `change_id` keeps overlapping requests
+attached to their existing dispositions or in-flight releases. Release
+retries use new deployment attempt IDs under operations control. Site
+publication stays with the operations bot.
+[Official web evidence and review exports](OFFICIAL_WEB_CHANGES.md)
+
+Operations writes immutable terminal receipts under
+`receipts/<KST completion date>/<request_id>/<record>.json`, using a
+distinct record name for each deployment attempt. The receipt binds
+`schema_version`, `request_id`, and `generation_digest` to
+`deployment_attempt_id`, `status` (`deployed` or `failed`), and
+timezone-aware `completed_at` and `recorded_at`. The latter is the durable
+recording time. Pending and no-change dispositions also bind to the
+request and generation and carry no deployment attempt ID or count. Request replay and multiple receipts referring to a single terminal
+attempt count once.
+
 ## Optional web proxy recovery
 
-Only collect-web fetches use `HANSET_WEB_PROXY`, a loopback SOCKS5 URL.
-When configured, preflight runs under the collector process lock, after
-planning/search and before the active fetch lock and `Fetcher` construction.
+Public collector fetches can use `HANSET_WEB_PROXY`, a loopback SOCKS5 URL.
+Collect-web preflight runs under the collector process lock before constructing
+the fetcher. Scheduled active and seed fetches also fall back to the direct
+connection on a confirmed transport outage.
 Every retry probes the same configured proxy. If the final probe reports
 `proxy_unavailable`, the run fetches directly. A wrong exit IP stops the run
 with `proxy_exit_mismatch`. Invalid proxy configuration stops it with

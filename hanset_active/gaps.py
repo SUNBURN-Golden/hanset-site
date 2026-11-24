@@ -160,10 +160,10 @@ def resolve(db,gap_id,pages=(), *, exhausted=False,clock=None):
         successful={p['url']:p for p in own if p.get('outcome')=='ok' and p.get('relevant',True)}
         def cue(page):
             text=page.get('text','')
-            return page.get('unavailable',False) or page.get('needs_extractor_review',False) or any(re.search(re.escape(k)+r'.{0,120}(?:\d|yes|no|있|없|가능|불가)',text,re.I|re.S) for k in keywords)
+            return page.get('unavailable',False) or page.get('needs_extractor_review',False) or gap['field'] in page.get('field_cues', ()) or any(re.search(re.escape(k)+r'.{0,120}(?:\d|yes|no|있|없|가능|불가)',text,re.I|re.S) for k in keywords)
         if any(p.get('unavailable') or p.get('unextracted_attachment') or p.get('needs_extractor_review') for p in own) or any(cue(p) for p in successful.values()): state='not_extracted';reason='field cue without rule evidence'
         elif own and all(p.get('outcome') in ('blocked','robots_disallowed','login_wall','error','inaccessible') for p in own): state='inaccessible';reason='all candidates inaccessible'
-        elif len(successful)>=3 and any(p.get('counterpart') for p in successful.values()) and any(p.get('attachment') for p in successful.values()) and not any(any(k.casefold() in p.get('text','').casefold() for k in keywords) for p in successful.values()): state='absent_in_source';reason='relevant source coverage exhausted'
+        elif len(successful)>=3 and any(p.get('counterpart') for p in successful.values()) and any(p.get('attachment') for p in successful.values()) and not any(gap['field'] in p.get('field_mentions', ()) or any(k.casefold() in p.get('text','').casefold() for k in keywords) for p in successful.values()): state='absent_in_source';reason='relevant source coverage exhausted'
         else: state='open';reason='insufficient source coverage'
     with db:
         db.execute('UPDATE gaps SET state=?,evidence_url=?,obs_id=?,reason=?,next_at=?,updated_at=? WHERE gap_id=?',(state,evidence,obs_id,reason,(kst_now(clock)+timedelta(days=refresh_days(gap['field']))).isoformat() if state!='open' else None,kst_now(clock).isoformat(),gap_id))

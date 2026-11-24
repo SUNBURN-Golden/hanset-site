@@ -9,14 +9,9 @@ from hanset_active.extract import html as html_rules
 from hanset_active.db import deterministic_id
 from hanset_active.extract import fields as field_rules
 from hanset_active.util.pii import strip_pii
-from hanset_active.util.urls import is_denied, registrable_domain, canonicalize
-from hanset_active.util.followups import portal_domains
-from functools import lru_cache
-
-@lru_cache(maxsize=1)
-def _portals():
-    """Directory/aggregator domains: never a venue's own site."""
-    return frozenset(portal_domains())
+from hanset_active.util.urls import is_collect_denied, is_denied, registrable_domain, canonicalize
+from hanset_active.extract.validation import (ACTIVE_VALIDATION_VERSION, _roundup_section,
+                                              page_verdict, portals as _portals)
 
 def _own_site(url):
     return '' if url and registrable_domain(url) in _portals() else (url or '')
@@ -43,13 +38,16 @@ def discover(ctx, cursor):
     """Register sources with rights/coverage, and candidate branches from both origins."""
     db, at = ctx.db, onto.now_iso(ctx.clock)
     n = 0
+    structured = getattr(ctx, 'structured_only', False)
+    denied = is_collect_denied if structured else is_denied
     if ctx.active is not None:
         for s in ctx.active.execute('SELECT domain, state, source_type, reason FROM sources'):
-            supported = int(s['state'] in ('registered', 'deprioritized') and not is_denied('https://' + s['domain']))
+            supported = int(s['state'] in ('registered', 'deprioritized') and not denied('https://' + s['domain']))
             db.execute('INSERT OR REPLACE INTO source_rights VALUES (?,?,?,?,?,?,?,?,?)',
                 (s['domain'], s['source_type'], json.dumps(['name', 'address', 'website', 'hours', 'closures', 'price_day_pass',
                  'bath_composition', 'sauna_temp_c', 'cold_bath_temp_c', 'rapid_cold_plunge', 'foreigner_policy', 'tattoo_policy']),
-                 'public_page_factual', 7, 'facts: keep history; quotes: 365 days; raw HTML stays in active store', supported,
+                 'public_page_factual', 7, ('facts and validation metadata' if getattr(ctx, 'structured_only', False)
+                                          else 'facts: keep history; quotes: 365 days; raw HTML stays in active store'), supported,
                  None if supported else f"state={s['state']}", at))
         for v in ctx.active.execute('SELECT venue_key, name, name_ko, website, city FROM venues'):
             if _owner_excluded(v['name'], v['name_ko'], v['website']):
@@ -57,6 +55,8 @@ def discover(ctx, cursor):
             db.execute('INSERT OR IGNORE INTO candidate_branches(subject_ref,name,name_ko,website,city,origin,updated_at) VALUES (?,?,?,?,?,?,?)',
                        ('active:' + v['venue_key'], v['name'], v['name_ko'], v['website'], v['city'], 'active_store', at)); n += 1
     for domain, note in SUPPORTED_NOTE.items():
+        if structured and domain != 'instagram.com':
+            continue
         db.execute('INSERT OR REPLACE INTO source_rights VALUES (?,?,?,?,?,?,?,?,?)',
                    (domain, 'sns' if 'instagram' in domain else 'third_party', '[]', 'none', None, 'not stored', 0, note, at))
     if ctx.csv_path.exists():
@@ -85,15 +85,32 @@ def incremental_fetch(ctx, cursor):
     db, at, n = ctx.db, onto.now_iso(ctx.clock), 0
     cur = json.loads(cursor) if cursor else {'fetched_at': ''}
     if ctx.active is not None:
-        rows = ctx.active.execute('''SELECT DISTINCT d.raw_id, d.canonical_url, d.url, d.fetched_at, d.content_hash FROM raw_documents d
-            JOIN observations o ON o.raw_id=d.raw_id WHERE d.outcome='ok' AND d.fetched_at>? ORDER BY d.fetched_at, d.raw_id''',
-            (cur['fetched_at'],)).fetchall()
+        structured = getattr(ctx, 'structured_only', False)
+        if structured and not ctx.active.execute(
+            "SELECT 1 FROM sqlite_master WHERE name='active_evidence_ready'").fetchone():
+            # The older store has no scheduled evidence to ingest.
+            rows = []
+        elif structured:
+            rows = ctx.active.execute('''SELECT DISTINCT d.raw_id, d.canonical_url, d.url, d.fetched_at,
+                       d.content_hash, coalesce(r.recorded_at,d.fetched_at) AS visible_at
+                FROM raw_documents d JOIN observations o ON o.raw_id=d.raw_id
+                JOIN active_evidence_ready r ON r.raw_id=d.raw_id
+                WHERE d.outcome='ok'
+                  AND (coalesce(r.recorded_at,d.fetched_at),d.raw_id)>(?,?)
+                ORDER BY visible_at,d.raw_id''',
+                (cur.get('visible_at', cur['fetched_at']), cur.get('raw_id', ''))).fetchall()
+        else:
+            rows = ctx.active.execute('''SELECT DISTINCT d.raw_id, d.canonical_url, d.url, d.fetched_at,
+                       d.content_hash, d.fetched_at AS visible_at FROM raw_documents d
+                JOIN observations o ON o.raw_id=d.raw_id WHERE d.outcome='ok' AND d.fetched_at>?
+                ORDER BY d.fetched_at, d.raw_id''', (cur['fetched_at'],)).fetchall()
         for r in rows:
-            if is_denied(r['canonical_url']):
+            if (is_collect_denied if structured else is_denied)(r['canonical_url']):
                 continue
             db.execute('INSERT OR IGNORE INTO work_items VALUES (?,?,?,?,?,?,NULL,?,?)',
                        (r['raw_id'], 'active_store', r['canonical_url'], r['url'] or r['canonical_url'], r['fetched_at'], r['content_hash'], _seq(db), at))
-            cur['fetched_at'] = r['fetched_at']; n += 1
+            cur.update(fetched_at=r['fetched_at'], visible_at=r['visible_at'], raw_id=r['raw_id'])
+            n += 1
     if ctx.csv_path.exists():
         for i, row in enumerate(csv.DictReader(ctx.csv_path.open(encoding='utf-8-sig'))):
             if _excluded(row):
@@ -229,124 +246,76 @@ def _extract_csv_item(db, w, line, row):
             add('min_age', int(m[1] or m[2]), 'years', 'fact', text[max(0, m.start()-40):m.end()+40][:240],
                 {**base, 'column': col, 'char_offsets': [m.start(), m.end()]}, f'csv:{line}:{col}:age:{m.start()}')
 
-_EVIDENCE_FIELDS = set(('foreigner_policy tattoo_policy bath_composition hours closures price_day_pass '
-                        'cold_bath_temp_c sauna_temp_c rapid_cold_plunge min_age access_policy').split())
-
-def _policy_page(url, title=''):
-    from urllib.parse import unquote
-    return bool(re.search(r'privacy|policy|terms|약관|개인정보', unquote(urlsplit(url).path) + ' ' + title, re.I))
-
-
-def _roundup_section(doc, url, quote):
-    """Return the local section (or None for a non-roundup document)."""
-    text = doc['text']
-    headings = doc['structured'].get('headings', [])
-    starts = {0}
-    for heading in headings:
-        starts.update(m.start() for m in re.finditer(r'(?m)^' + re.escape(heading) + r'$', text))
-    labels = list(re.finditer(r'(?im)^.*?(?:영업시간|운영시간|opening hours)\s*[:：]', text))
-    # Portals also use paragraph labels rather than semantic HTML headings.
-    preceding = []
-    for label in labels:
-        prefix = text[:label.start()].rstrip()
-        line = prefix.split('\n')[-1] if prefix else ''
-        if line:
-            preceding.append((len(prefix) - len(line), line))
-    roundup = bool(re.search(r'editors-?picks|/list|best', urlsplit(url).path, re.I)) or len({line for _, line in preceding}) >= 2
-    if not roundup:
-        return None
-    if len(starts) == 1:
-        starts.update(offset for offset, _ in preceding)
-    boundaries = sorted(starts) + [len(text)]
-    # Reject ambiguous repeated quotes unless every occurrence belongs to the same section.
-    locations = [m.start() for m in re.finditer(re.escape(quote), text)] if quote else []
-    sections = {(a, b) for at in locations for a, b in zip(boundaries, boundaries[1:]) if a <= at < b}
-    if len(sections) != 1:
-        return ''
-    a, b = sections.pop()
-    at = locations[0]
-    return text[max(a, at - 600):b]
-
-
 def _active_obs_verdict(ctx, obs, raw, venue):
     if raw is None:
         return 'raw_unavailable'
     url = raw['canonical_url'] or raw['url'] or ''
-    path = urlsplit(url).path.lower()
-    ct = (raw['content_type'] or '').lower()
-    if any(t in ct for t in ('text/css', 'javascript', 'font', 'image')) or re.search(r'\.(css|js|mjs|woff2?|ttf|svg|png|jpe?g|gif|webp|ico)$', path):
-        return 'asset_document'
-    if obs['field'] in ('hours', 'closures', 'price_day_pass') and (any(t in ct for t in ('rss', 'atom', 'xml')) or re.search(r'\.(xml|rss|atom)$|feed', path)):
-        return 'feed_post_not_current'
     cache = ctx._active_docs
     if raw['raw_id'] not in cache:
         try:
             cache[raw['raw_id']] = html_rules.extract(Path(raw['blob_path']).read_bytes(), url)
         except (OSError, TypeError):
             cache[raw['raw_id']] = None
-    doc = cache[raw['raw_id']]
-    if doc is None:
-        return 'raw_unavailable'
-    if obs['field'] == 'website':
-        value = json.loads(obs['value_json']) if obs['value_json'] else ''
-        if not isinstance(value, str) or _policy_page(value) or registrable_domain(value) in _portals() or _policy_page(url, doc['title']):
-            return 'not_venue_website'
-    if obs['field'] == 'hours' and _policy_page(url, doc['title']):
-        return 'policy_page'
-    section = _roundup_section(doc, url, obs['quote'] or '')
-    if section is not None:
-        norm = lambda t: ''.join(c for c in (t or '').casefold() if c.isalnum())
-        names = [norm(venue[k]) for k in ('name', 'name_ko') if venue is not None and norm(venue[k])]
-        # Only preceding local context establishes ownership; later venues cannot lend their name.
-        prefix = section.split(obs['quote'], 1)[0] if obs['quote'] else ''
-        if not any(n in norm(prefix + (obs['quote'] or '')) for n in names):
-            return 'roundup_other_section'
-    if venue is not None:
-        domains = {registrable_domain(d if '://' in d else 'https://' + d) for d in json.loads(venue['domains'] or '[]')}
-        if venue['website']:
-            domains.add(registrable_domain(venue['website']))
-        domains -= _portals()  # portal pages count only when their title names the venue
-        norm = lambda t: ''.join(c for c in (t or '').casefold() if c.isalnum())
-        names = [norm(venue[k]) for k in ('name', 'name_ko') if norm(venue[k])]
-        if section is None and registrable_domain(url) not in domains and not any(n in norm(doc['title']) for n in names):
-            return 'off_topic_page'
-    quote = obs['quote'] or ''
-    if obs['field'] in ('foreigner_policy', 'tattoo_policy') and field_rules.USER_REVIEW.search(quote):
-        return 'user_review_text'
-    if obs['field'] == 'hours' and field_rules.BREAK_CUE.search(quote):
-        value = json.loads(obs['value_json']) if obs['value_json'] else {}
-        for m in re.finditer(r'\b\d{1,2}:\d{2}\s*[~–—-]\s*\d{1,2}:\d{2}', quote):
-            hours = '-'.join(f'{int(h):02d}:{minute}' for h, minute in re.findall(r'(\d{1,2}):(\d{2})', m[0]))
-            if hours == value.get('hours') and field_rules.BREAK_CUE.search(field_rules.hours_prefix(quote, m.start())):
-                return 'break_hours'
-    if obs['field'] == 'hours' and re.search(r'maintenance|점검|정기\s*청소', obs['quote'] or '', re.I):
-        return 'maintenance_window'
-    if obs['field'] == 'hours' and field_rules.TRANSPORT_CUE.search(obs['quote'] or '') and \
-            not any(r['field'] == 'hours' for r in field_rules.extract(obs['quote'] or '')):
-        return 'transport_hours'
-    if obs['field'] in _EVIDENCE_FIELDS:
-        norm_quote = lambda t: re.sub(r'[\s|]+', '', t or '')
-        tables = '\n'.join(' '.join(cells) for table in doc['structured']['tables'] for cells in table)
-        quote = norm_quote(obs['quote'])
-        if not quote or quote not in norm_quote(doc['text'] + '\n' + tables):
-            return 'quote_not_in_main_text'
-    if obs['field'] in ('bath_composition', 'hours', 'closures', 'foreigner_policy',
-                        'tattoo_policy', 'rapid_cold_plunge', 'cold_bath_temp_c', 'sauna_temp_c'):
-        expected_field = obs['field']
-        value = json.loads(obs['value_json']) if obs['value_json'] else None
-        if expected_field == 'hours' and isinstance(value, dict) and value.get('hours') == 'open_every_day':
-            expected_field = 'closures'
-        current = [row for row in field_rules.extract(obs['quote'] or '') if row['field'] == expected_field]
-        if not current:
-            return 'rule_no_longer_matches'
-        # Scalar policies: an observation stored by an older rule version must still give the same value.
-        if expected_field in ('tattoo_policy', 'foreigner_policy') and not any(row['value'] == value for row in current):
-            return 'value_no_longer_matches'
+    return page_verdict(obs, cache[raw['raw_id']], url, raw['content_type'], venue, portal_domains=_portals())
+
+
+def _validation_metadata(locator):
+    try:
+        data = json.loads(locator or '{}')
+        saved = data.get('validation') if isinstance(data, dict) else None
+        if (isinstance(saved, dict) and saved.get('version') == ACTIVE_VALIDATION_VERSION
+                and 'reason' in saved and re.fullmatch(r'[0-9a-f]{64}', saved.get('evidence_hash', ''))):
+            return saved
+    except (TypeError, ValueError):
+        pass
     return None
+
+
+def _has_validated_evidence(locator):
+    validation = _validation_metadata(locator)
+    return validation is not None and validation['reason'] is None
+
+
+def _stored_validation(observation):
+    saved = _validation_metadata(observation['locator'])
+    if saved is not None:
+        return saved
+    return {'reason': 'validation_missing', 'section': None}
+
+
+def _extract_structured_item(ctx, w, observations):
+    groups = {}
+    for obs in observations:
+        validation = _stored_validation(obs)
+        if obs['field'] == 'bath_composition' and not validation['reason']:
+            groups.setdefault((obs['venue_key'], validation['section']), set()).update(json.loads(obs['value_json']))
+    for obs in observations:
+        validation = _stored_validation(obs)
+        field, value = obs['field'], json.loads(obs['value_json'] or 'null')
+        if field == 'bath_composition':
+            value = sorted(groups.get((obs['venue_key'], validation['section']), value or []))
+        if field == 'hours' and isinstance(value, dict) and value.get('hours') == 'open_every_day':
+            field, value = 'closures', '연중무휴'
+        locator = {'validation': validation}
+        _add_candidate(ctx.db, w, 'active:' + obs['venue_key'], field, value, obs['unit'],
+                       obs['label_status'], obs['source_type'], obs['source_url'], None, locator,
+                       obs['obs_id'], w['fetched_at'])
+        if validation['reason']:
+            cid = deterministic_id('cand', w['item_id'], obs['obs_id'], field, value)
+            ctx.db.execute("UPDATE candidates SET verdict='rejected', verdict_reason=? WHERE cand_id=?",
+                           (validation['reason'], cid))
+            if validation['reason'] == 'validation_missing':
+                ctx.db.execute('INSERT OR IGNORE INTO review_queue VALUES (?,?,?,?,?,?)',
+                               (deterministic_id('rq', cid, 'validation_missing'), 'active_validation',
+                                cid, '{}', 'open', onto.now_iso(ctx.clock)))
+
 
 def _extract_active_item(ctx, w):
     raw = ctx.active.execute('SELECT * FROM raw_documents WHERE raw_id=?', (w['item_id'],)).fetchone()
     observations = ctx.active.execute('SELECT * FROM observations WHERE raw_id=?', (w['item_id'],)).fetchall()
+    if getattr(ctx, 'structured_only', False) or (raw is not None and not raw['blob_path']):
+        _extract_structured_item(ctx, w, observations)
+        return
     bath_groups = {}
     for o in observations:
         venue = ctx.active.execute('SELECT * FROM venues WHERE venue_key=?', (o['venue_key'],)).fetchone()
@@ -459,8 +428,10 @@ def evidence_verify(ctx, cursor):
     for c in db.execute('SELECT * FROM candidates WHERE verdict IS NULL AND branch_id IS NOT NULL ORDER BY seq LIMIT ?', (ctx.batch * 20,)).fetchall():
         reason = None
         if not c['source_url'] or not re.match(r'https?://', c['source_url']): reason = 'no_source_url'
-        elif is_denied(c['source_url']): reason = 'denied_source'
-        elif not c['quote'] or not c['quote'].strip(): reason = 'no_quote'
+        elif (is_collect_denied if getattr(ctx, 'structured_only', False) else is_denied)(c['source_url']):
+            reason = 'denied_source'
+        elif not (c['quote'] or '').strip() and not _has_validated_evidence(c['locator']):
+            reason = 'no_quote'
         elif not c['locator'] or c['locator'] in ('{}', 'null'): reason = 'no_locator'
         elif onto.status_for(c['label'], c['source_type']) is None: reason = 'ambiguous_or_unverified_label'
         elif c['value_json'] is None: reason = 'no_value'
@@ -629,7 +600,7 @@ def quality_check(ctx, cursor):
             (iid, check, ref, details, 'open', at)); n += 1
     for r in db.execute("SELECT fact_id FROM facts WHERE status='ai_inference' AND effective_to IS NULL"):
         issue('ai_value_present', r[0], 'AI inference must never be served as a value')
-    for r in db.execute("SELECT fact_id FROM facts WHERE effective_to IS NULL AND status IN ('fact','source_claim') AND (quote IS NULL OR source_url IS NULL)"):
+    for r in db.execute("SELECT fact_id FROM facts WHERE effective_to IS NULL AND status IN ('fact','source_claim') AND (source_url IS NULL OR (quote IS NULL AND json_extract(evidence_locator, '$.validation.version') IS NULL))"):
         issue('missing_evidence', r[0], 'fact without quote/source')
     for r in db.execute("SELECT f.fact_id, f.value_json FROM facts f WHERE f.attribute='name' AND f.effective_to IS NULL AND f.value_json LIKE '%Visit Seoul%'"):
         issue('portal_title_as_name', r[0], 'directory page title extracted as venue name')

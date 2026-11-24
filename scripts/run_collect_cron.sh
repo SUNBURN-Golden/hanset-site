@@ -8,15 +8,16 @@ set +x
 umask 077
 
 mode=${1:-web}
+data_dir=${HANSET_DATA_DIR:-/workspace/hanset-data}
 case "$mode" in
-    web|ingest) ;;
+    web|wide|ingest) ;;
     *) exit 2 ;;
 esac
 
 checkout=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P) || exit 1
-ig_dir=${HANSET_IG_DIR:-/workspace/hanset-data/ig}
-active_dir=${HANSET_ACTIVE_DIR:-/workspace/hanset-data/active}
-twin_dir=${HANSET_TWIN_DIR:-/workspace/hanset-data/twin}
+ig_dir=${HANSET_IG_DIR:-"$data_dir/ig"}
+active_dir=${HANSET_ACTIVE_DIR:-"$data_dir/active"}
+twin_dir=${HANSET_TWIN_DIR:-"$data_dir/twin"}
 ig_dir=$(realpath -m -- "$ig_dir") || exit 1
 active_dir=$(realpath -m -- "$active_dir") || exit 1
 twin_dir=$(realpath -m -- "$twin_dir") || exit 1
@@ -37,10 +38,12 @@ cd -- "$checkout" || exit 1
 unset HANSET_IG_SESSION
 
 log="$ig_dir/logs/collect-$(TZ=Asia/Seoul date +%F).log"
-exec 9>"$ig_dir/cron.lock"
-if ! flock -n 9; then
-    printf '%s already_running\n' "$(TZ=Asia/Seoul date -Iseconds)" >>"$log"
-    exit 0
+if [[ "$mode" == ingest ]]; then
+    exec 9>"$ig_dir/cron.lock"
+    if ! flock -n 9; then
+        printf '%s already_running\n' "$(TZ=Asia/Seoul date -Iseconds)" >>"$log"
+        exit 0
+    fi
 fi
 
 env_file="$ig_dir/deepseek.env"
@@ -64,8 +67,12 @@ if [[ -e "$env_file" ]]; then
 fi
 
 printf '%s %s_start\n' "$(TZ=Asia/Seoul date -Iseconds)" "$mode" >>"$log"
-timeout --signal=TERM --kill-after=10s 25m \
-    python3 -m hanset_active collect "$mode" >>"$log" 2>&1
+case "$mode" in
+    web) command=(python3 -m hanset_active.collect.scheduled daily_collect) ;;
+    wide) command=(python3 -m hanset_active.collect.scheduled wide_collect) ;;
+    ingest) command=(timeout --signal=TERM --kill-after=10s 25m python3 -m hanset_active collect ingest) ;;
+esac
+"${command[@]}" >>"$log" 2>&1
 result=$?
 printf '%s %s_exit=%s\n' "$(TZ=Asia/Seoul date -Iseconds)" "$mode" "$result" >>"$log"
 exit "$result"

@@ -139,7 +139,8 @@ class WebExtraction:
                     self._commit(page['row'], page['claims'])
 
     def _pending(self, row, reason):
-        runtime.retry_web(self.ledger, row, self.state.clock, reason)
+        runtime.retry_web(self.ledger, row, self.state.clock, reason,
+                          delay=600 if row.get('_facts_only') else 0)
         self.reason = self.reason or reason
         self.counts['pending'] += 1
         self.observe_page(row['url'], 'pending_extraction')
@@ -150,7 +151,7 @@ class WebExtraction:
             disposition='applied', claims=claims, venue_id=row['venue_id'], venue_key=row['venue_key'],
             seen_at=row['seen_at'], clock=self.state.clock, requested_url=row['requested_url'],
             final_url=row['final_url'], authorization=row['source_authorization'], domains=row['domains'],
-            hash_version=FULL_HASH_VERSION, testing=row['_testing'])
+            hash_version=FULL_HASH_VERSION, testing=row['_testing'], facts_only=row.get('_facts_only', False))
         receipt = web_receipt(self.db, row['requested_url'], row['content_hash'])
         self.added += len(ids)
         self.state.data['counts']['claims'] += len(ids)

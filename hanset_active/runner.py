@@ -5,6 +5,7 @@ import math
 import signal
 import threading
 import uuid
+from contextlib import nullcontext
 from urllib.parse import urlsplit
 from datetime import datetime, timedelta
 from .db import deterministic_id
@@ -102,7 +103,7 @@ def fail_task(db, task, error, *, clock=None):
             (fid,task['task_id'],task.get('url'),task.get('domain'),reason,state,attempts,next_at,now))
 
 
-def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=False, providers=None, initialize=True):
+def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=False, providers=None, initialize=True, admission=None):
     profile = fetcher.settings.profile
     max_minutes = float(max_minutes if max_minutes is not None else profile['budgets']['run_minutes'])
     max_requests = max_requests if max_requests is not None else profile['budgets']['run_requests']
@@ -111,10 +112,12 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
     selected = set(classes.split(',') if isinstance(classes,str) else classes or TASK_CLASSES)
     if not selected or not selected <= set(TASK_CLASSES): raise ValueError('Unknown task classes')
     db, clock = fetcher.db, fetcher.clock
-    run_id = uuid.uuid4().hex
+    run_id = admission.run_id if admission is not None else uuid.uuid4().hex
     deadline = clock.monotonic()+60*max_minutes
     try:
-        with RunLock(db,fetcher.settings.data_dir,run_id,clock=clock) as lock:
+        guard = (nullcontext(admission) if admission is not None else
+                 RunLock(db, fetcher.settings.data_dir, run_id, clock=clock))
+        with guard as lock:
             if dry_run:
                 return {'state':'dry_run','tasks':[dict(r) for r in db.execute("SELECT * FROM tasks WHERE state='pending'") if r['task_class'] in selected], 'requests':0}
             close_article_title_venues(db, clock=clock)
@@ -144,6 +147,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
             if threading.current_thread() is threading.main_thread():
                 old_handler = signal.signal(signal.SIGTERM,lambda *_: stopped.set())
             completed = 0
+            unexpected_failures = 0
             state = 'done'
             try:
                 while not stopped.is_set() and clock.monotonic()<deadline and executor.requests<max_requests:
@@ -178,6 +182,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
                         if os.environ.get('HANSET_ACTIVE_DEBUG'):
                             import traceback; traceback.print_exc()
                         fail_task(db,task,error,clock=clock)
+                        unexpected_failures += not isinstance(error, TaskFailure)
                     else:
                         with db:
                             db.execute("UPDATE tasks SET state='done',lease_until=NULL,updated_at=? WHERE task_id=?",(kst_now(clock).isoformat(),task['task_id']))
@@ -191,7 +196,8 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
                 if old_handler is not None: signal.signal(signal.SIGTERM,old_handler)
                 with db:
                     db.execute('UPDATE runs SET finished_at=?,state=?,requests=?,stats=? WHERE run_id=?',(kst_now(clock).isoformat(),state,executor.requests,json.dumps({'completed':completed}),run_id))
-            return {'state':state,'run_id':run_id,'requests':executor.requests,'completed':completed}
+            return {'state':state,'run_id':run_id,'requests':executor.requests,'completed':completed,
+                    'checkpoint_complete': state in ('done', 'budget_reached') and not unexpected_failures}
     except AlreadyRunning:
         return {'state':'already_running','requests':0}
 

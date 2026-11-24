@@ -1,5 +1,6 @@
 """Staged twin daemon: per-stage checkpoint, process lock + stage lease, bounded retry,
 failure queue, cost cap 0 and resume from the failed stage."""
+from contextlib import nullcontext
 import fcntl
 import json
 import uuid
@@ -31,12 +32,13 @@ class ProcessLock:
     def __exit__(self, *a):
         fcntl.flock(self.f, fcntl.LOCK_UN); self.f.close()
 
-def run_once(db, active, *, csv_path, lock_path, clock=None, stages=None, faults=None):
+def run_once(db, active, *, csv_path, lock_path, clock=None, stages=None, faults=None, admission=None, structured_only=False):
     run_id = uuid.uuid4().hex
     stats = {}
-    with ProcessLock(lock_path):
+    with nullcontext(admission) if admission is not None else ProcessLock(lock_path):
         db.execute('INSERT INTO daemon_runs VALUES (?,?,NULL,?,NULL)', (run_id, kst_now(clock).isoformat(), 'running')); db.commit()
         ctx = Ctx(db, active, csv_path=csv_path, run_id=run_id, clock=clock)
+        ctx.structured_only = structured_only
         state = 'ok'
         for name, fn in (stages or STAGES):
             row = db.execute('SELECT cursor FROM stage_checkpoints WHERE stage=?', (name,)).fetchone()
@@ -66,7 +68,7 @@ def run_once(db, active, *, csv_path, lock_path, clock=None, stages=None, faults
                     ref = f'cursor:{cursor}'
                     db.execute('''INSERT INTO stage_failures VALUES (?,?,?,?,1,?,?) ON CONFLICT(stage,item_ref) DO UPDATE SET
                         attempts=attempts+1, error=excluded.error, state=CASE WHEN attempts+1>=? THEN 'dead' ELSE 'retry' END, updated_at=excluded.updated_at''',
-                        (f'{name}:{ref}', name, ref, str(exc)[:300], 'retry', kst_now(clock).isoformat(), MAX_ATTEMPTS)); db.commit()
+                        (f'{name}:{ref}', name, ref, type(exc).__name__ if structured_only else str(exc)[:300], 'retry', kst_now(clock).isoformat(), MAX_ATTEMPTS)); db.commit()
                     if db.execute("SELECT state FROM stage_failures WHERE stage=? AND item_ref=?", (name, ref)).fetchone()[0] == 'dead':
                         break
             if not ok:

@@ -85,9 +85,12 @@ def normalized_claim(claim):
         return {'field': field, 'reason': normalized['reason']}
     qualifiers = normalized['qualifiers']
     safe_qualifiers = all(safe_text(v) for v in qualifiers.values() if isinstance(v, str))
-    safe = safe_text(claim.get('quote', '')) and safe_qualifiers
+    grounding = (claim.get('locator') or {}).get('grounding') or {}
+    structured = grounding.get('version') == 1 and HEX.fullmatch(grounding.get('span_hash', ''))
+    safe = (structured or safe_text(claim.get('quote', ''))) and safe_qualifiers
     if field == 'closures':
-        safe = safe and safe_text(value) and value in claim.get('quote', '')
+        literal = grounding.get('value_literal') is True if structured else isinstance(value, str) and value in claim.get('quote', '')
+        safe = safe and safe_text(value) and literal
     if not safe:
         return {'field': field, 'reason': 'unsafe_evidence',
                 **({'qualifier_key': stable_json(qualifiers)} if safe_qualifiers else {})}

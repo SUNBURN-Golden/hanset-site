@@ -44,23 +44,68 @@ Run limits can lower consumption; persisted daily caps remain enforced.
 
 ## Cron
 
-The wrapper `scripts/run_active_cron.sh` (executable) finds its checkout, validates the external data directory,
-uses a cron flock in addition to the collector's own flock/DB lease, and
-appends each output line with a KST timestamp. For example, schedule it at
-minutes 0 and 30 in a local crontab using the absolute checkout path:
+Run these from the production checkout after merge. Use the operations
+account that owns the collector crontab.
 
-```cron
-0,30 * * * * HANSET_ACTIVE_DIR=/workspace/hanset-data/active /workspace/hanset-site/scripts/run_active_cron.sh
+```sh
+scripts/install_collect_crons.sh --dry-run
+scripts/install_collect_crons.sh
+scripts/install_collect_crons.sh --uninstall --dry-run
+scripts/install_collect_crons.sh --uninstall
 ```
 
-An overlapping invocation reports `already_running` and exits successfully.
-SIGTERM completes the current task then stops. SIGKILL requires no manual
-queue edits: the next exclusive run recovers orphaned tasks. Completed
-subrequests have checkpoints; an incomplete evidence stage is safely replayed.
-Failures get at most three attempts, with backoff of 10 minutes and one hour;
-the final dead record retains the six-hour next timestamp for inspection.
-Blocks, login walls, and robots denial are terminal and are never bypassed.
-A 429 records Retry-After and stops that domain for the run.
+The installer manages the jobs with the trailing `# hanset-collx` marker.
+It adds seed discovery and wide collection at 01:15, 03:15, and every two
+hours through 23:15 KST. The watchdog runs every 15 minutes. Keep the
+existing 04:15 web collection, hourly :35 active, hourly :50 twin, and
+hourly :05 Linux crawler entries. The installer preserves timezone
+assignments and checks the daemon's timezone and the effective timezone
+of the managed entries. If the daemon environment is unreadable, use
+`HANSET_CRON_TIMEZONE=Asia/Seoul` only after independently verifying the
+daemon's schedule timezone. Dry-run redacts removed command text and
+reports unmet prerequisites without writing the table.
+
+Operations confirms the actual release consumer with a non-publishing
+contract check before enabling the wide schedule. The versioned readiness
+file and the request and receipt formats are in the
+[publication handoff runbook](COLLECTOR.md#operations-publication-handoff).
+Without readiness, the installer leaves the crontab intact and the watchdog
+skips wide collection.
+
+The supervisor writes a KST success timestamp in
+`/workspace/hanset-data/stamps/<job>.ok` after the payload completes.
+It checks each job's latest slot, including across midnight, once the slot
+is more than ten minutes old. Shared collector work runs oldest eligible
+slot first. Seed discovery and twin can proceed independently. The
+`<job>.attempt` file holds the slot of the dispatched catch-up. Contention
+leaves the slot eligible. A failed or killed catch-up spends that slot's
+attempt. Wrapper logs remain in each job's external `logs/` directory.
+Seed discovery arguments select a manual run, including `--max-calls 0`.
+Desktop ingest uses the existing manual wrapper mode.
+
+### Daily collector metrics
+
+```sh
+tail -n 1 /workspace/hanset-data/metrics/collect-daily.jsonl
+```
+
+Each line represents one KST date. The report closes at 23:30. Counts for
+inventory, enabled targets, qualified facts, unverified claims and Tavily
+usage reflect the latest available observation before cutoff. The watchdog
+and scheduled jobs save these aggregates while the box is awake. New
+seeds and claims, completed page transfers, provider dispatches and terminal
+deployment attempts are counted from their timestamped ledgers. Deployments
+count only when both completion and durable receipt recording precede
+cutoff. Pending requests have no effect on metrics finalization.
+
+On wake, metrics closes earlier dates from saved aggregates before sampling
+today. A full date asleep carries forward inventory totals and counts its
+own timestamped events. A missing Tavily bucket is zero. A nonzero bucket
+without a pre-cutoff observation leaves that date retryable. Unreadable
+state can delay an affected date while later dates close independently.
+A recovered older date may appear last in the file. Each emitted line stays
+byte-identical on subsequent runs. Dates before metrics initialization are
+outside the report.
 
 ## Reading reports
 
@@ -119,17 +164,10 @@ one invocation. Zero skips Tavily. Provider quota exhaustion stops Tavily for
 the invocation and records `tavily_provider_quota`. Use the free plan with paid
 usage disabled. Billing changes require 준태님's approval. [Tavily ledger](IG_DAEMON.md#persistent-usage-ledger)
 
-Operations owns scheduler installation. In the KST crontab, install the
-discovery trigger and replace the prior 04:15 web line with the web trigger.
-
-```cron
-05 */2 * * * /path/to/checkout/scripts/run_seed_discovery_cron.sh
-35 */2 * * * /path/to/checkout/scripts/run_collect_cron.sh web
-```
-
-The discovery wrapper records results under `HANSET_ACTIVE_DIR/logs`. Incomplete
-license and sitemap passes resume at the next invocation. Instagram intake
-remains an operator summary plus the post URL. [Web collector](COLLECTOR.md)
+The discovery wrapper records results under `HANSET_ACTIVE_DIR/logs`.
+Incomplete license and sitemap passes resume at the next invocation.
+Instagram intake remains an operator summary plus the post URL.
+[Scheduler installation](#cron) · [Web collector](COLLECTOR.md)
 
 ## Offline validation
 

@@ -8,6 +8,9 @@ def discover(context,document, *, parent_url,venue_id=None,depth=0,source_state=
     tasks=[]
     for link in document.get('links',[]):
         url=strip_pii(link['url']);kind=link['kind']
+        if getattr(context.fetcher, 'facts_only', False) and (
+                context.fetcher._reason_denied(url) or context.fetcher._unsafe_public_url(url, 'body')):
+            continue
         if is_excluded(url,link.get('text','')): continue
         if kind in ('sns','excluded_link','booking'):
             if venue_id:
