@@ -9,11 +9,13 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from hanset_active.config import Settings
-from hanset_active.db import connect as active_connect
+from hanset_active.db import connect as active_connect, deterministic_id
 from hanset_active import web_proxy
 from hanset_active.fetcher import Fetcher
+from hanset_active.host_policy import BACKOFF_STATUSES
 from hanset_active.locks import AlreadyRunning as ActiveBusy
 from hanset_active.locks import RunLock
+from hanset_active.network_store import open_audit, open_leases
 from hanset_active.util.pii import strip_pii
 from hanset_active.util.timeutil import Clock, kst_now
 from hanset_active.util.urls import registrable_domain
@@ -30,9 +32,10 @@ from .state import State
 from .store import connect as claim_connect
 from .store import (digest, record, prune_web_target_blocks, recent_web_target_block,
                     remember_web_target_block, remember_web_target_observation, validated_authorization, web_target_history)
-from .targets import canonical_requested_url, fetch_url_allowed, resolve_jobs
+from .targets import LINK_IDENTITY, canonical_requested_url, fetch_url_allowed, resolve_jobs, search_specs
 from .web import classify_page, select_subpages
 from .web_extraction import WebExtraction, batches_fit
+from .web_grants import WebGrants
 from ..crawl_policy import COLLECTION
 from .plan import assemble_targets, ensure_daily_plan, load_targets, local_target_order, order_targets
 from .watchlist_proposals import inspect_page, write_proposals
@@ -184,7 +187,7 @@ def _default_search(host_dir):
     run = TavilyRun()
 
     def search(*args, **kwargs):
-        outcome = discover_known_venue(*args, dispatch_guard=run.search_allowed, host_dir=host_dir, **kwargs)
+        outcome = discover_known_venue(*args, dispatch_guard=run.search_allowed, host_dir=host_dir, public_source=True, **kwargs)
         if outcome.reason in ('tavily_provider_quota', 'tavily_access_blocked', 'tavily_rate_limited'):
             run.stop_on(outcome.reason)
         return outcome
@@ -201,17 +204,31 @@ def run_web(settings, *, targets_path=None, clock=None, session=None, qwen_sessi
         with ExitStack() as stack:
             if admission is None:
                 stack.enter_context(ProcessLock(settings.data_dir / 'daemon.lock'))
-                active = stack.enter_context(closing(active_connect(settings.active_dir / 'active.sqlite3')))
-            else:
-                active = admission.db
+            # Materialize authorization before opening a writable active DB.
+            assembled = assemble_targets(settings, now=kst_now(clock), testing=testing,
+                                         include_watchlist=not targets_path)
+            active = None
+            if assembled['db_status'] == 'ok':
+                try:
+                    active = stack.enter_context(closing(active_connect(settings.active_dir / 'active.sqlite3', create=False)))
+                except sqlite3.OperationalError:
+                    # The database can disappear after the read-only snapshot.
+                    assembled['db_status'] = 'unreadable'
+                    if not targets_path:
+                        assembled = assemble_targets(settings, now=kst_now(clock), testing=testing)
+            audit = active if active is not None else stack.enter_context(closing(open_audit(settings.active_dir)))
+            fallback = (assembled['authorization'] if not targets_path and active is None
+                        and assembled['targets_status'] == 'ok' else None)
             recovery = _change_cycle(settings, targets_path=targets_path, testing=testing, export=False,
-                                     clock=clock)
+                                     clock=clock, fallback=fallback)
             try:
                 result = _run_web(settings, targets_path=targets_path, clock=clock, session=session, search=search,
                                   testing=testing, planner=planner, planner_session=planner_session,
-                                  qwen_session=qwen_session, active=active, facts_only=admission is not None)
+                                  qwen_session=qwen_session, active=active, audit=audit, assembled=assembled,
+                                  facts_only=admission is not None)
             finally:
-                changes = _change_cycle(settings, targets_path=targets_path, testing=testing, clock=clock)
+                changes = _change_cycle(settings, targets_path=targets_path, testing=testing, clock=clock,
+                                        fallback=fallback)
             result['changes'] = changes
             if recovery.get('reason') not in ('ok', 'no_events'):
                 result['changes']['recovery_reason'] = recovery['reason']
@@ -251,30 +268,33 @@ def _rotate_seed_jobs(pending, last_fetched):
 
 
 def _run_web(settings, *, targets_path, clock, session, search, testing, planner=None,
-             planner_session=None, qwen_session=None, active, facts_only=False):
+             planner_session=None, qwen_session=None, active, audit, assembled, facts_only=False):
     state = State(settings.data_dir, clock, active_dir=settings.active_dir)
     with (closing(runtime.connect(settings.active_dir)) as ledger,
           DeepSeek(state, model=settings.model, session=session,
                    qwen_session=qwen_session) as router):
         return _drain_web(settings, state, ledger, router, targets_path=targets_path, clock=clock,
                           search=search, testing=testing, planner=planner, planner_session=planner_session, active=active,
-                          facts_only=facts_only)
+                          audit=audit, assembled=assembled, facts_only=facts_only)
 
 
-def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, testing, planner, planner_session, active, facts_only):
+def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, testing, planner, planner_session, active, audit, assembled, facts_only):
     state.proxy_heal = web_proxy.new_heal_status()
     path = Path(targets_path) if targets_path else settings.data_dir / 'web_targets.json'
     if targets_path:
         from .config import outside
         path = outside(path)
     if targets_path:
-        targets, targets_status = load_targets(path, testing=testing)
+        disabled = []
+        targets, targets_status = load_targets(path, testing=testing, disabled=disabled)
+        complete = targets_status in ('ok', 'empty')
         # Ad-hoc input never reads/writes the daily plan or invokes its model.
         targets = local_target_order(settings, targets, now=kst_now(clock))
         planning_notes = [{'code': 'adhoc_targets_local_order', 'count': 1}]
     else:
-        assembled = assemble_targets(settings, now=kst_now(clock), testing=testing)
         targets, targets_status = assembled['targets'], assembled['targets_status']
+        disabled = assembled['disabled']
+        complete = active is not None and targets_status != 'invalid'
         plan = ensure_daily_plan(settings, state, targets, targets_status, clock=clock,
                                  planner=planner, planner_session=planner_session, testing=testing,
                                  assembled=assembled, router=router)
@@ -282,8 +302,6 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
             local_target_order(settings, assembled['authorization'], now=kst_now(clock), materialized=assembled['snapshot']), plan)
     if targets_status == 'invalid':
         return _finish(state, _base('error', 'targets_invalid', success=False, collected=False, mode='web'), clock)
-    if not targets:
-        return _finish(state, _base('no_targets', 'no_targets', success=False, collected=False, mode='web'), clock)
     active_settings = Settings(
         data_dir=settings.active_dir,
         testing=testing,
@@ -318,8 +336,8 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
             body['web_egress'] = egress
         return _finish(state, body, clock)
 
-    def cooling(url):
-        if recent_web_target_block(history, url, clock=clock, testing=testing):
+    def cooling(url, identity_mode=None):
+        if recent_web_target_block(history, url, clock=clock, testing=testing, identity_mode=identity_mode):
             skipped[url] = True
             return True
         return False
@@ -327,14 +345,19 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
     try:
         history = claim_connect(settings.data_dir)
         prune_web_target_blocks(history, clock=clock)
-        needs_search = any(item['tavily'] and not item['official_urls'] for item in targets)
+        scope_id = deterministic_id('web-target-file', str(path)) if targets_path else 'default'
+        grants = WebGrants(history, scope_id, complete=complete, testing=testing,
+                           disabled={(row['venue_id'], row['venue_key']) for row in disabled})
+        needs_search = active is not None and any(search_specs(item) for item in targets)
         jobs, notes = resolve_jobs(
             targets,
             search=search if search is not None or not needs_search else _default_search(active_settings.data_dir),
-            db=active,
+            db=active if active is not None or search is None else audit,
             clock=clock,
             testing=testing,
+            lead_cache=grants.search_urls,
         )
+        unsafe += sum(note['disposition'] == 'unsafe_url_skipped' for note in notes)
         last_fetched, unchanged = web_target_history(history, clock=clock, testing=testing)
         notes.extend({'url': '', 'disposition': note['code']} for note in planning_notes)
         completed = runtime.web_completed(ledger, state, testing=testing)
@@ -343,6 +366,7 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
             'SELECT requested_url,venue_id,venue_key FROM extraction_retries WHERE retry_at>?',
             (kst_now(clock).isoformat(),))} if facts_only else set()
         runtime_secrets = secrets()
+        eligible = []
         for job in jobs:
             try:
                 url = canonical_requested_url(job['url'], testing=testing)
@@ -357,6 +381,13 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
             if not venue_identity_safe(job['venue_id'], job['venue_key'], runtime_secrets):
                 unsafe += 1
                 continue
+            if not fetch_url_allowed(job['url'], job['scope_domains'], testing=testing):
+                unsafe += 1
+                continue
+            job = {**job, 'requested_url': url, 'grant_scope': scope_id}
+            eligible.append(job)
+            if not job['dispatchable']:
+                continue
             if cooling(url) or url in completed or (url, job['venue_id'], job['venue_key']) in waiting:
                 continue
             if url in scheduled:
@@ -365,26 +396,29 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                 # A manual or gap URL owns this fetch even if the seed ranked first.
                 del scheduled[url]
             scheduled[url] = {**job, 'depth': 0}
+        grants.reconcile(eligible)
+        if not targets:
+            return _finish(state, _base('no_targets', 'no_targets', success=False, collected=False, mode='web'), clock)
         # A child discovered before a crash can be resumed using its currently
         # authorized parent, even when that parent already completed today.
         parents = {}
-        for job in jobs:
+        for job in eligible:
             auth = job['source_authorization']
             if auth:
                 parents[(auth['requested_url'], job['venue_id'], job['venue_key'])] = job
-        for key, venue_id, venue_key, parent_url, fetch_url in ledger.execute(
-                '''SELECT requested_url,venue_id,venue_key,parent_url,fetch_url
+        for key, venue_id, venue_key, parent_url, fetch_url, identity_mode in ledger.execute(
+                '''SELECT requested_url,venue_id,venue_key,parent_url,fetch_url,identity_mode
                    FROM extraction_retries WHERE retry_at<=? AND parent_url IS NOT NULL''',
                 (kst_now(clock).isoformat(),)):
-            if key in scheduled or key in completed or cooling(key):
+            if key in scheduled or key in completed or cooling(key, identity_mode):
                 continue
             parent = parents.get((parent_url, venue_id, venue_key))
             if (parent and registrable_domain(key) == registrable_domain(parent_url)
                     and domain_allowed(key, parent['domains'])
                     and fetch_url_allowed(fetch_url, scope_domains={registrable_domain(key)}, testing=testing)
-                    and canonical_requested_url(fetch_url, testing=testing) == key):
+                    and canonical_requested_url(fetch_url, testing=testing, identity_mode=identity_mode) == key):
                 scheduled[key] = {**parent, 'url': fetch_url, 'parent_url': parent_url, 'depth': 1,
-                                  'source_authorization': None, 'discovered_subpage': True}
+                                  'source_authorization': None, 'discovered_subpage': True, 'identity_mode': identity_mode}
         pending, deferred = OrderedDict(), OrderedDict()
         for url, job in scheduled.items():
             # Canonical keys deduplicate work; explicit receipt URLs retain
@@ -398,9 +432,9 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
         deferred = _rotate_seed_jobs(deferred, last_fetched)
         if not pending and not deferred and skipped:
             return finish_web(_base('done', 'recent_block_skipped', success=True, collected=False, mode='web', pages=notes))
-        if not pending and not deferred and jobs and unsafe == len(jobs):
+        if not pending and not deferred and unsafe and not eligible:
             return finish_web(_base('stopped', 'unsafe_url_skipped', success=False, collected=False, mode='web', pages=notes))
-        if not pending and not deferred and jobs:
+        if not pending and not deferred and any(job['dispatchable'] for job in eligible):
             return finish_web(_base('already_complete', 'already_complete', success=True, collected=False, mode='web', pages=notes))
         if not pending and not deferred:
             reason = notes[0]['disposition'] if notes else 'no_urls'
@@ -410,7 +444,7 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
         except ValueError:
             return finish_web(_base('stopped', 'proxy_invalid', success=False, collected=False, mode='web', pages=notes))
         if proxy:
-            blocked, state.proxy_heal = web_proxy.preflight_with_retry(proxy, clock=clock)
+            blocked, state.proxy_heal = web_proxy.preflight_with_retry(proxy, clock=clock, host_dir=settings.active_dir)
             if blocked == 'proxy_unavailable':
                 proxy = ''
                 egress = {'mode': 'direct', 'reason': blocked, 'phase': 'preflight'}
@@ -428,15 +462,18 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
         try:
             with ExitStack() as stack:
                 if not facts_only:
-                    stack.enter_context(RunLock(active, active_settings.data_dir, 'collect-web', clock=clock))
-                fetcher = Fetcher(active_settings, active, clock, proxy=proxy, public_scope=True, policy=COLLECTION)
+                    leases = stack.enter_context(closing(open_leases(settings.active_dir)))
+                    stack.enter_context(RunLock(leases, active_settings.data_dir, 'collect-web', clock=clock))
+                fetcher = Fetcher(active_settings, audit, clock, proxy=proxy, public_scope=True, policy=COLLECTION)
+                fetcher.discover_links = True
                 if facts_only:
                     fetcher.facts_only = True
                 try:
                     attempted, children = set(), {}
                     while pending or deferred:
                         job_key, job = (pending or deferred).popitem(last=False)
-                        if cooling(job_key) or job_key in completed or job_key in attempted:
+                        identity_mode = job.get('identity_mode')
+                        if cooling(job_key, identity_mode) or job_key in completed or job_key in attempted:
                             continue
                         attempted.add(job_key)
                         scope = job['scope_domains'] & {registrable_domain(job_key)}
@@ -455,7 +492,7 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                         state.save()
                         disposition, text = classify_page(fetched, scope)
                         try:
-                            final = canonical_requested_url(fetched.url or job['url'], testing=testing)
+                            final = canonical_requested_url(fetched.url or job['url'], testing=testing, identity_mode=identity_mode)
                         except ValueError:
                             final = job_key
                             disposition, text = 'denied', None
@@ -463,12 +500,15 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                         authorization = validated_authorization(
                             job['url'], final, {**auth, 'final_url': final} if auth and
                             registrable_domain(final) in scope else None, job['domains'], testing=testing)
-                        remember_web_target_block(history, job['url'], disposition,
-                                                  status=fetched.status, clock=clock, testing=testing)
+                        transient = fetched.reason in ('host_backoff', 'resource_hold', 'robots_pending',
+                                                       'robots_unavailable', 'robots_redirect')
+                        if fetched.status not in BACKOFF_STATUSES and not transient:
+                            remember_web_target_block(history, job['url'], disposition, status=fetched.status,
+                                                      clock=clock, testing=testing, identity_mode=identity_mode)
                         if disposition != 'ready':
                             remember_web_target_observation(
                                 history, job['url'], disposition, content_hash=fetched.content_hash or None,
-                                observed_at=seen_at, testing=testing)
+                                observed_at=seen_at, testing=testing, identity_mode=identity_mode)
                         target_key = (job['venue_id'], job['venue_key'])
                         if (job['depth'] == 0 and authorization and fetched.outcome == 'ok'
                                 and disposition in ('ready', 'empty_body')
@@ -476,9 +516,9 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                             fresh_children, deferred_children = [], []
                             slots = SUBPAGE_MAX - children.get(target_key, 0)
                             for fetch_url in select_subpages(fetched.content, fetched.url or job['url'],
-                                                             job['domains'], testing=testing, limit=None):
-                                child_key = canonical_requested_url(fetch_url, testing=testing)
-                                if (child_key in completed or child_key in attempted or cooling(child_key)
+                                                             job['domains'], testing=testing, limit=None, links=fetched.links):
+                                child_key = canonical_requested_url(fetch_url, testing=testing, identity_mode=LINK_IDENTITY)
+                                if (child_key in completed or child_key in attempted or cooling(child_key, LINK_IDENTITY)
                                         or (child_key, *target_key) in waiting):
                                     continue
                                 if digest(child_key) in unchanged:
@@ -496,7 +536,8 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                                 child = queue.get(child_key)
                                 if child is None:
                                     child = {**job, 'url': fetch_url, 'source_authorization': None,
-                                             'parent_url': job_key, 'discovered_subpage': True}
+                                             'parent_url': job_key, 'discovered_subpage': True,
+                                             'identity_mode': LINK_IDENTITY}
                                     runtime.retry_web(ledger, {**child, 'requested_url': child_key},
                                                       clock, 'pending_fetch')
                                 queue[child_key] = {**child, 'depth': 1}
@@ -512,7 +553,7 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                                 runtime.retry_web(ledger, {**job, 'requested_url': job_key},
                                                   clock, 'transport_retry', delay=600)
                                 stop_reason = 'transport_retry_pending'
-                            elif not proxy_outage:
+                            elif not proxy_outage and fetched.status not in BACKOFF_STATUSES and not transient:
                                 runtime.complete_web(ledger, state.data['day'], job_key, disposition)
                             sample(job['url'], disposition)
                             continue
@@ -767,7 +808,7 @@ def _change_targets(settings, targets_path=None, *, testing=False, clock=None):
         return None
 
 
-def _change_cycle(settings, *, targets_path=None, testing=False, export=True, rebaseline=False, clock=None):
+def _change_cycle(settings, *, targets_path=None, testing=False, export=True, rebaseline=False, clock=None, fallback=None):
     """Caller holds daemon.lock. Side failures never invalidate collection."""
     from . import changes
     from .change_feeds import export_changes
@@ -775,7 +816,9 @@ def _change_cycle(settings, *, targets_path=None, testing=False, export=True, re
     try:
         db = claim_connect(settings.data_dir)
         targets = _change_targets(settings, targets_path, testing=testing, clock=clock)
-        if changes.needs_rebaseline(db) and not rebaseline:
+        if targets is None and fallback is not None:
+            result = changes.process_pending(db, fallback, testing=testing, complete=False)
+        elif changes.needs_rebaseline(db) and not rebaseline:
             result = changes.process_pending(db, targets, testing=testing)
         elif rebaseline:
             result = changes.rebaseline(db, targets, testing=testing)

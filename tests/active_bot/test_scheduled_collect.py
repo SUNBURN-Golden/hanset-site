@@ -173,12 +173,22 @@ def test_failed_ordinary_leaves_catchup_and_killed_payload_consumes_it(job, monk
 @pytest.mark.parametrize('status, success', [('partial:license_response', False), ('skipped:invalid_key', False),
                                             ('skipped:no_key', True), ('tavily_transport', False)])
 def test_seed_payload_requires_complete_adapters(job, monkeypatch, status, success):
+    connect(job.metrics.active_path).close()
     monkeypatch.setattr(scheduled.seeds, 'discover', lambda *_, **kw: {
         'state': 'ok', 'sources': {name: {'status': status} for name in scheduled.seeds.SOURCES}})
     paths = (job.stamps / 'seed_discovery.lock', *job.payload_paths('seed_discovery'))
     with ExitStack() as stack:
         fds = [stack.enter_context(lock(path)) for path in paths]
         assert job.payload('seed_discovery', at('20T09:15'), fds) is success
+
+
+@pytest.mark.parametrize('name', ['active', 'seed_discovery', 'daily_collect', 'wide_collect'])
+def test_scheduled_payload_does_not_bootstrap_authorization(job, name):
+    paths = (job.stamps / f'{name}.lock', *job.payload_paths(name))
+    with ExitStack() as stack:
+        fds = [stack.enter_context(lock(path)) for path in paths]
+        job.payload(name, at('20T09:15'), fds)
+    assert not job.metrics.active_path.exists()
 
 
 def test_wrappers_manual_seed_and_twin_timeout(job, monkeypatch):
@@ -417,6 +427,11 @@ def test_metrics_cutoff_rollover_and_partial_append(job, monkeypatch):
                                   VALUES (?, 'example.test',?,200,'body',5,?)""",
                                [(A, at('20T20:00').isoformat(), 1), (B, at('20T20:00').isoformat(), 0),
                                 (C, at('20T23:30').isoformat(), 1)])
+        from hanset_active.network_store import open_audit
+        with closing(open_audit(job.settings.active_dir)) as fallback, fallback:
+            fallback.executemany('''INSERT INTO request_log(url,domain,ts,status,kind,bytes,transfer_complete)
+                                    VALUES (?,'example.test',?,?,'body',5,1)''',
+                                 [(B, at('20T20:00').isoformat(), 200), (C, at('20T20:00').isoformat(), 503)])
         target, = assemble_targets(job.settings, now=job.clock.now(), testing=True)['authorization']
         for url in (A, B, C):
             record(claims, kind='web', url=url, text_hash=digest(url), disposition='applied',
@@ -447,7 +462,7 @@ def test_metrics_cutoff_rollover_and_partial_append(job, monkeypatch):
         day = at('20T23:30').date()
         report = job.metrics._report(day, day)
         assert report == {'date': '2026-11-20', 'seeds_total': 2, 'seeds_new': 1, 'targets': 1,
-                          'pages_fetched': 1, 'claims_new': 3, 'facts_total': 1, 'unverified_total': 2,
+                          'pages_fetched': 2, 'claims_new': 3, 'facts_total': 1, 'unverified_total': 2,
                           'deploys': 1, 'deploy_failures': 1, 'provider_calls': {'deepseek': 1, 'qwen': 1},
                           'tavily_used': 3}
         line = json_bytes(report)

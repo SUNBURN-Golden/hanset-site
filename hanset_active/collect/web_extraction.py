@@ -15,6 +15,7 @@ from .normalize import stable_json
 from .safety import evidence_rejection, remove_personal_text
 from .store import (FULL_HASH_VERSION, digest, read_claims, record,
                     remember_web_target_observation, stored_receipt, validated_authorization, web_receipt)
+from .web_grants import record_receipt_scope
 
 _SENTENCE_END = re.compile(r'\n|[.!?。](?=\s|[가-힣])')
 
@@ -136,7 +137,8 @@ class WebExtraction:
             self._stored(row, receipt, 'unchanged')
             return
         remember_web_target_observation(self.db, row['url'], 'pending_extraction', content_hash=text_hash,
-                                        observed_at=row['seen_at'], testing=row['_testing'])
+                                        observed_at=row['seen_at'], testing=row['_testing'],
+                                        identity_mode=row.get('identity_mode'))
         runtime.retry_web(self.ledger, row, self.state.clock, 'pending_extraction')
         try:
             documents = list(fragments(layout))
@@ -203,7 +205,8 @@ class WebExtraction:
             disposition=disposition, claims=claims, venue_id=row['venue_id'], venue_key=row['venue_key'],
             seen_at=row['seen_at'], clock=self.state.clock, requested_url=row['requested_url'],
             final_url=row['final_url'], authorization=row['source_authorization'], domains=row['domains'],
-            hash_version=FULL_HASH_VERSION, testing=row['_testing'], facts_only=row.get('_facts_only', False))
+            hash_version=FULL_HASH_VERSION, testing=row['_testing'], facts_only=row.get('_facts_only', False),
+            identity_mode=row.get('identity_mode'), grant_scope=row.get('grant_scope'), parent_url=row.get('parent_url'))
         if stored_as == 'binding_changed':
             self._pending(row, 'source_binding_changed')
             return
@@ -230,7 +233,8 @@ class WebExtraction:
         scheduling = 'pending_extraction' if rules_only else ('duplicate' if unchanged else disposition)
         remember_web_target_observation(
             self.db, row['url'], scheduling,
-            content_hash=text_hash, observed_at=row['seen_at'], testing=row['_testing'])
+            content_hash=text_hash, observed_at=row['seen_at'], testing=row['_testing'],
+            identity_mode=row.get('identity_mode'))
         authorization = validated_authorization(
             row['url'], row['final_url'], row['source_authorization'], row['domains'], testing=row['_testing'])
         stored_auth = json.loads(receipt['authorization_json']) if receipt['authorization_json'] else None
@@ -252,6 +256,8 @@ class WebExtraction:
             if not receipt['hash_version'] or unchanged:
                 self.db.execute('UPDATE receipts SET binding_current=? WHERE receipt_id=?',
                                 (int(same_binding), receipt['receipt_id']))
+            if same_binding and receipt['hash_version'] and row.get('grant_scope') is not None:
+                record_receipt_scope(self.db, row['grant_scope'], receipt['receipt_id'], row.get('parent_url'))
         if not rules_only:
             if authorization and same_binding and not is_excluded(
                     row.get('name', ''), row['url'], row['final_url']):

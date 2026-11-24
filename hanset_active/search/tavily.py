@@ -15,7 +15,7 @@ import requests
 from .budget import BudgetSnapshot, locked_budget
 from ..util.pii import strip_pii
 from ..fetcher import USER_AGENT
-from ..locks import host_lock
+from ..locks import host_lock, hostname
 from ..util.timeutil import kst_now
 from ..util.urls import canonicalize, is_collect_denied, is_denied, is_excluded, literal_private
 
@@ -289,7 +289,7 @@ def _search(query, target, *, clock=None, transport=None, dispatch_guard=None, o
             if not reservation.reserve():
                 return SearchOutcome('skipped', reservation.reason, budget=reservation.snapshot)
             snapshot = reservation.snapshot
-            lock = host_lock(host_dir, 'tavily.com') if host_dir is not None else nullcontext()
+            lock = host_lock(host_dir, hostname(ENDPOINT)) if host_dir is not None else nullcontext()
             with lock:
                 reason, leads, cooldown, credits = _request(
                     query, target, credential, reservation, clock=clock, transport=transport,

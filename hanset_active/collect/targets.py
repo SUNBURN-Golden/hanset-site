@@ -5,6 +5,7 @@ from urllib.parse import urlsplit, unquote, parse_qsl
 from uuid import NAMESPACE_URL, uuid5
 
 from hanset_active.config import load_profile
+from hanset_active.db import deterministic_id
 from hanset_active.util.urls import is_collect_denied, is_excluded, literal_private, registrable_domain
 from hanset_active.venues import is_article_title, normalize_name, seed_target_identity
 
@@ -12,9 +13,10 @@ from . import CollectError
 from .config import MAX_TARGETS, domain_allowed, official_domains, official_site, scope_allowed
 
 _TAVILY_REASON = re.compile(r'tavily_[a-z_]{1,40}')
+LINK_IDENTITY = 'escaped_path'
 
 
-def canonical_requested_url(url, *, testing=False):
+def canonical_requested_url(url, *, testing=False, identity_mode=None):
     """Reject unsafe identities before canonicalization; never repair redactions."""
     from .ground import secrets
     from .safety import evidence_rejection
@@ -31,6 +33,10 @@ def canonical_requested_url(url, *, testing=False):
             or re.search(r'\[(?:token|phone|email|redacted[^\]]*)\]', decoded, re.I)
             or evidence_rejection(decoded, secrets())):
         raise ValueError('unsafe_url')
+    if identity_mode == LINK_IDENTITY:
+        parts = urlsplit(canonicalize(url, preserve_path=True))
+        path = re.sub(r'%[0-9a-fA-F]{2}', lambda m: m[0].upper(), parts.path.rstrip('/'))
+        return parts._replace(path=path).geturl()
     return canonicalize(url)
 
 
@@ -327,7 +333,7 @@ def merge_targets(manual, derived, disabled, ownership, notes, *, seeds=(), prom
             manual_names.setdefault(name, set()).add(key)
         if key not in effective:
             effective[key] = {**target, 'urls': [], 'official_urls': [],
-                              'domains': set(), 'scope_domains': set()}
+                              'domains': set(), 'scope_domains': set(), 'tavily_specs': []}
             manual_urls[key] = set()
         base = effective[key]
         # Multiple manual rows may explicitly approve different domains. Only
@@ -336,6 +342,10 @@ def merge_targets(manual, derived, disabled, ownership, notes, *, seeds=(), prom
         base['scope_domains'].update(target['domains'])
         if base['tavily'] is None:
             base['tavily'] = target['tavily']
+        if target['tavily']:
+            grant = target['tavily'], frozenset(target['domains'])
+            if grant not in base['tavily_specs']:
+                base['tavily_specs'].append(grant)
         for url in target['urls']:
             canonical = canonical_requested_url(url, testing=testing)
             if canonical not in manual_urls[key] and domain_allowed(url, base['domains']):
@@ -451,56 +461,83 @@ def derive_promoted_targets(rows, *, testing=False):
 
 
 def lead_allowed(url, domains, *, testing):
-    return _https_or_test(url, testing=testing) and domain_allowed(url, domains)
+    try:
+        return isinstance(url, str) and _https_or_test(url, testing=testing) and domain_allowed(url, domains)
+    except (ValueError, UnicodeError):
+        return False
 
 
-def _resolve_lead(target, search, db, clock, *, testing):
+def search_specs(target):
+    if target.get('official_urls', target['urls']):
+        return ()
+    return target.get('tavily_specs', [(target['tavily'], target['domains'])] if target['tavily'] else [])
+
+
+def search_grant(target, spec):
+    return deterministic_id('web-search', target['venue_id'], target['venue_key'], spec, sorted(target['domains']))
+
+
+def _resolve_leads(target, spec, search, db, clock, *, testing):
     if not target['domains']:
-        return None, 'tavily_unbounded'
+        return [], 'tavily_unbounded'
     if search is None or db is None:
         return None, 'tavily_skipped'
-    spec = target['tavily']
     try:
         outcome = search(db, spec['venue_id'], spec['field'], target='official_page', clock=clock)
     except Exception:
         return None, 'tavily_skipped'
     if getattr(outcome, 'status', '') != 'ok':
         reason = getattr(outcome, 'reason', '')
-        return None, reason if _TAVILY_REASON.fullmatch(reason or '') else 'tavily_skipped'
+        revoked = reason in ('tavily_gap_missing', 'tavily_gap_resolved', 'tavily_unknown_venue',
+                             'tavily_invalid_identity', 'tavily_venue_excluded')
+        return ([] if revoked else None), reason if _TAVILY_REASON.fullmatch(reason or '') else 'tavily_skipped'
+    accepted = {}
+    unsafe = False
     for lead in getattr(outcome, 'leads', ()) or ():
         url = getattr(lead, 'url', '')
-        if lead_allowed(url, target['domains'], testing=testing):
-            return url, None
-    return None, 'tavily_skipped'
+        if fetch_url_allowed(url, target['domains'], testing=testing):
+            accepted.setdefault(canonical_requested_url(url, testing=testing), url)
+        else:
+            unsafe |= bool(url and lead_allowed(url, target['domains'], testing=testing))
+    return list(accepted.values()), 'unsafe_url_skipped' if unsafe and not accepted else 'tavily_skipped'
 
 
-def resolve_jobs(targets, *, search, db, clock, testing):
-    """Return fetch jobs and public skip notes. Unapproved lead URLs are not returned."""
+def target_jobs(target, urls, *, testing, search_lead=False, dispatchable=True):
+    official = target.get('official_urls', target['urls'])
+    authorized = {canonical_requested_url(url, testing=testing) for url in official}
+    fingerprint = target_fingerprint({**target, '_testing': testing}) if authorized else None
+    for url in urls:
+        identity = canonical_requested_url(url, testing=testing)
+        auth = None
+        if not search_lead and identity in authorized:
+            auth = {'source_identity': identity, 'requested_url': identity,
+                    'final_url': identity, 'target_fingerprint': fingerprint}
+        yield {
+            'venue_id': target['venue_id'], 'venue_key': target['venue_key'], 'name': target['name'],
+            'url': url, 'domains': target['domains'],
+            'scope_domains': target['domains'] if search_lead else target.get('scope_domains', target['domains']),
+            'source_authorization': auth,
+            'seed_url': url in target.get('seed_urls', ()),
+            'discovery_url': search_lead or url in target.get('discovery_urls', ()),
+            'dispatchable': dispatchable,
+        }
+
+
+def resolve_jobs(targets, *, search, db, clock, testing, lead_cache=None):
+    """Emit each current grant before the fetch queue deduplicates by URL."""
     jobs, notes = [], []
     for target in targets:
-        urls = list(target['urls'])
-        official = target.get('official_urls', target['urls'])
-        if not official and target['tavily']:
-            chosen, reason = _resolve_lead(target, search, db, clock, testing=testing)
-            if chosen:
-                urls.append(chosen)
-            else:
+        jobs.extend(target_jobs(target, target['urls'], testing=testing))
+        for spec, domains in search_specs(target):
+            grant_target = {**target, 'domains': domains}
+            key = search_grant(grant_target, spec)
+            urls, reason = _resolve_leads(grant_target, spec, search, db, clock, testing=testing)
+            if lead_cache is not None:
+                urls = lead_cache(key, urls)
+            accepted = [url for url in (urls or ()) if fetch_url_allowed(url, domains, testing=testing)]
+            dispatchable = db is not None and search is not None
+            jobs.extend(target_jobs(grant_target, accepted, testing=testing, search_lead=True,
+                                    dispatchable=dispatchable))
+            if not accepted or not dispatchable or reason == 'unsafe_url_skipped':
                 notes.append({'url': '', 'disposition': reason})
-        authorized = {url: canonical_requested_url(url, testing=testing) for url in official}
-        fingerprint = target_fingerprint({**target, '_testing': testing}) if authorized else None
-        for url in urls:
-            identity = authorized.get(url)
-            jobs.append({
-                'venue_id': target['venue_id'],
-                'venue_key': target['venue_key'],
-                'name': target['name'],
-                'url': url,
-                'domains': target['domains'],
-                'scope_domains': target.get('scope_domains', target['domains']),
-                'source_authorization': ({'source_identity': identity, 'requested_url': identity,
-                                          'final_url': identity, 'target_fingerprint': fingerprint}
-                                         if identity else None),
-                'seed_url': url in target.get('seed_urls', ()),
-                'discovery_url': url in target.get('discovery_urls', ()),
-            })
     return jobs, notes

@@ -83,9 +83,16 @@ def test_missing_key_skips_without_budget(monkeypatch, tmp_path):
 
 
 def test_exact_bounded_post_and_no_raw_persistence(tmp_path):
+    from tests.active_bot.test_collect_retry4 import assert_host_locked
+
     response = Response({'results': [{'url': 'https://silver.example/', 'title': 'Silver Sauna', 'content': 'Official candidate'}]})
-    post = Mock(return_value=response)
-    outcome = search(post)
+    def dispatch(url, **kwargs):
+        assert_host_locked(tmp_path, url)
+        assert kwargs['headers']['User-Agent'] == tavily.USER_AGENT
+        return response
+    post = Mock(side_effect=dispatch)
+    outcome = tavily._search('Silver Sauna Seoul 공식 홈페이지', 'official_page',
+                             transport=post, clock=FakeClock(), host_dir=tmp_path)
     assert outcome.reason == 'ok' and len(outcome.leads) == 1
     assert outcome.leads[0].verification == 'unverified'
     assert outcome.budget.used == 1

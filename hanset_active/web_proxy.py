@@ -10,8 +10,10 @@ import os
 import shlex
 import socket
 import subprocess
+from contextlib import nullcontext
 from urllib.parse import urlsplit
 
+from .locks import host_lock, hostname
 from hanset_active.util.timeutil import Clock
 from hanset_active.util.urls import is_collect_denied
 
@@ -72,7 +74,7 @@ def is_heavy(content_type):
     return (content_type or '').lower().startswith(HEAVY_TYPES)
 
 
-def preflight(proxy, *, environ=None, session=None, timeout=10.0):
+def preflight(proxy, *, environ=None, session=None, timeout=10.0, host_dir=None):
     """Return '' when the proxy may be used, else a short reason code."""
     env = environ if environ is not None else os.environ
     expected = env.get(EXIT_ENV, '').strip()
@@ -96,9 +98,18 @@ def preflight(proxy, *, environ=None, session=None, timeout=10.0):
     session = session or requests.Session()
     session.trust_env = False
     try:
-        response = session.get(check_url, proxies={'http': proxy, 'https': proxy}, timeout=timeout,
-                               headers={'User-Agent': USER_AGENT}, allow_redirects=False)
-        observed = response.text.strip()[:64] if response.status_code == 200 else ''
+        lock = host_lock(host_dir, hostname(check_url)) if host_dir is not None else nullcontext()
+        with lock:
+            response = session.get(check_url, proxies={'http': proxy, 'https': proxy}, timeout=timeout,
+                                   headers={'User-Agent': USER_AGENT}, allow_redirects=False)
+            try:
+                if response.status_code in (401, 403, 429, 503):
+                    return 'proxy_check_refused'
+                observed = response.text.strip()[:64] if response.status_code == 200 else ''
+            finally:
+                close = getattr(response, 'close', None)
+                if close is not None:
+                    close()
     except (requests.ConnectionError, requests.Timeout):
         return 'proxy_unavailable'
     except (requests.RequestException, ValueError):
@@ -117,7 +128,7 @@ def new_heal_status():
     return {'attempted': False, 'heal_exit': None, 'retries': 0, 'recovered': False}
 
 
-def preflight_with_retry(proxy, *, environ=None, clock=None):
+def preflight_with_retry(proxy, *, environ=None, clock=None, host_dir=None):
     """Probe the same proxy with bounded waits, optionally attempting one heal.
 
     Hook success never authorizes fetching: only a successful probe does.
@@ -126,8 +137,9 @@ def preflight_with_retry(proxy, *, environ=None, clock=None):
     env = environ if environ is not None else os.environ
     clock = clock or Clock()
     status = new_heal_status()
-    reason = preflight(proxy, environ=env)
-    if not reason or reason == 'proxy_invalid':
+    options = {'host_dir': host_dir} if host_dir is not None else {}
+    reason = preflight(proxy, environ=env, **options)
+    if not reason or reason in ('proxy_invalid', 'proxy_check_refused'):
         return reason, status
     command = env.get(HEAL_ENV, '').strip()
     if command:
@@ -145,10 +157,10 @@ def preflight_with_retry(proxy, *, environ=None, clock=None):
     for wait in ((15, 30, 45) if command else (2, 4)):
         clock.sleep(wait)
         status['retries'] += 1
-        reason = preflight(proxy, environ=env)
+        reason = preflight(proxy, environ=env, **options)
         if not reason:
             status['recovered'] = True
             break
-        if reason == 'proxy_invalid':
+        if reason in ('proxy_invalid', 'proxy_check_refused'):
             break
     return reason, status

@@ -7,6 +7,9 @@ from contextlib import closing
 
 import requests
 
+from ..fetcher import USER_AGENT
+from ..locks import host_lock, hostname
+
 from . import CollectError, runtime
 from .config import DEFAULT_MODEL, QWEN_MODEL, configured_model
 from .credentials import qwen_key
@@ -88,10 +91,16 @@ def _usage(envelope):
             'completion': _number(usage.get('completion_tokens')), 'cost': cost, 'currency': currency}
 
 
-def _response(request, endpoint, key, *, timeout, **kwargs):
+def _response(request, endpoint, key, *, host_dir, timeout, **kwargs):
+    with host_lock(host_dir, hostname(endpoint)):
+        return _locked_response(request, endpoint, key, timeout=timeout, **kwargs)
+
+
+def _locked_response(request, endpoint, key, *, timeout, **kwargs):
     response = None
     try:
-        response = request(endpoint, headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json'},
+        response = request(endpoint, headers={'Authorization': 'Bearer ' + key, 'Content-Type': 'application/json',
+                                              'User-Agent': USER_AGENT},
                            timeout=timeout, allow_redirects=False, stream=True, **kwargs)
         status = response.status_code
         http_error = _HTTP_ERRORS.get(status, 'model_transport') if status != 200 else None
@@ -212,7 +221,8 @@ class DeepSeek:
         self._probed = True
         attempt = runtime.dispatched(db, 'deepseek', self.model, 'probe', self.state.clock, 0, 0)
         try:
-            envelope = _response(self._session('deepseek').get, BALANCE_ENDPOINT, key, timeout=DEEPSEEK_TIMEOUT)
+            envelope = _response(self._session('deepseek').get, BALANCE_ENDPOINT, key,
+                                 host_dir=self.state.active_dir, timeout=DEEPSEEK_TIMEOUT)
             available = envelope.get('is_available')
             if type(available) is not bool or not isinstance(envelope.get('balance_infos', []), list):
                 raise CollectError('model_invalid')
@@ -238,6 +248,7 @@ class DeepSeek:
         usage, outcome, completion_received = {}, 'ok', False
         try:
             envelope = _response(self._session(provider).post, QWEN_ENDPOINT if qwen else ENDPOINT, key,
+                                 host_dir=self.state.active_dir,
                                  timeout=QWEN_TIMEOUT if qwen else DEEPSEEK_TIMEOUT, json=payload)
             usage = _usage(envelope)
             completion_received = isinstance(envelope.get('choices'), list) and bool(envelope['choices'])

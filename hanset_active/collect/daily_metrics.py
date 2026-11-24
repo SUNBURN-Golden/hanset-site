@@ -8,6 +8,7 @@ import sqlite3
 import sys
 from time import monotonic
 
+from ..network_store import AUDIT_FILE
 from ..search.budget import BudgetUnavailable, _read as read_tavily
 from ..util.timeutil import KST, kst_now
 from . import CollectError
@@ -56,6 +57,14 @@ def ledger(path):
 def has_table(db, table):
     return db is not None and db.execute(
         'SELECT 1 FROM sqlite_master WHERE type=? AND name=?', ('table', table)).fetchone() is not None
+
+
+def fetched_pages(db, bounds):
+    if has_table(db, 'request_log') and any(
+            row['name'] == 'transfer_complete' for row in db.execute('PRAGMA table_info(request_log)')):
+        return db.execute('''SELECT count(*) FROM request_log WHERE ts>=? AND ts<?
+            AND kind='body' AND status BETWEEN 200 AND 299 AND bytes>0 AND transfer_complete=1''', bounds).fetchone()[0]
+    return 0
 
 
 def counts_valid(row, keys):
@@ -211,11 +220,11 @@ class DailyMetrics:
             if has_table(active, 'seed_candidates'):
                 seeds_new = active.execute('''SELECT count(DISTINCT id) FROM seed_candidates
                      WHERE first_seen>=? AND first_seen<?''', bounds).fetchone()[0]
-            if has_table(active, 'request_log') and any(
-                    row['name'] == 'transfer_complete' for row in active.execute('PRAGMA table_info(request_log)')):
-                pages = active.execute('''SELECT count(*) FROM request_log WHERE ts>=? AND ts<?
-                    AND kind='body' AND status BETWEEN 200 AND 299 AND bytes>0 AND transfer_complete=1''',
-                    bounds).fetchone()[0]
+            pages = fetched_pages(active, bounds)
+        # Each Fetcher has one audit destination. Policy timing in the fallback
+        # ledger has its own tables and contributes no duplicate request rows.
+        with ledger(self.settings.active_dir / AUDIT_FILE) as fallback:
+            pages += fetched_pages(fallback, bounds)
         with ledger(self.claim_path) as claims:
             if has_table(claims, 'claims'):
                 claims_new = claims.execute('''SELECT count(DISTINCT c.claim_id)

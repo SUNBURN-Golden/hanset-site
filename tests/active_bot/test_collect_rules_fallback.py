@@ -254,7 +254,12 @@ def test_binding_change_does_not_upgrade_or_relabel_rule_claims(case):
     result = run_web(settings, targets_path=path, clock=clock, testing=True, qwen_session=model)
     assert len(model.calls) == 1 and result['reason'] == 'source_binding_changed'
     assert result['counts']['pending'] == 1 and result['counts']['rules_fallback'] == 0
-    assert run_report(settings, policy_path=review_policy, clock=clock) == before
+    after = run_report(settings, policy_path=review_policy, clock=clock)
+    assert after['claims'] and not after['facts']
+    for old, new in zip(before['claims'], after['claims'], strict=True):
+        assert {k: new[k] for k in ('claim_id', 'venue_id', 'source_url', 'quote', 'value')} == {
+            k: old[k] for k in ('claim_id', 'venue_id', 'source_url', 'quote', 'value')}
+        assert new['binding_current'] == 0 and 'source_binding_changed' in new['eligibility_reasons']
 
 
 def test_discovered_child_rule_evidence_stays_unverified(case):

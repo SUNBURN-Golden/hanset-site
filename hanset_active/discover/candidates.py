@@ -342,9 +342,7 @@ class Candidates:
 
 
 def promoted_rows(db):
-    """Read a consistent projection while supporting a pre-discovery database."""
-    if not db.execute("SELECT 1 FROM sqlite_master WHERE name='seed_candidates'").fetchone():
-        return []
+    """Read the promoted-source projection from the authorization snapshot."""
     return db.execute('''SELECT c.*, s.fetch_url, s.official, v.venue_key, v.state AS venue_state,
                          f.name AS frozen_name, f.website AS frozen_website, f.domain AS frozen_domain,
                          f.seed_venue_id AS current_frozen_id

@@ -135,11 +135,20 @@ def _envelope(payload, usage=20, extra=''):
     (402, 'invalid_api_key', 'model_auth'),
     (200, 'provider_unavailable', 'model_unavailable'),
 ])
-def test_response_classifies_provider_error(status, code, reason):
+def test_response_classifies_provider_error(status, code, reason, tmp_path):
+    from hanset_active.fetcher import USER_AGENT
+    from tests.active_bot.test_collect_retry4 import assert_host_locked
+
     body = {'error': {'code': code}} if code else {}
     response = Response(status, json.dumps(body).encode())
+
+    def request(url, **kwargs):
+        assert_host_locked(tmp_path, url)
+        assert kwargs['headers']['User-Agent'] == USER_AGENT
+        return response
+
     with pytest.raises(CollectError, match=f'^{reason}$'):
-        _response(lambda *_args, **_kwargs: response, ENDPOINT, KEY, timeout=1)
+        _response(request, ENDPOINT, KEY, host_dir=tmp_path, timeout=1)
     assert response.closed
 
 

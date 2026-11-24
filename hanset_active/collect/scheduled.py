@@ -17,6 +17,7 @@ from ..db import connect
 from ..discover import seeds
 from ..fetcher import Fetcher
 from ..locks import RunLock
+from ..network_store import open_leases
 from ..runner import run
 from ..util.timeutil import Clock, kst_now
 from ..web_proxy import configured
@@ -25,6 +26,7 @@ from hanset_twin.store import connect as twin_connect, open_active_readonly
 from .config import CollectSettings, DEFAULT_MODEL, configured_model, outside
 from .daily_metrics import DailyMetrics, SOURCE_ERRORS
 from .handoff import Outbox, kst_timestamp
+from .plan import assemble_targets
 from .private_io import Busy, json_bytes, lock, read, read_json, replace, sync_directory
 from .schedules import DATA, GRACE, JOBS, SHARED_JOBS
 from .service import public_result, run_web
@@ -204,9 +206,19 @@ class Scheduled:
                 print(json.dumps({'run_id': run_id, 'state': state, 'stats': stats}))
                 return state == 'ok'
 
-        with closing(connect(settings.active_dir / 'active.sqlite3')) as active:
+        with ExitStack() as stack:
+            if name in ('active', 'seed_discovery'):
+                snapshot = assemble_targets(settings, now=kst_now(clock), testing=self.testing,
+                                            include_watchlist=False, bounded=True)
+                if snapshot['db_status'] != 'ok':
+                    self.diagnostic(name, 'active_authorization_unavailable')
+                    return False
+                # Only the explicit `hanset_active init` command bootstraps the store.
+                lease_db = stack.enter_context(closing(connect(settings.active_dir / 'active.sqlite3', create=False)))
+            else:
+                lease_db = stack.enter_context(closing(open_leases(settings.active_dir)))
             kwargs = {'filename': paths[-1].name, 'lease_key': 'seed_discovery'} if name == 'seed_discovery' else {}
-            guard = RunLock(active, settings.active_dir, uuid4().hex, clock=clock, **kwargs)
+            guard = RunLock(lease_db, settings.active_dir, uuid4().hex, clock=clock, **kwargs)
             with guard.inherited_lease():
                 return self.collect(name, slot, guard)
 

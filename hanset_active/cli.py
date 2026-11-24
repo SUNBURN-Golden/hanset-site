@@ -1,6 +1,7 @@
 """Command line interface for the independent active collection data store."""
 import argparse
 import json
+import sqlite3
 from pathlib import Path
 from .config import Settings
 from .db import connect
@@ -77,7 +78,7 @@ def main(argv=None):
     options = {k:v for k,v in {'data_dir':args.data_dir,'profile_path':args.profile}.items() if v is not None}
     try:
         settings = Settings(**options)
-        db = connect(settings.data_dir/'active.sqlite3')
+        db = connect(settings.data_dir/'active.sqlite3', create=args.command == 'init')
         try:
             command = args.command
             if command=='init': result = {'state':'initialized'}
@@ -106,6 +107,9 @@ def main(argv=None):
                 else: result = {'state':'stub_only'}
             print(json.dumps(sanitize_output(result),ensure_ascii=False,indent=2))
         finally: db.close()
+    except sqlite3.Error:
+        print(json.dumps({'error': 'active_authorization_unavailable'}))
+        return 2
     except (ValueError,OSError) as error:
         print(json.dumps({'error':strip_pii(str(error))}))
         return 2

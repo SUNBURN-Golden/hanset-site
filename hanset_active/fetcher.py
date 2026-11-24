@@ -1,5 +1,5 @@
 """One identity, no bypasses: guarded HTTP with persistent budgets and robots."""
-from contextlib import ExitStack, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
@@ -11,9 +11,10 @@ import logging
 import requests
 from bs4 import BeautifulSoup
 from .config import Settings
-from .db import connect, consume_budget, deterministic_id
-from .crawl_policy import LEGACY, KoreanNewsRobots, korean_news
-from .locks import host_lock
+from .db import consume_budget, deterministic_id
+from .crawl_policy import LEGACY, KoreanNewsRobots
+from .host_policy import BACKOFF_STATUSES, HostPolicy, origin
+from .locks import host_lock, hostname
 from .util.timeutil import Clock, kst_now, kst_day
 from .util.urls import (canonicalize, registrable_domain, is_collect_denied, is_denied, is_excluded,
                         literal_private, same_fetch_target)
@@ -60,6 +61,8 @@ class FetchResult:
     retry_after: str | None = None
     # Persistence uses the caller's URL normalization when it differs from the fetch URL.
     identity_url: str = ''
+    # Transient link metadata for one-hop discovery before body sanitization.
+    links: list[tuple[str, str]] | None = None
     @property
     def text(self):
         return self.content.decode('utf-8',errors='replace')
@@ -100,13 +103,17 @@ class Fetcher:
         self.run_id = None
         self.settings=settings or Settings()
         self.public_scope=public_scope
+        self.discover_links = False
         # Collect-web can continue directly after a confirmed transport outage.
         self.proxy=''
         self.proxy_failed=False
         if proxy:
             from .web_proxy import configured
             self.proxy=configured({'HANSET_WEB_PROXY':proxy})
-        self.db=db if db is not None else connect(self.settings.data_dir/'active.sqlite3')
+        if db is None:
+            raise ValueError('fetch_audit_required')
+        self.db = db
+        self._host_policy = None
         self.clock=clock or Clock()
         self.session=requests.Session()
         self.session.trust_env=False
@@ -121,9 +128,20 @@ class Fetcher:
         self._delay={}
         self._robots={}
         self._stopped={}
-    def _lock(self, domain):
+    @contextmanager
+    def _lock(self, url):
+        host = hostname(url)
         with self._guard:
-            return self._locks.setdefault(domain,threading.RLock())
+            local = self._locks.setdefault(host, threading.RLock())
+        with local, host_lock(self.settings.data_dir, host):
+            yield
+
+    @property
+    def host_policy(self):
+        with self._guard:
+            if self._host_policy is None:
+                self._host_policy = HostPolicy(self.settings.data_dir, self.clock, self.settings.min_interval)
+            return self._host_policy
     def _reason_denied(self,url, *, registration=False):
         if self.public_scope and (not registration or getattr(self, 'facts_only', False)):
             if is_collect_denied(url):
@@ -170,18 +188,24 @@ class Fetcher:
                  for url in candidates))
 
     def _stop_scope(self,url):
-        return (urlsplit(url).hostname or '').lower().rstrip('.') if self.policy.news_only else registrable_domain(url)
+        return hostname(url) if self.policy.news_only else registrable_domain(url)
+
+    def _stopped_reason(self, url):
+        with self._guard:
+            reason = self._stopped.get(self._stop_scope(url), '')
+            if self.policy.news_only:
+                persistent, retry = self.host_policy.stopped(url)
+                return reason or persistent, retry
+            return reason, None
 
     def _wait(self,domain,url):
         if self.policy.news_only:
-            if korean_news(url):
-                # Re-read under flock, including when another process fetched
-                # this host since our previous request.
+            if self.policy.robots(url):
                 with self._guard:
-                    row=self.db.execute('SELECT ts FROM fetch_log WHERE domain=? ORDER BY id DESC LIMIT 1',(domain,)).fetchone()
-                if row:
-                    age=(self.clock.now()-datetime.fromisoformat(row[0])).total_seconds()
-                    self.clock.sleep(max(0,max(self.settings.min_interval,self._delay.get(self._stop_scope(url),0))-age))
+                    delay = self.host_policy.delay(url, self._delay.get(hostname(url), 0))
+                self.clock.sleep(delay)
+                with self._guard:
+                    self.host_policy.dispatch(url)
             return
         now=self.clock.monotonic()
         with self._guard:
@@ -226,11 +250,14 @@ class Fetcher:
             self.db.execute("INSERT INTO sources(source_id,domain,state,reason) VALUES (?,?,'inaccessible',?) ON CONFLICT(domain) DO UPDATE SET state='inaccessible',reason=excluded.reason",(deterministic_id(domain),domain,reason))
     def _request(self,url,kind,headers=None, *, service_key=None, audit_source=None):
         domain=registrable_domain(url)
-        with self._lock(domain):
+        with self._lock(url):
+            stopped, _ = self._stopped_reason(url)
+            if stopped:
+                return None, b'', stopped, None
             with self._guard:
                 cap=self.settings.aux_cap if kind!='body' else self.settings.body_cap
                 if self.policy.use_daily_budgets and not consume_budget(self.db,'aux' if kind!='body' else 'bodies',cap,self.clock):
-                    return None,b'', 'cap_reached'
+                    return None,b'', 'cap_reached', None
             self._wait(domain,url)
             status=None
             body=b''
@@ -238,15 +265,27 @@ class Fetcher:
             reason=''
             transfer_complete = False
             proxy_down=False
+            outcome=None
             request_proxy=self.proxy
             try:
                 outbound=url + (("&" if urlsplit(url).query else "?") + urlencode({"serviceKey": service_key}) if service_key else "")
-                response=self.session.get(outbound,headers=headers,allow_redirects=False,timeout=(self.settings.timeout,self.settings.timeout),stream=True)
+                response=self.session.get(outbound,headers={**(headers or {}), 'User-Agent': USER_AGENT},allow_redirects=False,timeout=(self.settings.timeout,self.settings.timeout),stream=True)
                 status=response.status_code
+                if self.policy.news_only:
+                    # Commit refusals as soon as headers establish them, before
+                    # streaming, logging, closing the response or callbacks.
+                    with self._guard:
+                        if status in BACKOFF_STATUSES:
+                            self.host_policy.block(url, response.headers.get('Retry-After', ''))
+                            self._stopped[hostname(url)] = 'host_backoff'
+                        elif status in (*BLOCK_STATUSES, 402):
+                            self.host_policy.refuse(url)
+                            self._inaccessible(hostname(url), 'blocked')
                 ct=response.headers.get('Content-Type','').lower()
                 limit=8*1024**2 if 'pdf' in ct else 4*1024**2 if ct.startswith('image/') else 2*1024**2
                 from .web_proxy import is_heavy
-                if self.public_scope and (status in BLOCK_STATUSES or status==402):
+                if self.public_scope and (status in (*BLOCK_STATUSES, 402) or
+                                          (self.policy.news_only and status in BACKOFF_STATUSES)):
                     pass  # The response status already establishes the refusal.
                 elif request_proxy and is_heavy(ct):
                     reason='heavy resource'
@@ -261,23 +300,26 @@ class Fetcher:
                             break
                     else:
                         transfer_complete = True
+                if (self.policy.news_only and kind != 'robots' and not service_key and not reason
+                        and not 300 <= status < 400 and status not in BACKOFF_STATUSES):
+                    outcome = detect_outcome(body, ct, status, public_scope=self.public_scope,
+                                             allow_short=self.policy.allow_short)
+                    if outcome in ('blocked', 'login_wall') and status not in (*BLOCK_STATUSES, 402):
+                        with self._guard:
+                            self.host_policy.refuse(url)
+                            self._inaccessible(hostname(url), outcome)
             except (requests.RequestException, ValueError) as exc:
                 reason=type(exc).__name__
-                if request_proxy and isinstance(exc,requests.ConnectionError):
+                if request_proxy and status is None and isinstance(exc,requests.ConnectionError):
                     from .web_proxy import reachable
                     if not reachable(request_proxy):
                         proxy_down=True
             finally:
-                if response is not None:
-                    response.close()
-                with self._guard, self.db:
-                    args=(self._audit_url(url,kind,preserve_encoding=True),domain,kst_now(self.clock).isoformat(),status,kind,len(body))
-                    self.db.execute('''INSERT INTO request_log(url,domain,ts,status,kind,bytes,transfer_complete,run_id)
-                                       VALUES (?,?,?,?,?,?,?,?)''', (*args, int(transfer_complete), self.run_id))
-                    if audit_source:
-                        self.db.execute('UPDATE request_log SET adapter=?,outcome=? WHERE request_id=last_insert_rowid()',
-                                        (audit_source, reason or ('http_'+str(status))))
-                    self.db.execute('INSERT INTO fetch_log(url,domain,ts,status,kind,bytes) VALUES (?,?,?,?,?,?)',args)
+                try:
+                    if response is not None:
+                        response.close()
+                finally:
+                    self._log_request(url, domain, kind, status, body, transfer_complete, reason, audit_source)
             if proxy_down:
                 with self._guard:
                     self.proxy_failed=True
@@ -285,82 +327,158 @@ class Fetcher:
                         self.session.proxies.clear()
                         self.proxy=''
                 if self.public_scope:
-                    return None,b'','proxy_unavailable'
+                    return None,b'','proxy_unavailable', None
                 from .web_proxy import ProxyUnavailable
                 raise ProxyUnavailable('proxy_unavailable')
-            return response,body,reason
-    def _robots_allowed(self,url, *, mark_inaccessible=True, url_allowed=None, audit_source=None, host_locked=False):
+            return response,body,reason,outcome
+
+    def _log_request(self, url, domain, kind, status, body, complete, reason, audit_source):
+        with self._guard, self.db:
+            args = (self._audit_url(url, kind, preserve_encoding=True), domain, kst_now(self.clock).isoformat(),
+                    status, kind, len(body))
+            self.db.execute('''INSERT INTO request_log(url,domain,ts,status,kind,bytes,transfer_complete,run_id,adapter,outcome)
+                               VALUES (?,?,?,?,?,?,?,?,?,?)''',
+                            (*args, int(complete), self.run_id, audit_source,
+                             (reason or f'http_{status}') if audit_source else None))
+            self.db.execute('INSERT INTO fetch_log(url,domain,ts,status,kind,bytes) VALUES (?,?,?,?,?,?)', args)
+    def _walk_robots(self, target, *, url_allowed, audit_source, reservations=None):
+        scope = registrable_domain(target)
+        for hop in range(6):
+            if reservations is not None and hostname(target) not in reservations:
+                stopped, _ = self._stopped_reason(target)
+                if stopped:
+                    return None, b'', stopped
+                with self._lock(target), self._guard:
+                    attempt = self.host_policy.reserve_robots(target)
+                if not attempt:
+                    return None, b'', 'robots_pending'
+                reservations[hostname(target)] = target, attempt
+            response, raw, error, _ = self._request(target, 'robots', audit_source=audit_source)
+            status = response.status_code if response is not None else None
+            if error or status not in (301, 302, 303, 307, 308):
+                return status, raw, error
+            location = response.headers.get('Location')
+            if hop == 5 or not location:
+                break
+            try:
+                destination = urljoin(target, location)
+                if ((self.public_scope and not _safe_public_query(destination))
+                        or (url_allowed and not url_allowed(destination))):
+                    break
+                redirect = canonicalize(destination, preserve_path=True)
+                if (registrable_domain(redirect) != scope or urlsplit(redirect).path != '/robots.txt'
+                        or self._reason_denied(redirect) or not self.policy.robots(redirect)
+                        or same_fetch_target(redirect, target)):
+                    break
+            except (ValueError, UnicodeError):
+                break
+            target = redirect
+        return status, b'', 'robots_redirect'
+
+    def _news_robots_allowed(self, url, *, url_allowed, audit_source):
+        host = hostname(url)
+        with self._lock(url), self._guard:
+            stopped, _ = self._stopped_reason(url)
+            if stopped:
+                return False, stopped
+            body = self.host_policy.cached_robots(url)
+            if body is None:
+                attempt = self.host_policy.reserve_robots(url)
+                if not attempt:
+                    return False, 'robots_pending'
+        if body is None:
+            target = origin(url) + '/robots.txt'
+            reservations = {host: (target, attempt)}
+            status, raw, error = self._walk_robots(target, url_allowed=url_allowed, audit_source=audit_source,
+                                                   reservations=reservations)
+            decoded = raw.decode('utf-8', errors='replace')
+            challenge = re.match(r'\s*(?:just a moment|captcha|verify you are human|access denied)', decoded, re.I)
+            if status == 200 and decoded.lstrip().startswith('<'):
+                if detect_outcome(raw, 'text/html', status or 200, public_scope=True) in ('blocked', 'login_wall'):
+                    challenge = True
+                error = error or 'robots_unavailable'
+            if error or status not in (200, 404, 410) or challenge:
+                for reserved_url, reserved_at in reservations.values():
+                    with self._lock(reserved_url), self._guard:
+                        self.host_policy.release_robots(reserved_url, reserved_at)
+                        if challenge:
+                            self.host_policy.refuse(reserved_url)
+                            self._inaccessible(hostname(reserved_url), 'blocked')
+                if status in BACKOFF_STATUSES:
+                    return False, 'host_backoff'
+                if challenge or status in (*BLOCK_STATUSES, 402):
+                    return False, 'blocked'
+                if error in ('proxy_unavailable', 'robots_pending', 'host_backoff', 'resource_hold', 'blocked', 'robots_redirect'):
+                    return False, error
+                return False, 'robots_unavailable'
+            # Policy directives only. Percent escapes in paths are significant.
+            directives = (line.split('#', 1)[0].strip() for line in decoded.splitlines()
+                          if re.match(r'^\s*(user-agent|allow|disallow|crawl-delay)\s*:', line, re.I))
+            body = '\n'.join(directives) if status == 200 else ''
+            if strip_pii(unquote(body)) != unquote(body):
+                body = 'User-agent: *\nDisallow: /'
+            body = _normalize_percent_case(body)
+            parser = KoreanNewsRobots(body)
+            for reserved_url, reserved_at in reservations.values():
+                with self._lock(reserved_url), self._guard:
+                    self.host_policy.store_robots(reserved_url, body, parser.delay, reserved_at)
+        else:
+            parser = KoreanNewsRobots(body)
+        self._delay[host] = parser.delay
+        allowed = parser.can_fetch(USER_AGENT, _normalize_percent_case(url))
+        return allowed, '' if allowed else 'robots_disallowed'
+
+    def _legacy_robots_allowed(self, url, *, url_allowed, audit_source):
+        key = origin(url)
+        now = self.clock.now()
+        with self._guard:
+            cached = self._robots.get(key)
+            if cached and cached[0] > now:
+                parser, allowed, status = cached[1:]
+            else:
+                parser = None
+                row = self.db.execute('SELECT * FROM robots_cache WHERE origin=?', (key,)).fetchone()
+        if parser is None:
+            if row and datetime.fromisoformat(row['expires_at']) > now:
+                body, allowed, status = row['body'], bool(row['allowed']), row['status']
+                expires = datetime.fromisoformat(row['expires_at'])
+            else:
+                status, raw, error = self._walk_robots(key + '/robots.txt', url_allowed=url_allowed,
+                                                       audit_source=audit_source)
+                if error in ('cap_reached', 'proxy_unavailable'):
+                    return False, error
+                allowed = not error and (status == 200 or (status is not None and 400 <= status < 500
+                                                            and status not in (401, 403, 429)))
+                decoded = strip_pii(raw.decode('utf-8', errors='replace'))
+                body = decoded if status == 200 else ''
+                if re.search('just a moment|captcha|verify you are human', decoded, re.I):
+                    allowed = False
+                now = self.clock.now()
+                expires = now + timedelta(hours=24)
+                with self._guard, self.db:
+                    self.db.execute('INSERT OR REPLACE INTO robots_cache VALUES (?,?,?,?,?,?,?)',
+                                    (key, body, status, now.isoformat(), expires.isoformat(), int(allowed),
+                                     '' if allowed else 'robots unavailable'))
+            parser = RobotFileParser()
+            parser.parse(body.splitlines() if allowed else ['User-agent: *', 'Disallow: /'])
+            self._delay[self._stop_scope(url)] = parser.crawl_delay(USER_AGENT) or parser.crawl_delay('*') or 0
+            self._robots[key] = (expires, parser, allowed, status)
+        if not allowed and (status is None or 500 <= status < 600):
+            return False, 'robots_unavailable'
+        allowed = allowed and parser.can_fetch(USER_AGENT, url)
+        return allowed, '' if allowed else 'robots_disallowed'
+
+    def _robots_allowed(self, url, *, url_allowed=None, audit_source=None):
         if not self.policy.robots(url):
             return True, ''
-        # fetch() defers the domain stop while considering one HTTPS origin.
-        p=urlsplit(url)
-        origin=p.scheme+'://'+p.netloc
-        domain=registrable_domain(url)
-        now=self.clock.now()
-        lock = nullcontext() if host_locked else host_lock(self.settings.data_dir, domain)
-        with self._lock(domain), lock:
-            cached=self._robots.get(origin)
-            if cached and cached[0]>now:
-                parser,allowed,status=cached[1:]
-            else:
-                with self._guard:
-                    row=self.db.execute('SELECT * FROM robots_cache WHERE origin=?',(origin,)).fetchone()
-                if row and datetime.fromisoformat(row['expires_at'])>now:
-                    body=row['body']; allowed=bool(row['allowed']); status=row['status']
-                    expires=datetime.fromisoformat(row['expires_at'])
-                else:
-                    target=origin+'/robots.txt'
-                    # RFC 9309: at most five robots redirects, restricted to
-                    # this registrable domain and the /robots.txt path.
-                    for hop in range(6):
-                        response,raw,error=self._request(target,'robots',audit_source=audit_source)
-                        status=response.status_code if response is not None else None
-                        if error or status not in (301,302,303,307,308): break
-                        location=response.headers.get('Location')
-                        if hop==5 or not location: break
-                        try:
-                            destination=urljoin(target,location)
-                            if ((self.public_scope and not _safe_public_query(destination))
-                                    or (url_allowed and not url_allowed(destination))):
-                                break
-                            redirect=canonicalize(destination)
-                        except (ValueError,UnicodeError): break
-                        if (registrable_domain(redirect)!=domain or urlsplit(redirect).path!='/robots.txt'
-                                or self._reason_denied(redirect)
-                                or (self.policy.news_only and not korean_news(redirect))):
-                            break
-                        target=redirect
-                    if error in ('cap_reached','proxy_unavailable'):
-                        return False,error
-                    allowed=not error and (status==200 or (status is not None and 400<=status<500 and status not in (401,403,429)))
-                    decoded=strip_pii(raw.decode('utf-8',errors='replace'))
-                    body=decoded if status==200 else ''
-                    if self.policy.news_only:
-                        # Cache policy directives only, without unrelated text or HTML.
-                        body='\n'.join(line.split('#',1)[0].strip() for line in body.splitlines()
-                                       if re.match(r'^\s*(user-agent|allow|disallow|crawl-delay|sitemap)\s*:',line,re.I))
-                    if re.search('just a moment|captcha|verify you are human',decoded,re.I):
-                        allowed=False
-                    now=self.clock.now(); expires=now+timedelta(hours=24)
-                    with self._guard,self.db:
-                        self.db.execute('INSERT OR REPLACE INTO robots_cache VALUES (?,?,?,?,?,?,?)',(origin,body,status,now.isoformat(),expires.isoformat(),int(allowed),'' if allowed else 'robots unavailable'))
-                if self.policy.news_only:
-                    parser=KoreanNewsRobots(_normalize_percent_case(body) if allowed else 'User-agent: *\nDisallow: /')
-                    delay=parser.delay
-                else:
-                    parser=RobotFileParser()
-                    parser.parse(body.splitlines() if allowed else ['User-agent: *','Disallow: /'])
-                    delay=parser.crawl_delay(USER_AGENT) or parser.crawl_delay('*') or 0
-                self._delay[self._stop_scope(url)]=delay
-                self._robots[origin]=(expires,parser,allowed,status)
-            robots_url = _normalize_percent_case(url) if self.policy.news_only else url
-            if not allowed or not parser.can_fetch(USER_AGENT,robots_url):
-                if mark_inaccessible:
-                    self._inaccessible(self._stop_scope(url),'robots_disallowed')
-                elif status is None or 500<=status<600:
-                    return False,'robots_unavailable'
-                return False,'robots_disallowed'
-            return True,''
+        check = self._news_robots_allowed if self.policy.news_only else self._legacy_robots_allowed
+        # A second process must observe the completed cache write even if it
+        # acquired the request lock just after the robots response closed.
+        # The walk takes only one request lock at a time and never takes a
+        # second policy lock when it follows a redirect to another host.
+        with host_lock(self.settings.data_dir, hostname(url), robots=True):
+            return check(url, url_allowed=url_allowed, audit_source=audit_source)
+
     def fetch(self,url: str, *, kind: str = 'body', parent_url: str | None = None, task_id: str | None = None, discovered_via: str | None = None, _browser_shell: bool = False, api_headers: dict | None = None, subpage: bool = False, url_allowed=None, service_key: str | None = None, audit_source=None, preserve_path=False) -> FetchResult:
         """Guard each request and apply any caller-supplied URL scope before redirects."""
         if kind not in ('body','robots','sitemap','feed','api','browser_aux'):
@@ -405,109 +523,119 @@ class Fetcher:
             raise ValueError('Only scoped search API authentication is supported')
         https_probed=False
         retried_direct=False
-        with ExitStack() as locks:
-            hop=0
-            locked_domain=None
-            while hop <= redirect_limit:
-                reason=self._reason_denied(url)
-                if reason:
-                    return result('denied',reason)
-                domain=registrable_domain(url)
-                if domain != locked_domain:
-                    locks.close()
-                    locks.enter_context(self._lock(domain))
-                    locks.enter_context(host_lock(self.settings.data_dir, domain))
-                    locked_domain=domain
-                scope=self._stop_scope(url)
-                if scope in self._stopped:
-                    return result('blocked',self._stopped[scope])
-                allowed,reason=(self._robots_allowed(url,mark_inaccessible=False,url_allowed=url_allowed,audit_source=audit_source,host_locked=True)
-                                if kind != 'robots' and self.policy.robots(url) else (True,''))
-                if not allowed and reason=='robots_unavailable' and urlsplit(url).scheme=='http' and not https_probed:
-                    https_probed=True
-                    try:
-                        upgraded=canonicalize(urlsplit(url)._replace(scheme='https').geturl(),preserve_path=True)
-                    except (ValueError,UnicodeError):
-                        return result('denied','invalid URL')
-                    denied=self._reason_denied(upgraded)
-                    if denied:
-                        return result('denied',denied)
-                    allowed,reason=self._robots_allowed(upgraded,mark_inaccessible=False,url_allowed=url_allowed,audit_source=audit_source,host_locked=True)
-                    if allowed:
-                        url=upgraded
-                if not allowed:
-                    if reason=='cap_reached':
-                        return result('cap_reached',reason)
-                    if reason=='proxy_unavailable':
-                        if self.policy.retry_direct and not retried_direct:
-                            retried_direct=True
-                            continue
-                        return result('error',reason)
-                    self._inaccessible(self._stop_scope(url),'robots_disallowed')
-                    return result('robots_disallowed','robots_disallowed')
-                response,body,error=self._request(url,kind,headers=api_headers if (urlsplit(url).scheme,urlsplit(url).netloc)==auth_origin else None, service_key=service_key, audit_source=audit_source)
-                if error=='proxy_unavailable' and self.policy.retry_direct and not retried_direct:
-                    retried_direct=True
-                    continue
-                if error:
-                    return result('cap_reached' if error=='cap_reached' else 'error',error)
-                status=response.status_code
-                if service_key and 300<=status<400:
-                    return result('error','api_redirect',status=status)
-                if 300<=status<400:
-                    if status not in (301,302,303,307,308):
-                        return result('error','redirect_status',status=status)
-                    location=response.headers.get('Location')
-                    if not location:
-                        return result('error','redirect limit',status=status)
-                    try:
-                        destination=urljoin(url,location)
-                        if ((self.public_scope and (not _safe_public_query(destination) or
-                                                      self._unsafe_public_url(destination, kind)))
-                                or (url_allowed and not url_allowed(destination))):
-                            return result('denied','unsafe redirect',status=status)
-                        # Keep the request path separate from its persistence identity.
-                        redirect=canonicalize(destination,preserve_path=True)
-                    except (ValueError,UnicodeError):
-                        return result('denied','invalid redirect',status=status)
-                    if subpage and (urlsplit(redirect).scheme!='https' or registrable_domain(redirect)!=initial_domain):
-                        return result('denied','unsafe subpage redirect',status=status)
-                    if same_fetch_target(redirect,url):
-                        return result('error','redirect_self_loop',status=status)
-                    if hop==redirect_limit:
-                        return result('error','redirect limit',status=status)
-                    url=redirect
-                    hop+=1
-                    continue
-                ct=response.headers.get('Content-Type','application/octet-stream').lower()
-                if service_key:
-                    body=body.replace(service_key.encode(),b'[redacted]')
+        hop=0
+        while hop <= redirect_limit:
+            reason=self._reason_denied(url)
+            if reason:
+                return result('denied',reason)
+            stopped, retry = self._stopped_reason(url)
+            if stopped:
+                return result('blocked', stopped, retry_after=retry)
+            allowed,reason=(self._robots_allowed(url,url_allowed=url_allowed,audit_source=audit_source)
+                            if kind != 'robots' else (True,''))
+            if not allowed and reason=='robots_unavailable' and urlsplit(url).scheme=='http' and not https_probed:
+                https_probed=True
+                try:
+                    upgraded=canonicalize(urlsplit(url)._replace(scheme='https').geturl(),preserve_path=True)
+                except (ValueError,UnicodeError):
+                    return result('denied','invalid URL')
+                denied=self._reason_denied(upgraded)
+                if denied:
+                    return result('denied',denied)
+                allowed,reason=self._robots_allowed(upgraded,url_allowed=url_allowed,audit_source=audit_source)
+                if allowed:
+                    url=upgraded
+            if not allowed:
+                if reason=='cap_reached':
+                    return result('cap_reached',reason)
+                if reason=='proxy_unavailable':
+                    if self.policy.retry_direct and not retried_direct:
+                        retried_direct=True
+                        continue
+                    return result('error',reason)
+                if reason == 'robots_redirect':
+                    return result('robots_disallowed', reason)
+                if self.policy.news_only and reason != 'robots_disallowed':
+                    stopped, retry = self._stopped_reason(url)
+                    return result('blocked' if stopped or reason in ('blocked', 'host_backoff', 'resource_hold') else 'error',
+                                  stopped or reason, retry_after=retry)
+                self._inaccessible(self._stop_scope(url),'robots_disallowed')
+                return result('robots_disallowed','robots_disallowed')
+            response,body,error,outcome=self._request(url,kind,headers=api_headers if (urlsplit(url).scheme,urlsplit(url).netloc)==auth_origin else None, service_key=service_key, audit_source=audit_source)
+            if error=='proxy_unavailable' and self.policy.retry_direct and not retried_direct:
+                retried_direct=True
+                continue
+            if error:
+                stopped, retry = self._stopped_reason(url)
+                if stopped:
+                    return result('blocked', stopped, retry_after=retry)
+                return result('cap_reached' if error=='cap_reached' else 'error',error)
+            status=response.status_code
+            if service_key and 300<=status<400:
+                return result('error','api_redirect',status=status)
+            if 300<=status<400:
+                if status not in (301,302,303,307,308):
+                    return result('error','redirect_status',status=status)
+                location=response.headers.get('Location')
+                if not location:
+                    return result('error','redirect limit',status=status)
+                try:
+                    destination=urljoin(url,location)
+                    if ((self.public_scope and (not _safe_public_query(destination) or
+                                                  self._unsafe_public_url(destination, kind)))
+                            or (url_allowed and not url_allowed(destination))):
+                        return result('denied','unsafe redirect',status=status)
+                    # Keep the request path separate from its persistence identity.
+                    redirect=canonicalize(destination,preserve_path=True)
+                except (ValueError,UnicodeError):
+                    return result('denied','invalid redirect',status=status)
+                if subpage and (urlsplit(redirect).scheme!='https' or registrable_domain(redirect)!=initial_domain):
+                    return result('denied','unsafe subpage redirect',status=status)
+                if same_fetch_target(redirect,url):
+                    return result('error','redirect_self_loop',status=status)
+                if hop==redirect_limit:
+                    return result('error','redirect limit',status=status)
+                url=redirect
+                hop+=1
+                continue
+            ct=response.headers.get('Content-Type','application/octet-stream').lower()
+            if service_key:
+                body=body.replace(service_key.encode(),b'[redacted]')
+            retry=None
+            if self.policy.news_only and status in BACKOFF_STATUSES:
+                return result('blocked', status=status, retry_after=self._stopped_reason(url)[1])
+            if outcome is None:
                 outcome=detect_outcome(body,ct,status,public_scope=self.public_scope,
                                        allow_short=self.policy.allow_short)
-                retry=None
-                if status==429:
-                    raw=response.headers.get('Retry-After','')
+            if status==429:
+                raw=response.headers.get('Retry-After','')
+                try:
+                    retry=(self.clock.now()+timedelta(seconds=max(0,int(raw)))).isoformat()
+                except ValueError:
                     try:
-                        retry=(self.clock.now()+timedelta(seconds=max(0,int(raw)))).isoformat()
-                    except ValueError:
-                        try:
-                            retry=parsedate_to_datetime(raw).isoformat()
-                        except (ValueError,TypeError):
-                            retry=(self.clock.now()+timedelta(hours=24)).isoformat()
-                if outcome in ('blocked','login_wall'):
-                    self._inaccessible(self._stop_scope(url),outcome)
-                    if retry:
-                        with self._guard,self.db:
-                            self.db.execute('UPDATE sources SET next_at=? WHERE domain=?',(retry,self._stop_scope(url)))
-                # Excluded response bodies never leave this boundary or enter logs.
-                if not self.public_scope and is_excluded(url,body.decode('utf-8',errors='replace')):
-                    return result('denied','excluded',status=status)
-                preserve_shell=False
-                if _browser_shell and outcome=='empty_body':
-                    from .extract.browser import needs_browser
-                    preserve_shell=needs_browser(body)
-                sanitized=strip_pii(body) if not (service_key or 'pdf' in ct or ct.startswith('image/')) else body
-                return result(outcome,status=status,content=sanitized if outcome=='ok' or preserve_shell else b'',content_type=ct,content_hash=content_hash(sanitized,ct) if outcome=='ok' else '',retry_after=retry)
+                        retry=parsedate_to_datetime(raw).isoformat()
+                    except (ValueError,TypeError):
+                        retry=(self.clock.now()+timedelta(hours=24)).isoformat()
+            if outcome in ('blocked','login_wall') and not self.policy.news_only:
+                self._inaccessible(self._stop_scope(url),outcome)
+                if retry:
+                    with self._guard,self.db:
+                        self.db.execute('UPDATE sources SET next_at=? WHERE domain=?',(retry,self._stop_scope(url)))
+            # Excluded response bodies never leave this boundary or enter logs.
+            if not self.public_scope and is_excluded(url,body.decode('utf-8',errors='replace')):
+                return result('denied','excluded',status=status)
+            preserve_shell=False
+            if _browser_shell and outcome=='empty_body':
+                from .extract.browser import needs_browser
+                preserve_shell=needs_browser(body)
+            links = None
+            if self.discover_links and not subpage and kind == 'body' and outcome == 'ok' and 'html' in ct:
+                links = [(anchor['href'], strip_pii(anchor.get_text(' ', strip=True)))
+                         for anchor in BeautifulSoup(body, 'lxml').select('a[href]:not([download])')]
+            sanitized=strip_pii(body) if not (service_key or 'pdf' in ct or ct.startswith('image/')) else body
+            return result(outcome,status=status,content=sanitized if outcome=='ok' or preserve_shell else b'',content_type=ct,content_hash=content_hash(sanitized,ct) if outcome=='ok' else '',retry_after=retry,links=links)
         return result('error','redirect limit')
     def close(self):
         self.session.close()
+        if self._host_policy is not None:
+            self._host_policy.close()
