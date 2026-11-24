@@ -3,7 +3,7 @@ import json
 import re
 import sqlite3
 from collections import OrderedDict
-from contextlib import closing
+from contextlib import ExitStack, closing
 from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -193,17 +193,23 @@ def _default_search(host_dir):
 
 
 def run_web(settings, *, targets_path=None, clock=None, session=None, qwen_session=None, search=None, testing=False,
-            planner=None, planner_session=None):
+            planner=None, planner_session=None, admission=None):
     clock = clock or Clock()
     mode = 'web'
     try:
         _prepare_dir(settings.data_dir)
-        with ProcessLock(settings.data_dir / 'daemon.lock'):
-            recovery = _change_cycle(settings, targets_path=targets_path, testing=testing, export=False, clock=clock)
+        with ExitStack() as stack:
+            if admission is None:
+                stack.enter_context(ProcessLock(settings.data_dir / 'daemon.lock'))
+                active = stack.enter_context(closing(active_connect(settings.active_dir / 'active.sqlite3')))
+            else:
+                active = admission.db
+            recovery = _change_cycle(settings, targets_path=targets_path, testing=testing, export=False,
+                                     clock=clock)
             try:
                 result = _run_web(settings, targets_path=targets_path, clock=clock, session=session, search=search,
                                   testing=testing, planner=planner, planner_session=planner_session,
-                                  qwen_session=qwen_session)
+                                  qwen_session=qwen_session, active=active, facts_only=admission is not None)
             finally:
                 changes = _change_cycle(settings, targets_path=targets_path, testing=testing, clock=clock)
             result['changes'] = changes
@@ -245,16 +251,17 @@ def _rotate_seed_jobs(pending, last_fetched):
 
 
 def _run_web(settings, *, targets_path, clock, session, search, testing, planner=None,
-             planner_session=None, qwen_session=None):
+             planner_session=None, qwen_session=None, active, facts_only=False):
     state = State(settings.data_dir, clock, active_dir=settings.active_dir)
     with (closing(runtime.connect(settings.active_dir)) as ledger,
           DeepSeek(state, model=settings.model, session=session,
                    qwen_session=qwen_session) as router):
         return _drain_web(settings, state, ledger, router, targets_path=targets_path, clock=clock,
-                          search=search, testing=testing, planner=planner, planner_session=planner_session)
+                          search=search, testing=testing, planner=planner, planner_session=planner_session, active=active,
+                          facts_only=facts_only)
 
 
-def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, testing, planner, planner_session):
+def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, testing, planner, planner_session, active, facts_only):
     state.proxy_heal = web_proxy.new_heal_status()
     path = Path(targets_path) if targets_path else settings.data_dir / 'web_targets.json'
     if targets_path:
@@ -284,7 +291,6 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
         min_interval=0 if testing else 5,
         global_gap=0 if testing else 1,
     )
-    active = active_connect(active_settings.data_dir / 'active.sqlite3')
     history = None
     skipped = {}
     deferred_urls = set()
@@ -333,6 +339,9 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
         notes.extend({'url': '', 'disposition': note['code']} for note in planning_notes)
         completed = runtime.web_completed(ledger, state, testing=testing)
         scheduled = {}
+        waiting = {tuple(row) for row in ledger.execute(
+            'SELECT requested_url,venue_id,venue_key FROM extraction_retries WHERE retry_at>?',
+            (kst_now(clock).isoformat(),))} if facts_only else set()
         runtime_secrets = secrets()
         for job in jobs:
             try:
@@ -348,7 +357,7 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
             if not venue_identity_safe(job['venue_id'], job['venue_key'], runtime_secrets):
                 unsafe += 1
                 continue
-            if cooling(url) or url in completed:
+            if cooling(url) or url in completed or (url, job['venue_id'], job['venue_key']) in waiting:
                 continue
             if url in scheduled:
                 if job['seed_url'] or not scheduled[url]['seed_url']:
@@ -417,8 +426,12 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
 
         extraction = WebExtraction(history, ledger, state, router, sample)
         try:
-            with RunLock(active, active_settings.data_dir, 'collect-web', clock=clock):
+            with ExitStack() as stack:
+                if not facts_only:
+                    stack.enter_context(RunLock(active, active_settings.data_dir, 'collect-web', clock=clock))
                 fetcher = Fetcher(active_settings, active, clock, proxy=proxy, public_scope=True, policy=COLLECTION)
+                if facts_only:
+                    fetcher.facts_only = True
                 try:
                     attempted, children = set(), {}
                     while pending or deferred:
@@ -465,7 +478,8 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                             for fetch_url in select_subpages(fetched.content, fetched.url or job['url'],
                                                              job['domains'], testing=testing, limit=None):
                                 child_key = canonical_requested_url(fetch_url, testing=testing)
-                                if child_key in completed or child_key in attempted or cooling(child_key):
+                                if (child_key in completed or child_key in attempted or cooling(child_key)
+                                        or (child_key, *target_key) in waiting):
                                     continue
                                 if digest(child_key) in unchanged:
                                     deferred_children.append((child_key, fetch_url, deferred))
@@ -494,13 +508,18 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                                 pending.move_to_end(child_key, last=False)
                             children[target_key] = children.get(target_key, 0) + len(selected)
                         if disposition != 'ready':
-                            if not proxy_outage:
+                            if facts_only and disposition == 'error' and fetched.status not in (404, 410):
+                                runtime.retry_web(ledger, {**job, 'requested_url': job_key},
+                                                  clock, 'transport_retry', delay=600)
+                                stop_reason = 'transport_retry_pending'
+                            elif not proxy_outage:
                                 runtime.complete_web(ledger, state.data['day'], job_key, disposition)
                             sample(job['url'], disposition)
                             continue
                         row = {**job, 'requested_url': job_key, 'source_authorization': authorization,
                                'source_type': 'own_site' if authorization else 'third_party',
-                               'text': text, 'seen_at': seen_at, 'final_url': final, '_testing': testing}
+                               'text': text, 'seen_at': seen_at, 'final_url': final, '_testing': testing,
+                               '_facts_only': facts_only}
                         proposal_evidence.extend(inspect_page(
                             row, fetched, observed_at=seen_at, disposition=disposition))
                         extraction.offer(row)
@@ -508,7 +527,8 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                 finally:
                     fetcher.close()
         except ActiveBusy:
-            return finish_web(_base('deferred', 'active_busy', success=False, collected=False, mode='web', pages=pages))
+            return finish_web(_base('deferred', 'active_busy', success=False, collected=False,
+                                    mode='web', pages=pages))
         if proposal_evidence:
             try:
                 write_proposals(settings, proposal_evidence, day=kst_now(clock).date().isoformat())
@@ -525,7 +545,6 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
     finally:
         if history is not None:
             history.close()
-        active.close()
 
 
 def run_ingest(settings, *, inbox_file=None, clock=None, session=None, qwen_session=None):

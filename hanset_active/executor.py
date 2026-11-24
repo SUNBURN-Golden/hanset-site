@@ -8,6 +8,8 @@ from pathlib import Path
 from urllib.parse import urlsplit, urljoin, unquote
 from bs4 import BeautifulSoup
 from . import evaluator, gaps, labeling, venues
+from .collect.safety import evidence_rejection
+from .collect.config import official_site
 from .db import deterministic_id
 from .fetcher import FetchResult
 from .discover import Discovery, directories, links, mentions
@@ -15,6 +17,7 @@ from .discover.search import (Tavily, Nominatim, Wikipedia, Brave, DDGHtml,
                               DiscoveryDeferred, provider_retry_at)
 from .search.tavily import ENDPOINT as TAVILY_ENDPOINT
 from .extract import html, pdf, ocr, feed, sitemap, browser, fields
+from .extract.validation import active_validation
 from .scheduler import enqueue
 from .util.hashing import content_hash
 from .util.pii import strip_pii
@@ -52,22 +55,34 @@ class Executor:
         self.start_requests = self.db.execute('SELECT count(*) FROM request_log').fetchone()[0]
         self.run_id = None
         self.task = None
+        self.facts_only = getattr(fetcher, 'facts_only', False) is True
         self.documents = {}
-        for row in self.db.execute('SELECT structured FROM extractions'):
+        query = 'SELECT structured FROM extractions'
+        if self.facts_only:
+            query += ' JOIN active_evidence_ready USING(raw_id)'
+        for row in self.db.execute(query):
             saved = json.loads(row[0] or '{}').get('_active_page')
-            if saved: self.documents[saved['url']] = saved
+            if saved:
+                self.documents[saved['url']] = saved
         self.heartbeat = lambda: None
         self.context = Discovery(fetcher, getter=self.get, budget=max_requests,
                                  search_guard=self.search_allowed, on_search_dispatch=self.search_dispatch)
-        self.providers = providers if providers is not None else [p(self.context.get, self.db, clock=self.clock) for p in (Tavily, Nominatim, Wikipedia, Brave, DDGHtml)]
+        self.providers = providers if providers is not None else [
+            p(self.context.get, self.db, clock=self.clock, public_source=self.facts_only)
+            for p in (Tavily, Nominatim, Wikipedia, Brave, DDGHtml)]
         for provider in self.providers:
-            if isinstance(provider,Tavily): provider.context=self.context
+            if isinstance(provider, Tavily):
+                provider.context = self.context
+                if self.facts_only:
+                    provider.host_dir = fetcher.settings.data_dir
         self.context.providers=self.providers
         self._original_request = fetcher._request
         self._original_fetch = fetcher.fetch
 
     @property
     def requests(self):
+        if self.facts_only and self.run_id:
+            return self.db.execute('SELECT count(*) FROM request_log WHERE run_id=?', (self.run_id,)).fetchone()[0]
         return self.db.execute('SELECT count(*) FROM request_log').fetchone()[0] - self.start_requests
 
     def search_allowed(self):
@@ -88,15 +103,19 @@ class Executor:
         try:
             return self._original_request(*args, **kwargs)
         finally:
-            if self.run_id:
+            if self.run_id and not self.facts_only:
                 with self.db:
                     self.db.execute('UPDATE request_log SET run_id=? WHERE request_id>?',(self.run_id,previous))
 
     def install(self):
         self.fetcher._request = self.guarded_request
+        if self.facts_only:
+            self.fetcher.run_id = self.run_id
 
     def close(self):
         self.fetcher._request = self._original_request
+        if self.facts_only:
+            self.fetcher.run_id = None
 
     def get(self, url, *, kind='body', **kwargs):
         task = self.task or {}
@@ -104,7 +123,11 @@ class Executor:
         saved = self.db.execute('SELECT cursor FROM run_checkpoints WHERE checkpoint_id=?',(checkpoint_id,)).fetchone() if task.get('task_id') else None
         if saved:
             raw = self.db.execute('SELECT * FROM raw_documents WHERE raw_id=?',(saved[0],)).fetchone()
-            if raw and Path(raw['blob_path']).is_file():
+            if (self.facts_only and raw and raw['canonical_url'] in self.documents
+                    and task.get('kind') not in ('search', 'directory')
+                    and self.db.execute('SELECT 1 FROM active_evidence_ready WHERE raw_id=?', (saved[0],)).fetchone()):
+                return FetchResult(raw['canonical_url'], 'ok')
+            if not self.facts_only and raw and raw['blob_path'] and Path(raw['blob_path']).is_file():
                 return FetchResult(raw['url'],'ok',status=raw['http_status'],content=Path(raw['blob_path']).read_bytes(),
                     content_type=raw['content_type'],content_hash=raw['content_hash'],fetched_at=raw['fetched_at'],fetch_method=raw['fetch_method'])
         result = self._original_fetch(url, kind=kind, _browser_shell=True,
@@ -120,6 +143,8 @@ class Executor:
             result = browser.fetch(self.fetcher, result.url)
         if result.ok:
             raw_id = self.process(result)
+            if self.facts_only and raw_id is None:
+                self.documents.pop(result.url, None)
             if raw_id and task.get('task_id'):
                 with self.db:
                     self.db.execute('INSERT OR IGNORE INTO run_checkpoints(checkpoint_id,task_id,kind,cursor,updated_at) VALUES (?,?,?,?,?)',
@@ -145,7 +170,8 @@ class Executor:
     def process(self, result):
         doc = self._extract(result)
         text = strip_pii(doc.get('text', ''))
-        if is_excluded(result.url, text, json.dumps(doc, ensure_ascii=False)): return
+        if not self.facts_only and is_excluded(result.url, text, json.dumps(doc, ensure_ascii=False)):
+            return
         task = self.task or {}
         unavailable = doc.get('status') in ('unavailable', 'not_notice')
         domain = registrable_domain(result.url)
@@ -153,14 +179,20 @@ class Executor:
         source_id = deterministic_id(domain)
         raw_hash = result.content_hash or content_hash(result.content, result.content_type)
         raw_id = deterministic_id(result.url, raw_hash)
-        # Binary originals never touch disk: only sanitized extracted text does.
-        blob = text.encode() if ('pdf' in result.content_type or result.content_type.startswith('image/')) else strip_pii(result.content)
-        blob_path = self.fetcher.settings.data_dir/'raw'/raw_hash[:2]/raw_hash
-        blob_path.parent.mkdir(parents=True, exist_ok=True)
-        if not blob_path.exists():
-            temporary = blob_path.with_suffix('.tmp')
-            temporary.write_bytes(blob)
-            temporary.replace(blob_path)
+        if self.facts_only:
+            # Keep legacy captures and observation IDs intact.
+            raw_hash = deterministic_id('facts-only-v1', raw_hash)
+            raw_id = deterministic_id(result.url, raw_hash)
+        # Legacy manual collection retains its existing storage format.
+        blob, blob_path = b'', None
+        if not self.facts_only:
+            blob = text.encode() if ('pdf' in result.content_type or result.content_type.startswith('image/')) else strip_pii(result.content)
+            blob_path = self.fetcher.settings.data_dir/'raw'/raw_hash[:2]/raw_hash
+            blob_path.parent.mkdir(parents=True, exist_ok=True)
+            if not blob_path.exists():
+                temporary = blob_path.with_suffix('.tmp')
+                temporary.write_bytes(blob)
+                temporary.replace(blob_path)
         page = dict(doc, url=result.url, outcome='ok', unavailable=unavailable,
                     attachment=doc['extractor'] in ('pdf','ocr'), counterpart=bool(re.search(r'/en/|/ko/', result.url)))
         self.documents[result.url] = page
@@ -169,9 +201,14 @@ class Executor:
         page_type = items[0]['value']
         with self.db:
             self.db.execute('INSERT OR IGNORE INTO raw_documents VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                (raw_id,result.url,result.url,domain,result.fetched_at or now,result.status,result.content_type,raw_hash,len(blob),str(blob_path),source_id,task.get('parent_url'),task.get('task_id'),result.fetch_method,doc['extractor_version'],'ok'))
+                (raw_id,result.url,result.url,domain,result.fetched_at or now,result.status,result.content_type,raw_hash,len(blob),str(blob_path) if blob_path else None,source_id,task.get('parent_url'),task.get('task_id'),result.fetch_method,doc['extractor_version'],'ok'))
             self.db.execute('INSERT OR IGNORE INTO extractions VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',
-                (eid,raw_id,doc['extractor'],doc['extractor_version'],page_type,doc.get('lang'),doc.get('title',''),content_hash(text),json.dumps({**doc.get('structured',{}),'_active_page':page},ensure_ascii=False),json.dumps(doc.get('mentions',[]),ensure_ascii=False),json.dumps(doc.get('links',[]),ensure_ascii=False),json.dumps(doc.get('dates',[])),json.dumps(doc.get('amounts',[])),now))
+                (eid,raw_id,doc['extractor'],doc['extractor_version'],page_type,doc.get('lang'),'' if self.facts_only else doc.get('title',''),content_hash(text),
+                 '{}' if self.facts_only else json.dumps({**doc.get('structured',{}),'_active_page':page},ensure_ascii=False),
+                 '[]' if self.facts_only else json.dumps(doc.get('mentions',[]),ensure_ascii=False),
+                 '[]' if self.facts_only else json.dumps(doc.get('links',[]),ensure_ascii=False),
+                 '[]' if self.facts_only else json.dumps(doc.get('dates',[])),
+                 '[]' if self.facts_only else json.dumps(doc.get('amounts',[])),now))
         # A persisted raw insert is a safe crash boundary. The task remains leased.
         if self.fetcher.settings.testing:
             delay = float(os.environ.get('HANSET_ACTIVE_TEST_EXECUTOR_SLEEP', '0'))
@@ -182,6 +219,9 @@ class Executor:
         directory_venue = None
         if directory_detail and re.search(r'/[A-Z]{2}N\d+/?$',urlsplit(result.url).path):
             directory_detail = None  # editorial article (…N<id>), not a venue page (…P<id>)
+        if self.facts_only and directory_detail and any(
+                evidence_rejection(directory_detail.get(key) or '') for key in ('name', 'website', 'address')):
+            directory_detail = None
         if directory_detail and directory_detail['name'] and not rejected_directory:
             directory_venue = venues.upsert_venue(self.db,directory_detail['name'],website=directory_detail['website'],
                 discovered_via='directory:'+directory_detail['directory_id'],clock=self.clock,
@@ -202,7 +242,7 @@ class Executor:
                 name = doc['title'].split('|')[0].strip()
         source = self.db.execute('SELECT * FROM sources WHERE domain=?', (domain,)).fetchone()
         if not source or source['state'] not in ('registered','deprioritized','inaccessible') or (name and source['state']=='deprioritized' and source['reason']=='rule_scores'):
-            old_texts = [(r['domain'], Path(r['blob_path']).read_text(errors='replace')) for r in self.db.execute('SELECT domain,blob_path FROM raw_documents WHERE domain<>?',(domain,)) if Path(r['blob_path']).is_file()]
+            old_texts = [] if self.facts_only else [(r['domain'], Path(r['blob_path']).read_text(errors='replace')) for r in self.db.execute('SELECT domain,blob_path FROM raw_documents WHERE domain<>?',(domain,)) if r['blob_path'] and Path(r['blob_path']).is_file()]
             scores = evaluator.evaluate(result.url,[doc],venue_name=name,existing_texts=old_texts, profile=self.context.profile,
                 seed_domains=[r[0] for r in self.db.execute('SELECT domain FROM seed_domains')])
             with self.db:
@@ -211,8 +251,9 @@ class Executor:
                 self.db.execute('INSERT OR IGNORE INTO source_trials VALUES (?,?,?,?,?,?,?,?,?,?,?)',
                     (deterministic_id(source_id,result.url),source_id,result.url,*(scores[k] for k in ('relevance','novelty','extractability','original','total','decision','reason')),now))
             source = self.db.execute('SELECT * FROM sources WHERE domain=?',(domain,)).fetchone()
-        if rejected_directory: return raw_id
-        if name and venue is None and not directory_detail:
+        if rejected_directory:
+            return None if self.facts_only else raw_id
+        if name and venue is None and not directory_detail and (not self.facts_only or not evidence_rejection(name)):
             vid = venues.upsert_venue(self.db,name,website=result.url,discovered_via=task.get('discovered_via',''),clock=self.clock,context=doc.get('title',''))
             venue = self.db.execute('SELECT * FROM venues WHERE venue_id=?',(vid,)).fetchone() if vid else None
         # Registered relevance alone does not prove a page is an original source.
@@ -223,6 +264,10 @@ class Executor:
         if directory_detail: source_type = 'official_directory'
         if venue and doc['extractor'] in ('pdf','ocr') and domain in json.loads(venue['domains'] or '[]'):
             source_type = 'attachment'
+        if self.facts_only and not (
+                source_type == 'own_site' and original and venue and official_site(result.url)
+                and domain == registrable_domain(venue['website'] or '')):
+            source_type = 'third_party'
         labeling.store_labels(self.db,raw_id,eid,labeling.labels(text,source_type=source_type,content_type=result.content_type,
             hosted_on_own_domain=source_type=='attachment',ocr_confidence=doc.get('mean_confidence')),self.clock)
         evidence = fields.extract_document(doc)
@@ -234,6 +279,10 @@ class Executor:
                         rule_id='directory.'+field+'.v1',extractor_version='1.0.0',ambiguous=False))
         if venue:
             for item in evidence:
+                if self.facts_only:
+                    item = self.validate_observation(item, doc, result, venue)
+                    if item is None:
+                        continue
                 oid = labeling.store_observation(self.db,venue['venue_key'],item,source_url=result.url,source_type=source_type,
                     raw_id=raw_id,extraction_id=eid,clock=self.clock,own_domain=venue['website'])
                 venues.apply_observation(self.db,venue['venue_id'],oid,clock=self.clock)
@@ -257,15 +306,56 @@ class Executor:
                 if target: self.context.candidate(urljoin(result.url,target),text=str(item),via=doc['extractor'],parent_url=result.url,low_prior=True)
         elif venue:
             links.discover(self.context,doc,parent_url=result.url,venue_id=venue['venue_id'],source_state='deprioritized' if directory_detail else state)
+        stored = self.checkpoint_page(page) if self.facts_only else page
+        self.documents[result.url] = stored
         with self.db:
             self.db.execute('UPDATE extractions SET structured=? WHERE extraction_id=?',
-                (json.dumps({**doc.get('structured',{}),'_active_page':page},ensure_ascii=False),eid))
+                (json.dumps({**({} if self.facts_only else doc.get('structured',{})),
+                             '_active_page': stored}, ensure_ascii=False),eid))
         if venue:
             self.update_gaps(venue['venue_id'])
             if page.get('needs_extractor_review'):
                 with self.db:
                     self.db.execute("UPDATE gaps SET reason='needs_extractor_review' WHERE venue_id=?",(venue['venue_id'],))
+        if self.facts_only:
+            with self.db:
+                self.db.execute('INSERT OR IGNORE INTO active_evidence_ready VALUES (?,?)',
+                                (raw_id, kst_now(self.clock).isoformat()))
         return raw_id
+
+    def validate_observation(self, item, doc, result, venue):
+        if evidence_rejection(json.dumps(item['value'], ensure_ascii=False)) or evidence_rejection(item['quote']):
+            return None
+        validation = active_validation(item, doc, result.url, result.content_type, venue)
+        return {**item, 'quote': '', 'ambiguous': item['ambiguous'] or bool(validation['reason']),
+                'locator': {'validation': validation}}
+
+    def checkpoint_page(self, page):
+        from .config import load_profile
+
+        checkpoint = {key: page[key] for key in ('url', 'outcome', 'unavailable', 'attachment', 'counterpart',
+                                                 'needs_extractor_review') if key in page}
+        text = page.get('text', '')
+        checkpoint['facts_only'] = True
+        checkpoint['field_mentions'], checkpoint['field_cues'] = [], []
+        configs = load_profile()['fields']
+        for field in configs:
+            keywords = field['keywords_ko'] + field['keywords_en']
+            if any(keyword.casefold() in text.casefold() for keyword in keywords):
+                checkpoint['field_mentions'].append(field['id'])
+            if any(re.search(re.escape(k) + r'.{0,120}(?:\d|yes|no|있|없|가능|불가)', text, re.I | re.S) for k in keywords):
+                checkpoint['field_cues'].append(field['id'])
+        checkpoint['links'] = []
+        for link in page.get('links', ()):
+            if self.fetcher._reason_denied(link['url']) or self.fetcher._unsafe_public_url(link['url'], 'body'):
+                continue
+            label = link.get('text', '').casefold()
+            match = [field['id'] for field in configs
+                     if any(k.casefold() in label for k in field['keywords_ko'] + field['keywords_en'])]
+            checkpoint['links'].append({
+                'url': link['url'], 'kind': link['kind'], 'fields': match,
+                'hreflang': bool(link.get('hreflang'))})
+        return checkpoint
 
     def check_structure(self, source_id, page_type, raw_id, content, field_ids, page):
         signature = structure_signature(content,field_ids)

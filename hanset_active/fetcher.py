@@ -90,6 +90,7 @@ def detect_outcome(content: bytes, content_type: str, status: int, *, public_sco
 class Fetcher:
     def __init__(self, settings: Settings | None = None, db=None, clock: Clock | None = None, proxy: str = '', *, public_scope=False, policy=LEGACY):
         self.policy=policy
+        self.run_id = None
         self.settings=settings or Settings()
         self.public_scope=public_scope
         # Collect-web can continue directly after a confirmed transport outage.
@@ -117,7 +118,7 @@ class Fetcher:
         with self._guard:
             return self._locks.setdefault(domain,threading.RLock())
     def _reason_denied(self,url, *, registration=False):
-        if self.public_scope and not registration:
+        if self.public_scope and (not registration or getattr(self, 'facts_only', False)):
             if is_collect_denied(url):
                 return 'denied host'
         else:
@@ -130,6 +131,14 @@ class Fetcher:
             if not (self.settings.testing and self.settings.allow_private_hosts and host in ('127.0.0.1','::1','localhost')):
                 return 'private literal host'
         return ''
+    def _unsafe_public_url(self, url, kind):
+        if not getattr(self, 'facts_only', False):
+            return False
+        from .collect.safety import evidence_rejection
+        # API query strings can contain a venue query. The URL stored in the
+        # request ledger is restricted to the endpoint in facts-only mode.
+        return bool(evidence_rejection(unquote(url.split('?', 1)[0] if kind == 'api' else url)))
+
     def _stop_scope(self,url):
         return (urlsplit(url).hostname or '').lower().rstrip('.') if self.policy.news_only else registrable_domain(url)
 
@@ -199,6 +208,7 @@ class Fetcher:
             body=b''
             response=None
             reason=''
+            transfer_complete = False
             proxy_down=False
             request_proxy=self.proxy
             try:
@@ -221,6 +231,8 @@ class Fetcher:
                             body=b''
                             reason='size limit'
                             break
+                    else:
+                        transfer_complete = True
             except (requests.RequestException, ValueError) as exc:
                 reason=type(exc).__name__
                 if request_proxy and isinstance(exc,requests.ConnectionError):
@@ -231,8 +243,10 @@ class Fetcher:
                 if response is not None:
                     response.close()
                 with self._guard, self.db:
-                    args=(strip_pii(url),domain,kst_now(self.clock).isoformat(),status,kind,len(body))
-                    self.db.execute('INSERT INTO request_log(url,domain,ts,status,kind,bytes) VALUES (?,?,?,?,?,?)',args)
+                    logged_url = url.split('?', 1)[0] if kind == 'api' and getattr(self, 'facts_only', False) else url
+                    args=(strip_pii(logged_url),domain,kst_now(self.clock).isoformat(),status,kind,len(body))
+                    self.db.execute('''INSERT INTO request_log(url,domain,ts,status,kind,bytes,transfer_complete,run_id)
+                                       VALUES (?,?,?,?,?,?,?,?)''', (*args, int(transfer_complete), self.run_id))
                     if audit_source:
                         self.db.execute('UPDATE request_log SET adapter=?,outcome=? WHERE request_id=last_insert_rowid()',
                                         (audit_source, reason or ('http_'+str(status))))
@@ -249,6 +263,8 @@ class Fetcher:
                 raise ProxyUnavailable('proxy_unavailable')
             return response,body,reason
     def _robots_allowed(self,url, *, mark_inaccessible=True, url_allowed=None, audit_source=None, host_locked=False):
+        if not self.policy.robots(url):
+            return True, ''
         # fetch() defers the domain stop while considering one HTTPS origin.
         p=urlsplit(url)
         origin=p.scheme+'://'+p.netloc
@@ -326,8 +342,9 @@ class Fetcher:
             raise ValueError('invalid_license_request')
         ref=dict(parent_url=strip_pii(parent_url) if parent_url else None,task_id=task_id if task_id and self.db.execute('SELECT 1 FROM tasks WHERE task_id=?',(task_id,)).fetchone() else None,discovered_via=strip_pii(discovered_via) if discovered_via else None)
         def result(outcome,reason='',**kw):
-            decoded=unquote(url)
-            safe_url=url if self.public_scope and strip_pii(decoded)==decoded else strip_pii(url)
+            audit_url = url.split('?', 1)[0] if kind == 'api' and getattr(self, 'facts_only', False) else url
+            decoded = unquote(audit_url)
+            safe_url = audit_url if self.public_scope and strip_pii(decoded) == decoded else strip_pii(audit_url)
             if outcome not in ('ok','denied','cap_reached'):
                 from .db import deterministic_id
                 with self._guard,self.db:
@@ -336,7 +353,8 @@ class Fetcher:
             return FetchResult(safe_url,outcome,reason=reason,fetched_at=kst_now(self.clock).isoformat(),source_ref=ref,**kw)
         preserve_path = preserve_path or subpage or self.policy.preserve_path
         try:
-            if self.public_scope and not _safe_public_query(url):
+            if self.public_scope and (not _safe_public_query(url) or
+                                      self._unsafe_public_url(url, kind)):
                 return FetchResult('', 'denied', reason='unsafe_url')
             if url_allowed and not url_allowed(url):
                 return result('denied','outside requested URL scope')
@@ -367,7 +385,7 @@ class Fetcher:
                 if scope in self._stopped:
                     return result('blocked',self._stopped[scope])
                 allowed,reason=(self._robots_allowed(url,mark_inaccessible=False,url_allowed=url_allowed,audit_source=audit_source,host_locked=True)
-                                if self.policy.robots(url) else (True,''))
+                                if kind != 'robots' and self.policy.robots(url) else (True,''))
                 if not allowed and reason=='robots_unavailable' and urlsplit(url).scheme=='http' and not https_probed:
                     https_probed=True
                     upgraded=canonicalize(urlsplit(url)._replace(scheme='https').geturl(),preserve_path=preserve_path)
@@ -403,7 +421,8 @@ class Fetcher:
                         return result('error','redirect limit',status=status)
                     try:
                         destination=urljoin(url,response.headers['Location'])
-                        if ((self.public_scope and not _safe_public_query(destination))
+                        if ((self.public_scope and (not _safe_public_query(destination) or
+                                                      self._unsafe_public_url(destination, kind)))
                                 or (url_allowed and not url_allowed(destination))):
                             return result('denied','unsafe redirect',status=status)
                         redirect=canonicalize(destination,preserve_path=preserve_path)

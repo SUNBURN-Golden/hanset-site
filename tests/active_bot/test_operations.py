@@ -119,16 +119,20 @@ def test_export_preserves_relational_ids(bot,tmp_path):
     assert rows[0]['venue_id']==vid
 
 
-def test_cron_wrapper_overlap_and_timestamps(bot):
+def test_cron_wrapper_overlap_and_timestamps(bot, tmp_path):
     import fcntl
     import os
     import subprocess
     from pathlib import Path
     wrapper=Path(__file__).resolve().parents[2]/'scripts/run_active_cron.sh'
+    from hanset_active.util.timeutil import kst_now
     bot.settings.data_dir.mkdir(exist_ok=True)
+    stamps = tmp_path / 'stamps'
+    stamps.mkdir()
+    (stamps / 'daily_collect.ok').write_text(kst_now().isoformat() + '\n')
     with (bot.settings.data_dir/'cron.lock').open('w') as lock:
         fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
-        result=subprocess.run(['bash',str(wrapper)],env=dict(os.environ,HANSET_ACTIVE_DIR=str(bot.settings.data_dir)),capture_output=True,text=True,timeout=10)
+        result=subprocess.run(['bash',str(wrapper)],env=dict(os.environ,HANSET_ACTIVE_DIR=str(bot.settings.data_dir), HANSET_DATA_DIR=str(tmp_path)),capture_output=True,text=True,timeout=10)
     assert result.returncode==0
     lines=next((bot.settings.data_dir/'logs').glob('*.log')).read_text().splitlines()
     assert len(lines)==1 and lines[0].endswith('+0900 already_running')

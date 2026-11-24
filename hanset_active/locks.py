@@ -44,11 +44,24 @@ class RunLock:
             self.db.execute("INSERT INTO run_lease VALUES (?,?,?,?) ON CONFLICT(lease_key) DO UPDATE SET run_id=excluded.run_id,heartbeat=excluded.heartbeat,lease_until=excluded.lease_until", (self.lease_key, self.run_id, now.isoformat(), until))
         return until
 
+    def _release_lease(self):
+        with self.db:
+            self.db.execute("DELETE FROM run_lease WHERE lease_key=? AND run_id=?",
+                            (self.lease_key, self.run_id))
+
+    @contextmanager
+    def inherited_lease(self):
+        """Maintain the SQLite lease while a supervisor holds the inherited flock."""
+        self.heartbeat()
+        try:
+            yield self
+        finally:
+            self._release_lease()
+
     def __exit__(self, *args):
         if self.file is not None:
             try:
-                with self.db:
-                    self.db.execute("DELETE FROM run_lease WHERE lease_key=? AND run_id=?", (self.lease_key, self.run_id))
+                self._release_lease()
             finally:
                 fcntl.flock(self.file, fcntl.LOCK_UN)
                 self.file.close()

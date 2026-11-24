@@ -123,6 +123,7 @@ class WebSeeds:
         self.store, self.fetcher = store, fetcher
         self.db, self.clock, self.profile = store.db, store.clock, store.profile
         self.cache = {}
+        self.failed_sources = set()
         self.heartbeat = heartbeat
         self.directory_domains = {registrable_domain(row['url']) for row in self.profile['directories']}
         self.directory_domains.add('hyrox.com')
@@ -132,9 +133,12 @@ class WebSeeds:
             self.heartbeat()
             # Credentialed API requests use this very same web policy.
             allowed = options.pop('url_allowed', None)
-            return self.fetcher.fetch(url, audit_source='seeds:' + source,
-                                      url_allowed=lambda u: bool(public_url(u, testing=self.store.testing))
-                                      and (allowed is None or allowed(u)), **options)
+            fetched = self.fetcher.fetch(url, audit_source='seeds:' + source,
+                                         url_allowed=lambda u: bool(public_url(u, testing=self.store.testing))
+                                         and (allowed is None or allowed(u)), **options)
+            if fetched.outcome == 'error' and fetched.status not in (404, 410):
+                self.failed_sources.add(source)
+            return fetched
         return get
 
     def page(self, url, source):
@@ -253,10 +257,11 @@ class WebSeeds:
 
     def directories(self):
         from .directories import public_listing
-        counts, usable = Counter(), False
+        counts, usable, partial = Counter(), False, False
         entries = [row for row in self.profile['directories'] if row.get('enabled', True)
                    and row.get('directory') and row['kind'] in ('html_list', 'sitemap')]
         entries.append({'id': 'hyrox_events', 'kind': 'html_list', 'url': 'https://hyrox.com/find-my-race/'})
+        get = self.getter('directories')
         for row in entries:
             category = {'crossfit': 'crossfit_box', 'hyrox': 'hyrox_box', 'hyrox_events': 'wellness_event'}.get(row['id'], 'sauna')
             if row['kind'] == 'sitemap':
@@ -264,8 +269,9 @@ class WebSeeds:
                                                     terms=row.get('slug_include', ()), directory=row)
                 counts.update(found)
                 usable |= status == 'ok'
+                partial |= status.startswith('partial:')
                 continue
-            for listing_url, info in public_listing(self.getter('directories'), row['url'], public_url):
+            for listing_url, info in public_listing(get, row['url'], public_url):
                 for obj in info['objects']:
                     location = obj.get('location')
                     location_address = location.get('address') if isinstance(location, dict) else None
@@ -293,6 +299,8 @@ class WebSeeds:
                         usable = True
                         counts.update(self.record_page(url, 'directories', country_context=local,
                                                        default_category=category, directory=row))
+        if partial or 'directories' in self.failed_sources:
+            return counts, 'partial:directory_request'
         return counts, 'ok' if usable else 'skipped:no_public_listing'
 
     def sitemaps(self):
@@ -313,10 +321,11 @@ class WebSeeds:
         for origin in ordered:
             getter = self.getter('sitemaps')
             domain = registrable_domain(origin)
-            robots = getter(origin + '/robots.txt', kind='robots',
-                            url_allowed=lambda u: registrable_domain(u) == domain)
             roots = [origin + '/sitemap.xml']
-            if robots.ok:
+            robots = (getter(origin + '/robots.txt', kind='robots',
+                             url_allowed=lambda u: registrable_domain(u) == domain)
+                      if self.fetcher.policy.robots(origin) else None)
+            if robots and robots.ok:
                 for item in advertised_sitemaps(robots.text):
                     if (safe := public_url(urljoin(origin, item), testing=self.store.testing)) and registrable_domain(safe) == domain:
                         roots.append(safe)
@@ -325,8 +334,9 @@ class WebSeeds:
             statuses.append(status)
             with self.db:
                 checkpoints.save(self.db, 'sitemaps', 'origin_rotation', {'origin': origin}, self.clock)
-        return counts, ('partial:sitemap_request' if any(s.startswith('partial:') for s in statuses)
-                        else 'ok' if statuses else 'skipped:no_known_sites')
+        if 'sitemaps' in self.failed_sources or any(s.startswith('partial:') for s in statuses):
+            return counts, 'partial:sitemap_request'
+        return counts, 'ok' if statuses else 'skipped:no_known_sites'
 
     def _sitemap_walk(self, key, roots, *, source='sitemaps', terms=(), directory=None):
         domain = registrable_domain(roots[0])

@@ -53,6 +53,8 @@ def advertised_sitemaps(text):
     return re.findall(r'^\s*Sitemap:\s*(\S+)', text, re.I | re.M)
 
 def robots_sitemaps(context, origin):
+    if not context.fetcher.policy.robots(origin):
+        return expand(context, urljoin(origin, '/sitemap.xml'), parent_url=origin)
     result=context.get(urljoin(origin,'/robots.txt'),kind='robots')
     if not result or not result.ok: return []
     tasks=[]

@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
-# HANSET twin daemon cron wrapper. Local only; no network, no credentials, no deploy.
-set -u
-repo_root=$(git -C "$(dirname -- "$0")" rev-parse --show-toplevel) || exit 1
-cd -- "$repo_root" || exit 1
-twin_dir=${HANSET_TWIN_DIR:-/workspace/hanset-data/twin}
-mkdir -p -- "$twin_dir/logs" || exit 1
-log="$twin_dir/logs/$(TZ=Asia/Seoul date +%Y-%m-%d).log"
-{ printf '%s run_start\n' "$(TZ=Asia/Seoul date +%FT%T%z)"
-  timeout 20m python3 -m hanset_twin run --twin-dir "$twin_dir" 2>&1
-  printf '%s run_exit=%s\n' "$(TZ=Asia/Seoul date +%FT%T%z)" "$?"; } >> "$log"
+set -eu
+set +x
+umask 077
+checkout=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+cd -- "$checkout"
+export PYTHONDONTWRITEBYTECODE=1
+unset HANSET_IG_SESSION
+data_dir=${HANSET_DATA_DIR:-/workspace/hanset-data}
+log_dir=$(realpath -m -- "${HANSET_TWIN_DIR:-$data_dir/twin}")/logs
+case "$log_dir/" in
+    "$checkout/"*) exit 1 ;;
+esac
+mkdir -p -- "$log_dir"
+log="$log_dir/$(TZ=Asia/Seoul date +%F).log"
+result=0
+printf '%s run_start\n' "$(TZ=Asia/Seoul date +%FT%T%z)" >>"$log"
+python3 -m hanset_active.collect.scheduled twin "$@" >>"$log" 2>&1 || result=$?
+printf '%s run_exit=%s\n' "$(TZ=Asia/Seoul date -Iseconds)" "$result" >>"$log"
+exit "$result"

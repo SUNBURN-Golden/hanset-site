@@ -4,6 +4,7 @@ import json
 import os
 import re
 import sqlite3
+from time import monotonic
 from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from typing import Protocol
@@ -145,11 +146,14 @@ def _snapshot_rows(db, targets, watchlist, *, now, ownership=()):
     return ranked, digest([ranked, fingerprints, ownership]), notes
 
 
-def _readonly(settings):
+def _readonly(settings, *, bounded=False):
     path = settings.active_dir / 'active.sqlite3'
-    if not path.is_file():
-        raise FileNotFoundError
-    db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)
+    path.stat()
+    db = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True,
+                         timeout=0.25 if bounded else 5)
+    if bounded:
+        deadline = monotonic() + 3
+        db.set_progress_handler(lambda: monotonic() >= deadline, 1000)
     try:
         db.row_factory = sqlite3.Row
         db.execute('PRAGMA query_only=ON')
@@ -175,7 +179,7 @@ def snapshot(settings, targets, watchlist, *, now):
             db.close()
 
 
-def assemble_targets(settings, *, now, testing=False, include_watchlist=True):
+def assemble_targets(settings, *, now, testing=False, include_watchlist=True, bounded=False):
     """One materialized authorization/evidence snapshot, closed before ranking/I/O.
 
     Planning may fall back to manual input on a DB failure. Change detection
@@ -187,7 +191,7 @@ def assemble_targets(settings, *, now, testing=False, include_watchlist=True):
     watchlist = _watchlist(settings, notes) if include_watchlist else []
     targets, authorization, db_status, db = manual, manual, 'ok', None
     try:
-        db = _readonly(settings)
+        db = _readonly(settings, bounded=bounded)
         venues = [dict(r) for r in db.execute('SELECT * FROM venues ORDER BY venue_id')]
         aliases = [dict(r) for r in db.execute('SELECT * FROM venue_aliases ORDER BY alias_id')]
         marker = db.execute("SELECT cursor FROM run_checkpoints WHERE checkpoint_id='seed_freeze'").fetchone()

@@ -1,5 +1,6 @@
 """Run continuous, internal-only seed discovery through the active collector."""
 from collections import Counter
+from contextlib import nullcontext
 from dataclasses import replace
 import sqlite3
 from uuid import uuid4
@@ -116,14 +117,16 @@ def _summary(counts=(), *, state='ok', sources=None):
     return {'state': state, **{key: counter[key] for key in TRANSITIONS}, 'sources': sources or {}}
 
 
-def discover(settings, db, *, sources=None, max_calls=None, clock=None, session=None, tavily_transport=None):
+def discover(settings, db, *, sources=None, max_calls=None, clock=None, session=None, tavily_transport=None, admission=None):
     """The dedicated flock covers dispatch, checkpoints and candidate transactions."""
     selected = set(SOURCES if sources is None else (SOURCE_ALIASES.get(key, key) for key in sources))
     if selected.difference(SOURCES) or (max_calls is not None and max_calls < 0):
         raise ValueError('invalid_discovery_options')
     try:
-        with RunLock(db, settings.data_dir, str(uuid4()), clock=clock,
-                     filename='seeds-discover.lock', lease_key='seed_discovery') as lock:
+        guard = (nullcontext(admission) if admission is not None else
+                 RunLock(db, settings.data_dir, str(uuid4()), clock=clock,
+                         filename='seeds-discover.lock', lease_key='seed_discovery'))
+        with guard as lock:
             return _run(settings, db, selected, max_calls, clock, session, tavily_transport, lock)
     except AlreadyRunning:
         return _summary(state='already_running')
@@ -135,6 +138,7 @@ def _run(settings, db, selected, max_calls, clock, session, tavily_transport, lo
     except ValueError:
         return _summary(state='proxy_invalid')
     fetcher = Fetcher(settings, db, clock, proxy=proxy, public_scope=True, policy=DISCOVERY)
+    fetcher.facts_only = True
     if session is not None:
         fetcher.session.close()
         fetcher.session = session
@@ -161,6 +165,8 @@ def _run(settings, db, selected, max_calls, clock, session, tavily_transport, lo
                 counts, status, *usage = adapters[adapter]()
             except (OSError, ValueError, TypeError, sqlite3.Error):
                 counts, status, usage = Counter(), 'partial:adapter_error', []
+            if adapter in web.failed_sources and status == 'ok':
+                status = 'partial:page_request'
             stats[adapter] = {**{key: counts[key] for key in TRANSITIONS}, 'status': status}
             if usage:
                 stats[adapter]['calls'] = usage[0]

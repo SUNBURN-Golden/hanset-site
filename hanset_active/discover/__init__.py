@@ -46,15 +46,20 @@ class Discovery:
         try: url=canonicalize(url)
         except ValueError: return None
         domain=registrable_domain(url)
-        if not self.remaining or (kind!='sitemap' and self.counts[domain]>=self.per_domain) or is_denied(url) or is_excluded(url): return None
+        if not self.remaining or (kind!='sitemap' and self.counts[domain]>=self.per_domain) or self.fetcher._reason_denied(url): return None
         self.remaining-=1;self.counts[domain]+=1
         return self.getter(url,kind=kind,**kwargs)
     def candidate(self,url, *, text='', name='', city='', region='', website='', depth=0, via='search', parent_url=None, parent_task_id=None, low_prior=False, domain_limit=None):
-        if depth>2 or depth<0 or is_excluded(url,text,name,website): return None
+        public = getattr(self.fetcher, 'facts_only', False)
+        if depth>2 or depth<0 or (not public and is_excluded(url,text,name,website)): return None
         try: url=canonicalize(url)
         except ValueError: return None
         if domain_limit is None and self.candidate_counts[registrable_domain(url)]>=self.per_domain: return None
-        if is_denied(url) or url in self.seen or (not low_prior and self.relevance(text+' '+name+' '+url)<self.threshold): return None
+        if public:
+            from ..collect.safety import evidence_rejection
+            if any(evidence_rejection(value) for value in (url, name, website, parent_url or '')):
+                return None
+        if (is_denied(url) if not self.fetcher.public_scope else self.fetcher._reason_denied(url)) or url in self.seen or (not low_prior and self.relevance(text+' '+name+' '+url)<self.threshold): return None
         if not self.fetcher.register_candidate(url): return None
         self.seen.add(url)
         self.candidate_counts[registrable_domain(url)]+=1
@@ -69,4 +74,8 @@ class Discovery:
         return task
     def search_task(self,name, *, region='', type_term='sauna', depth=1, via='mentions', parent_url=None):
         if not self.remaining or depth>2 or is_excluded(name): return None
+        if getattr(self.fetcher, 'facts_only', False):
+            from ..collect.safety import evidence_rejection
+            if evidence_rejection(name + ' ' + region):
+                return None
         return enqueue(self.db,kind='search',payload={'query':f'"{name}" {type_term} {region}'},depth=depth,discovered_via=via,parent_url=parent_url,clock=self.clock,novelty=1)

@@ -19,7 +19,7 @@ def followups(db,venue,field,documents=(), *, strategy,clock=None,depth=0):
         for link in document.get('links',[]):
             if not allows_followup(venue,link['url'],strategy,portals): continue
             text=(link['url']+' '+link.get('text','')).casefold();kind=link['kind']
-            match=(strategy=='site_links' and kind in ('internal','external') and any(k.casefold() in text for k in keywords)) or (strategy=='lang_counterpart' and (link.get('hreflang') or re.search(r'/en/|/ko/',text))) or (strategy=='attachments' and kind=='attachment') or (strategy=='images' and kind=='image_notice')
+            match=(strategy=='site_links' and kind in ('internal','external') and (field in link.get('fields', ()) or any(k.casefold() in text for k in keywords))) or (strategy=='lang_counterpart' and (link.get('hreflang') or re.search(r'/en/|/ko/',text))) or (strategy=='attachments' and kind=='attachment') or (strategy=='images' and kind=='image_notice')
             if match:
                 task=enqueue(db,kind='ocr' if strategy=='images' else 'fetch',url=link['url'],depth=depth+1,payload={'field':field,'strategy':strategy},venue_id=venue['venue_id'],task_class='backfill',discovered_via='reverse:'+strategy,clock=clock,gap_importance=config['importance'])
                 if task: tasks.append(task)

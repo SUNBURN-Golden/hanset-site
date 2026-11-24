@@ -210,8 +210,8 @@ def test_license_and_known_sitemap_attach_to_one_identity(state, tmp_path, monke
             return license_page(1, 1, [license_row()])
         if url.startswith(_GYMS):
             return license_page(1, 0, [])
-        return {'https://seedspa.test/robots.txt': response(body='Sitemap: /index.xml', content_type='text/plain'),
-                'https://seedspa.test/index.xml': response(body=index, content_type='application/xml'),
+        assert not url.endswith('/robots.txt')
+        return {'https://seedspa.test/sitemap.xml': response(body=index, content_type='application/xml'),
                 'https://seedspa.test/areas.xml': response(body=sitemap_body, content_type='application/xml'),
                 _OWN: page('Seed Spa A', address)}.get(url, response(404))
 
