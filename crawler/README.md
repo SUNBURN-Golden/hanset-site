@@ -48,12 +48,9 @@ by reviewed sources:
   "seeds": ["https://source.test/feed"],
   "policies": [{
     "origin": "https://source.test",
-    "paths": ["/feed", "/guides/"],
-    "disallow": ["/guides/private/"],
+    "paths": ["/feed", "/guides/kr", "/guides/en"],
     "public": true,
     "browser": true,
-    "robots_reviewed_at": "2026-10-23",
-    "crawl_delay": 5,
     "follow_links": true,
     "official_venues": ["example-central"],
     "field_rules": [{
@@ -76,11 +73,14 @@ by reviewed sources:
 ```
 
 Path approvals are exact paths or subtrees, not arbitrary string prefixes.
-Review robots and access terms locally and record the date (maximum age 90 days),
-disallowed paths and any slower Crawl-delay. This is an explicit reviewed robots
-snapshot, not an automatic robots.txt parser. Additional origins for scripts/APIs
-must have separate approvals. Never approve authentication, paywalls or technical
-block bypass. Naver and declined venues remain excluded.
+Korean news hosts use live robots.txt and a reviewed snapshot with a review
+date at most 90 days old. The reviewed `disallow`, `crawl_delay`, and
+`robots_reviewed_at` only govern news hosts. Other hosts use explicit path
+approval, with no robots gate or crawl delay. Public Naver non-news pages are
+eligible as third-party evidence. Naver news hosts follow the news policy.
+Additional script and API origins need separate path approvals. Declined venues
+remain excluded. Never approve authentication, paywall, or technical block
+bypass.
 
 Use a separate path policy with `adapter` set to `rss`, `atom`, `sitemap`,
 `crossref`, `pubmed`, `search`, or `links` for discovery endpoints. PubMed accepts
@@ -93,8 +93,11 @@ handled. Seed depth is zero and discovered links stop at depth two. Cursor
 digests and normalized URLs persist in checkpoints; repeated cursors stop.
 `recheck_seconds` can set a reviewed source cadence (minimum 300 seconds).
 
-Limits may be lowered: 500 new candidates, 200 new bodies and 200 total attempts
-per KST day, one request per domain, at least five seconds between requests.
+Daily defaults are 500 new candidates, 200 new bodies, and 200 total attempts
+per KST day. Requests use the fixed
+`HANSET-Collector/1.0 (+mailto:hanset@soulbound.co.kr)` User-Agent and are
+serialized by exact hostname. News requests have a five-second minimum interval
+or the longer applicable Crawl-delay.
 Redirects, resources, bytes and job duration are also bounded. Volatile rates,
 hours and closures are rechecked before new discovery. 429 honors Retry-After,
 403/block screens stop the domain, and three consecutive 5xx require operator
@@ -238,7 +241,7 @@ Discovery indexes have separate operational progress (`discovery_indexes`) and
 do not add placeholder evidence to the five-stage or identity counts. The worker
 registers seeds within the candidate quota and reconciles scheduled records before
 selecting a body. An explicitly configured seed reuses the existing record if its
-URL was previously clipped. An expired robots review leaves the registry available
+URL was previously clipped. An expired Korean news robots review leaves the registry available
 for reports and manual intake and holds the individual seed without a network request.
 After the worker runs, `show` exposes `access_hold = "robots_review_stale"` on the
 held record and `report` includes it in `access_holds`. The worker audits a hold

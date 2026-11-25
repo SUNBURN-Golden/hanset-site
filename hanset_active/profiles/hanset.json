@@ -668,11 +668,6 @@
     "버핏"
   ],
   "denied_domains": [
-    "naver.com",
-    "naver.me",
-    "pstatic.net",
-    "naver.net",
-    "*.naver.*",
     "instagram.com",
     "instagr.am"
   ],

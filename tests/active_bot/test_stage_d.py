@@ -50,6 +50,7 @@ def test_directory_detail_evidence_and_official_trial(bot,server):
     <main><h1>Silver Sauna</h1><p>Address: Seoul visitor district</p>
     <p>Day pass 25000 KRW. Opening hours 09:00 ~ 22:00.</p>
     <p>Public directory visitor information for Silver Sauna in Seoul.</p>
+    <p>Website <a href="https://blog.naver.com/seed-spa-a">Review</a></p>
     <a href="https://other.example">Other</a><a href="{official}?utm_source=directory">Website</a>
     <a href="https://instagram.com/silverfixture">SNS</a><a href="https://booking.naver.com/fixture">Booking</a>
     <a href="https://booking.com/fixture">Reservations</a></main></html>'''
@@ -68,7 +69,7 @@ def test_directory_detail_evidence_and_official_trial(bot,server):
     assert all(r['source_type']=='official_directory' and r['label_status']=='fact' for r in rows)
     assert bot.db.execute("SELECT kind FROM tasks WHERE url=?",(official,)).fetchone()[0]=='trial'
     assert bot.db.execute("SELECT count(*) FROM venue_links WHERE kind='sns'").fetchone()[0]==1
-    assert bot.db.execute("SELECT count(*) FROM venue_links WHERE kind='excluded_link'").fetchone()[0]==1
+    assert bot.db.execute("SELECT count(*) FROM venue_links WHERE kind='excluded_link'").fetchone()[0]==0
     assert bot.db.execute('SELECT count(*) FROM gaps').fetchone()[0]==9
     assert not bot.db.execute("SELECT 1 FROM tasks WHERE state='pending' AND kind IS NULL").fetchone()
     assert all('instagram' not in r['path'] for r in server.log)
@@ -219,10 +220,10 @@ def test_offline_directory_to_official_fixture_pipeline(bot,server):
     assert '/official' in [r['path'] for r in server.log]
 
 
-def test_naver_social_is_record_only():
+def test_naver_blog_links_are_external_and_instagram_is_social():
     from hanset_active.extract.html import extract as html_extract
     links=html_extract('<a href="https://blog.naver.com/fixture">SNS</a><a href="https://instagr.am/fixture">SNS</a>')['links']
-    assert [link['kind'] for link in links]==['sns','sns']
+    assert [link['kind'] for link in links]==['external','sns']
 
 
 def test_registered_directory_xml_does_not_bypass_slug_filter(bot,server):

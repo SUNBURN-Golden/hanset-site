@@ -56,7 +56,7 @@ def test_ineligible_never_loads_key_or_spends_budget(bot, eligible, monkeypatch,
     elif case == 'resolved':
         bot.db.execute("UPDATE gaps SET state='filled' WHERE venue_id=? AND field=?", (vid, field))
     elif case == 'excluded':
-        bot.db.execute("UPDATE venues SET website='https://naver.com/' WHERE venue_id=?", (vid,))
+        bot.db.execute("UPDATE venues SET website='https://instagram.com/' WHERE venue_id=?", (vid,))
     elif case == 'target':
         target = 'new_venues'
     elif case == 'field':

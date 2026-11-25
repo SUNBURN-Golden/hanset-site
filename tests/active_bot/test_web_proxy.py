@@ -107,7 +107,7 @@ def test_proxy_must_be_loopback_socks5(value):
 def test_unset_proxy_keeps_fetcher_direct(tmp_path):
     assert web_proxy.configured({}) == ''
     fetcher = _fetcher(tmp_path, '')
-    assert fetcher.proxy == '' and not fetcher.session.proxies
+    assert fetcher.egress.mode == 'direct' and not fetcher.session.proxies
 
 
 def test_fetcher_uses_proxy_and_skips_heavy_resources(server, socks, tmp_path):
@@ -124,23 +124,22 @@ def test_fetcher_uses_proxy_and_skips_heavy_resources(server, socks, tmp_path):
 def test_fetcher_continues_direct_after_proxy_outage(tmp_path, monkeypatch):
     fetcher = _fetcher(tmp_path, PROXY, public_scope=True)
     failed, next_url = 'https://spa.example.test/first', 'https://spa.example.test/next'
-    robots = 'https://spa.example.test/robots.txt'
     calls = []
 
     def get(self, url, **kwargs):
         calls.append((url, bool(self.proxies)))
         if self.proxies:
             raise requests.ConnectionError
-        return http_response(404) if url == robots else http_response(200, _page().encode())
+        return http_response(200, _page().encode())
 
     monkeypatch.setattr(requests.Session, 'get', get)
     monkeypatch.setattr(web_proxy, 'reachable', lambda proxy: False)
     result = fetcher.fetch(failed)
-    assert (result.outcome, result.reason) == ('error', 'proxy_unavailable')
-    assert fetcher.proxy_failed
-    assert fetcher.db.execute('SELECT COUNT(*) FROM robots_cache').fetchone()[0] == 0
+    assert result.ok
+    assert fetcher.egress.public()['reason'] == 'proxy_unavailable'
+    assert not fetcher.db.execute("SELECT 1 FROM request_log WHERE kind='robots'").fetchone()
     assert fetcher.fetch(next_url).ok
-    assert calls == [(robots, True), (robots, False), (next_url, False)]
+    assert calls == [(failed, True), (failed, False), (next_url, False)]
 
 
 def test_run_web_continues_direct_when_proxy_down(tmp_path, monkeypatch):
@@ -165,7 +164,7 @@ def test_run_web_continues_direct_when_proxy_down(tmp_path, monkeypatch):
     result = run_web(settings, clock=FakeClock(), qwen_session=session, testing=True)
     assert result['state'] == 'done' and result['success'] and result['collected']
     assert result['proxy_heal'] == {**web_proxy.new_heal_status(), 'retries': 2}
-    assert result['web_egress'] == {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'preflight'}
+    assert result['web_egress'] == {'event': 'proxy_fallback_direct', 'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'preflight'}
     assert probe.call_count == 3 and calls == [url]
     assert session.calls and 'proxies' not in session.calls[0]
 
@@ -226,7 +225,7 @@ def test_mid_run_outage_preserves_blocks_and_retries_direct(tmp_path, monkeypatc
             return http_response(403)
         if url == failed and self.proxies:
             raise requests.ConnectionError
-        if url == failed:
+        if url in (failed, collateral):
             return http_response(404)
         assert url == next_url
         return http_response(200, _page().encode())
@@ -235,8 +234,8 @@ def test_mid_run_outage_preserves_blocks_and_retries_direct(tmp_path, monkeypatc
     model, clock = _session(), FakeClock()
     result = run_web(settings, clock=clock, qwen_session=model, testing=True)
     assert result['success'] and result['collected'] and result['counts']['pages'] == 4
-    assert result['web_egress'] == {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'mid_run'}
-    assert calls == [(blocked, True), (failed, True), (failed, False), (next_url, False)]
+    assert result['web_egress'] == {'event': 'proxy_fallback_direct', 'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'mid_run'}
+    assert calls == [(blocked, True), (failed, True), (failed, False), (collateral, False), (next_url, False)]
     assert failed not in State(settings.data_dir, clock).data['completed']
     with closing(connect_receipts(settings.data_dir)) as receipts:
         assert receipts.execute('SELECT disposition FROM web_target_observations WHERE url_hash=?',
@@ -360,7 +359,7 @@ def mocked_web(tmp_path, monkeypatch):
     targets = settings.data_dir / 'web_targets.json'
     _targets(targets, 'https://venue.example/hours')
     monkeypatch.setattr(service, '_change_cycle', Mock(return_value={'reason': 'no_events'}))
-    fetcher = Mock(proxy_failed=False)
+    fetcher = Mock()
     fetcher.fetch.return_value = FetchResult('https://venue.example/hours', 'ok', status=200)
     constructor = Mock(return_value=fetcher)
     monkeypatch.setattr(service, 'Fetcher', constructor)
@@ -383,11 +382,12 @@ def mocked_web(tmp_path, monkeypatch):
     ('zero', 'proxy_unavailable', 3, True, 0),
     ('mismatch', 'proxy_exit_mismatch', 3, True, 0),
     ('invalid', 'proxy_invalid', 0, False, None),
+    ('refused', 'proxy_check_refused', 0, False, None),
 ])
 def test_web_retry_egress_and_status(
         mocked_web, monkeypatch, capsys, caplog, variant, reason, retries, attempted, exit_code):
     web = mocked_web
-    if variant != 'no_hook':
+    if variant not in ('no_hook', 'invalid', 'refused'):
         monkeypatch.setenv(web_proxy.HEAL_ENV, 'heal-example ' + PRIVATE)
     if variant == 'timeout':
         web.hook.side_effect = subprocess.TimeoutExpired(PRIVATE, 30, output=PRIVATE, stderr=PRIVATE)
@@ -399,14 +399,15 @@ def test_web_retry_egress_and_status(
         web.hook.return_value = SimpleNamespace(returncode=7)
     if variant == 'invalid':
         monkeypatch.setenv(web_proxy.ENV, 'https://127.0.0.1:1080')
-    probe = Mock(return_value='proxy_exit_mismatch' if variant == 'mismatch' else 'proxy_unavailable')
+    probe = Mock(return_value=reason)
     monkeypatch.setattr(web_proxy, 'preflight', probe)
     result = run_web(web.settings, targets_path=web.targets, clock=web.clock, testing=True)
     expected = {'attempted': attempted, 'heal_exit': exit_code, 'retries': retries, 'recovered': False}
-    if reason == 'proxy_unavailable':
+    if reason in web_proxy.FALLBACK_REASONS:
         assert result['state'] == 'done' and result['success'] and result['collected']
-        assert result['web_egress'] == {'mode': 'direct', 'reason': reason, 'phase': 'preflight'}
-        assert web.constructor.call_args.kwargs['proxy'] == ''
+        assert result['web_egress'] == {'event': 'proxy_fallback_direct', 'mode': 'direct', 'reason': reason, 'phase': 'preflight'}
+        assert web.constructor.call_args.kwargs['egress'].mode == 'direct'
+        assert sum('proxy_fallback_direct' in row.getMessage() for row in caplog.records) == 1
     else:
         assert result['state'] == 'stopped' and result['reason'] == reason
         assert not result['success'] and not result['collected'] and 'web_egress' not in result
@@ -451,7 +452,10 @@ def test_recovery_status_survives_writers_and_cli(mocked_web, monkeypatch, capsy
     elif outcome == 'partial_model':
         web.model.error = requests.Timeout('fixture')
     elif outcome == 'mid_run_outage':
-        web.fetcher.fetch.return_value = FetchResult('https://venue.example/hours', 'error', reason='proxy_unavailable')
+        def fail_during_fetch(*args, **kwargs):
+            web.constructor.call_args.kwargs['egress'].fallback('proxy_unavailable', 'mid_run')
+            return FetchResult('https://venue.example/hours', 'error', reason='proxy_unavailable')
+        web.fetcher.fetch.side_effect = fail_during_fetch
         web.service.classify_page.return_value = ('error', None)
     result = run_web(web.settings, targets_path=web.targets, clock=web.clock, testing=True)
     assert result['state'] == {'partial_model': 'partial', 'mid_run_outage': 'done'}.get(outcome, outcome)
@@ -464,13 +468,13 @@ def test_recovery_status_survives_writers_and_cli(mocked_web, monkeypatch, capsy
     if outcome == 'deferred':
         web.constructor.assert_not_called()
     else:
-        assert web.constructor.call_args.kwargs['proxy'] == PROXY
+        assert web.constructor.call_args.kwargs['egress'].mode == ('direct' if outcome == 'mid_run_outage' else 'proxy')
     monkeypatch.setenv('HANSET_IG_DIR', str(web.settings.data_dir))
     assert main(['collect', 'status']) == (0 if outcome in ('done', 'mid_run_outage') else 2)
     status = json.loads(capsys.readouterr().out)
     assert status['proxy_heal'] == expected
     if outcome == 'mid_run_outage':
-        assert status['web_egress'] == {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'mid_run'}
+        assert status['web_egress'] == {'event': 'proxy_fallback_direct', 'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'mid_run'}
 
 
 def test_public_heal_status_strict_types_and_legacy_files(tmp_path):

@@ -26,7 +26,7 @@ def test_jsonld_tables_links_dates():
 
 def test_html_bad_json_and_link_types():
     result=html.extract('<script type="application/ld+json">bad</script><a href="https://booking.naver.com/x">booking</a><a href="https://booking.com/x">reserve</a><a href="/sitemap.xml">map</a>','https://venue-a.test')
-    assert [l['kind'] for l in result['links']]==['excluded_link','booking','sitemap']
+    assert [l['kind'] for l in result['links']]==['external','booking','sitemap']
     assert not result['structured']['jsonld']
 
 def test_feeds():
@@ -122,7 +122,7 @@ def test_browser_guarded_render(bot,server,monkeypatch):
     monkeypatch.setitem(sys.modules,'playwright.sync_api',SimpleNamespace(sync_playwright=Playwright))
     result=browser.fetch(bot,server.base+'/app')
     assert result.ok and result.fetch_method=='browser' and result.content_hash
-    assert [r['path'] for r in server.log]==['/robots.txt','/app']
+    assert [r['path'] for r in server.log]==['/app']
     assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0]==1
 
 def browser_request(url, *, method='GET', navigation=False, resource_type='document', abort_error=False):
@@ -201,12 +201,12 @@ def test_browser_aux_failures_do_not_poison_document(bot,server,monkeypatch):
     assert {base+'/style.css',base+'/empty.css',base+'/app.js',base+'/font.woff',base+'/hero.png',base+'/pixel',base+'/beacon'}<=aborted
     assert ('websocket','**/*') in events and ('context','block') in events
     paths=[row['path'] for row in server.log]
-    assert '/beacon' not in paths and {'/robots.txt','/style.css','/empty.css','/app','/app.js','/font.woff','/hero.png','/pixel'}<=set(paths)
+    assert '/beacon' not in paths and {'/style.css','/empty.css','/app','/app.js','/font.woff','/hero.png','/pixel'}<=set(paths)
     kinds={urlsplit(row['url']).path:row['kind'] for row in bot.db.execute('SELECT kind,url FROM request_log')}
     assert kinds['/app']=='body' and kinds['/hero.png']=='body'
     assert kinds['/style.css']==kinds['/empty.css']==kinds['/app.js']==kinds['/font.woff']==kinds['/pixel']=='browser_aux'
     assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0]==2
-    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='aux'").fetchone()[0]==6
+    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='aux'").fetchone()[0]==5
 
 def test_browser_aux_abort_falls_back_to_empty_body(bot,server,monkeypatch):
     rendered=(FIXTURES/'venue_en.html').read_text()

@@ -215,7 +215,7 @@ def test_seed_duplicate_uses_gap_identity_once(env, monkeypatch):
 ])
 def test_seed_redirect_rejected_before_destination_request(env, monkeypatch, destination, robots_redirect):
     if robots_redirect:
-        monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
+        monkeypatch.setattr('hanset_active.fetcher.is_korean_news', lambda url: True)
     settings, clock, active = env
     url, robots = 'https://example.test/entry', 'https://example.test/robots.txt'
     seed_rows(active, name='Seed Spa A', website=url, domain='example.test')
@@ -263,7 +263,7 @@ def test_deferred_only_runs_try_cache_and_honor_access_guards(tmp_path, monkeypa
     }[gate]
     assert calls == [ROOT]
     if gate == 'proxy':
-        assert result['web_egress'] == {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'preflight'}
+        assert result['web_egress'] == {'event': 'proxy_fallback_direct', 'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'preflight'}
     assert result['rejections'] == {'recent_unchanged_deferred': 1}
 
 

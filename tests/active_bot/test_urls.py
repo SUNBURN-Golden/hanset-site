@@ -43,9 +43,10 @@ def test_same_fetch_target(a, b, expected):
     assert same_fetch_target(a, b) is expected
 
 def test_denial_and_exclusion():
-    for host in ('naver.com','booking.naver.com','naver.me','a.naver.co.kr','pstatic.net','instagram.com','www.instagram.com'):
+    for host in ('instagram.com','www.instagram.com','instagr.am','cdninstagram.com'):
         assert is_denied('https://'+host)
-    assert not is_denied('https://venue-a.test')
+    for host in ('naver.com', 'booking.naver.com', 'naver.me', 'a.naver.co.kr', 'pstatic.net', 'venue-a.test'):
+        assert not is_denied('https://'+host)
     assert is_excluded(load_profile()['exclusion_terms'][0])
     assert literal_private('http://127.0.0.1')
     assert literal_private('http://localhost')
@@ -55,9 +56,9 @@ def test_denial_and_exclusion():
 def test_settings(tmp_path,monkeypatch):
     assert __version__
     settings=Settings()
-    assert settings.min_interval==5 and settings.global_gap==1
+    assert settings.min_interval==0 and settings.global_gap==0
     assert (settings.candidate_cap,settings.body_cap,settings.aux_cap)==(500,200,800)
-    for kwargs in ({'min_interval':4},{'global_gap':0},{'body_cap':201},{'candidate_cap':501},{'aux_cap':801},{'allow_private_hosts':True},{'data_dir':REPO_ROOT/'raw'}):
+    for kwargs in ({'min_interval':-1},{'global_gap':float('inf')},{'min_interval':float('nan')},{'body_cap':201},{'candidate_cap':501},{'aux_cap':801},{'allow_private_hosts':True},{'data_dir':REPO_ROOT/'raw'}):
         with pytest.raises(ValueError): Settings(**kwargs)
     link=tmp_path/'repo-link'; link.symlink_to(REPO_ROOT,target_is_directory=True)
     with pytest.raises(ValueError): Settings(data_dir=link/'raw')

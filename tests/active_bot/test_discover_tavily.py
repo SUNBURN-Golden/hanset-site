@@ -194,7 +194,6 @@ def test_bad_state_or_failed_persistence_fails_closed(bot, monkeypatch, private_
 
 
 @pytest.mark.parametrize('url,title', [
-    ('https://naver.com/sauna', ''), ('https://sub.naver.me/sauna', ''),
     ('https://www.instagram.com/sauna/', ''), ('https://silver.example/RUNPORT', ''),
     ('https://silver.example', 'RUNPORT sauna'), ('https://localhost/sauna', ''),
     ('https://192.168.1.1/sauna', ''), ('https://silver.example/?token=synthetic', ''),
@@ -396,7 +395,8 @@ def test_secret_echo_never_enters_hits_state_or_rendered_errors(bot, private_cli
     assert SENTINEL not in persisted + rendered + caplog.text + str(capsys.readouterr())
 
 
-def test_subsequent_trial_still_obeys_robots(bot, monkeypatch, private_client):
+def test_subsequent_news_trial_still_obeys_robots(bot, monkeypatch, private_client):
+    monkeypatch.setattr('hanset_active.crawl_policy._NEWS_DOMAINS', {'silver.example'})
     block_others(bot)
     private_client.return_value = response([{'url': 'https://silver.example/private', 'title': 'Seoul sauna'}])
     tid = enqueue(bot.db, kind='search', payload={'query': 'Seoul sauna'})

@@ -322,9 +322,8 @@ class WebSeeds:
             getter = self.getter('sitemaps')
             domain = registrable_domain(origin)
             roots = [origin + '/sitemap.xml']
-            robots = (getter(origin + '/robots.txt', kind='robots',
-                             url_allowed=lambda u: registrable_domain(u) == domain)
-                      if self.fetcher.policy.robots(origin) else None)
+            robots = getter(origin + '/robots.txt', kind='robots',
+                            url_allowed=lambda u: registrable_domain(u) == domain)
             if robots and robots.ok:
                 for item in advertised_sitemaps(robots.text):
                     if (safe := public_url(urljoin(origin, item), testing=self.store.testing)) and registrable_domain(safe) == domain:

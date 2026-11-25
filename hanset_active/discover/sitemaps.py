@@ -53,12 +53,13 @@ def advertised_sitemaps(text):
     return re.findall(r'^\s*Sitemap:\s*(\S+)', text, re.I | re.M)
 
 def robots_sitemaps(context, origin):
-    if not context.fetcher.policy.robots(origin):
-        return expand(context, urljoin(origin, '/sitemap.xml'), parent_url=origin)
-    result=context.get(urljoin(origin,'/robots.txt'),kind='robots')
-    if not result or not result.ok: return []
-    tasks=[]
-    for url in advertised_sitemaps(result.text)[:20]: tasks.extend(expand(context,url,parent_url=origin))
+    result = context.get(urljoin(origin, '/robots.txt'), kind='robots')
+    roots = [urljoin(origin, '/sitemap.xml')]
+    if result and result.ok:
+        roots.extend(urljoin(origin, url) for url in advertised_sitemaps(result.text)[:20])
+    tasks = []
+    for url in dict.fromkeys(roots):
+        tasks.extend(expand(context, url, parent_url=origin))
     return tasks
 
 def expand_feed(context,url):

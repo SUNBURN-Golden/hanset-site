@@ -29,7 +29,7 @@ def extract(html: str | bytes, url: str = '') -> dict:
         anchor = a.get_text(' ',strip=True) or a.get('alt','')
         domain = registrable_domain(href)
         kind = 'internal' if urlsplit(href).hostname == urlsplit(url).hostname else 'external'
-        if domain=='instagr.am' or (urlsplit(href).hostname or '').lower()=='blog.naver.com':
+        if domain=='instagr.am':
             kind='sns'
         elif is_denied(href) and 'instagram' not in domain:
             kind='excluded_link'

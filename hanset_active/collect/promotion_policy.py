@@ -6,7 +6,8 @@ from datetime import date
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from hanset_active.util.urls import canonicalize, is_collect_denied, is_denied, is_excluded, literal_private, registrable_domain
+from hanset_active.crawl_policy import is_korean_news, is_naver
+from hanset_active.util.urls import canonicalize, is_collect_denied, is_excluded, literal_private, registrable_domain
 
 from . import CollectError
 from .config import canonical_instagram, handle_valid, outside
@@ -36,7 +37,7 @@ def source_identity(url, kind, *, review_only=False):
     for identity in (url, canonical):
         if literal_private(identity) or is_collect_denied(identity):
             raise ValueError
-        if not review_only and (is_denied(identity) or is_excluded(identity)):
+        if not review_only and (is_naver(identity) or is_korean_news(identity) or is_excluded(identity)):
             raise ValueError
     return canonical
 

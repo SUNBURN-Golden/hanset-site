@@ -2,7 +2,7 @@ import gzip
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import unquote
 import pytest
-from hanset_active.crawl_policy import COLLECTION, LEGACY
+from hanset_active.crawl_policy import COLLECTION, DISCOVERY, LEGACY
 from hanset_active.fetcher import Fetcher, USER_AGENT
 from hanset_active.util.timeutil import FakeClock
 from hanset_active.config import Settings
@@ -13,7 +13,13 @@ from conftest import FIXTURES
 def venue():
     return (FIXTURES/'venue_en.html').read_bytes()
 
-def test_success_robots_and_spacing(bot,server,venue):
+@pytest.fixture
+def news_hosts(monkeypatch):
+    monkeypatch.setattr('hanset_active.crawl_policy._NEWS_DOMAINS',
+                        {'127.0.0.1', 'venue.example', 'example.com', 'example-sauna.test', 'other-sauna.test'})
+
+
+def test_success_robots_and_spacing(bot,server,venue, news_hosts):
     bot.settings.min_interval=5; bot.settings.global_gap=1
     server.add('/venue',venue)
     assert bot.fetch(server.base+'/venue').ok
@@ -26,24 +32,24 @@ def test_success_robots_and_spacing(bot,server,venue):
     assert bot.clock.monotonic()==10
     assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0]==2
 
-def test_robots_disallowed(bot,server,venue):
+def test_robots_disallowed(bot,server,venue, news_hosts):
     server.add('/private',venue)
     assert bot.fetch(server.base+'/private').outcome=='robots_disallowed'
     assert [r['path'] for r in server.log]==['/robots.txt']
     assert bot.db.execute('SELECT state FROM sources').fetchone()[0]=='inaccessible'
 
-@pytest.mark.parametrize('status',[401,403,429,302])
-def test_robots_fail_closed(bot,server,status):
+@pytest.mark.parametrize('status,outcome',[(401,'blocked'),(403,'blocked'),(429,'blocked'),(302,'robots_disallowed')])
+def test_robots_fail_closed(bot,server,status,outcome, news_hosts):
     server.add('/robots.txt','',status=status)
-    assert bot.fetch(server.base+'/venue').outcome=='robots_disallowed'
+    assert bot.fetch(server.base+'/venue').outcome == outcome
     assert len(server.log)==1
 
-@pytest.mark.parametrize('status',[400,404,410])
-def test_robots_missing_allowed(bot,server,venue,status):
+@pytest.mark.parametrize('status',[404,410])
+def test_robots_missing_allowed(bot,server,venue,status, news_hosts):
     server.add('/robots.txt','',status=status); server.add('/venue',venue)
     assert bot.fetch(server.base+'/venue').ok
 
-def test_crawl_delay_and_persisted_cache(bot,server,venue):
+def test_crawl_delay_and_persisted_cache(bot,server,venue, news_hosts):
     server.add('/robots.txt','User-agent: *\nCrawl-delay: 8\nDisallow: /private\n',headers={'Content-Type':'text/plain'})
     server.add('/venue',venue)
     assert bot.fetch(server.base+'/venue').ok
@@ -57,7 +63,7 @@ def test_caps(bot,server,venue):
     server.add('/venue',venue); bot.settings.body_cap=1
     assert bot.fetch(server.base+'/venue').ok
     assert bot.fetch(server.base+'/venue').outcome=='cap_reached'
-    assert len(server.log)==2
+    assert len(server.log)==1
     bot.settings.candidate_cap=1
     assert bot.register_candidate('https://venue-a.test')
     assert not bot.register_candidate('https://venue-a.test/')
@@ -66,15 +72,15 @@ def test_caps(bot,server,venue):
     bot.clock.sleep(86400)
     assert bot.register_candidate('https://venue-b.test')
 
-def test_aux_cap(bot,server):
+def test_aux_cap(bot,server, news_hosts):
     bot.settings.aux_cap=0
     assert bot.fetch(server.base+'/venue').outcome=='cap_reached'
     assert not server.log
 
-def test_redirect_per_hop(bot,server,venue):
+def test_redirect_per_hop(bot,server,venue,news_hosts):
     server.add('/start','',302,{'Location':'/venue'}); server.add('/venue',venue)
     assert bot.fetch(server.base+'/start').ok
-    server.add('/denied','',302,{'Location':'https://naver.com/'})
+    server.add('/denied','',302,{'Location':'https://instagram.com/'})
     assert bot.fetch(server.base+'/denied').outcome=='denied'
     server.add('/private-hop','',302,{'Location':'/private'})
     assert bot.fetch(server.base+'/private-hop').outcome=='robots_disallowed'
@@ -85,7 +91,7 @@ def test_redirect_self_loop_immediate(bot, server):
     server.add('/loop', '', 302, {'Location': url})
     result = bot.fetch(url)
     assert (result.outcome, result.reason, result.status) == ('error', 'redirect_self_loop', 302)
-    assert [r['path'] for r in server.log] == ['/robots.txt', '/loop']
+    assert [r['path'] for r in server.log] == ['/loop']
     assert bot.db.execute('SELECT url, reason, state FROM failures').fetchone()[:] == (url, 'error', 'pending')
 
 
@@ -97,7 +103,7 @@ def test_redirect_non_ascii_slash_preserved(bot, server, venue):
     result = bot.fetch(server.base + '/p/가나-1')
     assert result.ok and result.url == server.base + destination
     assert result.identity_url == server.base + '/p/가나-1'
-    assert [unquote(r['path']) for r in server.log] == ['/robots.txt', '/p/가나-1', '/p/가나-1/']
+    assert [unquote(r['path']) for r in server.log] == ['/p/가나-1', '/p/가나-1/']
     for table in ('fetch_log', 'request_log'):
         row = bot.db.execute(f"SELECT url FROM {table} WHERE status=200 AND kind='body'").fetchone()
         assert row[0] == server.base + destination
@@ -109,10 +115,10 @@ def test_failure_outcomes(bot,server,body,expected):
     assert result.outcome==expected and not result.content
     if expected in ('blocked','login_wall'):
         before=len(server.log)
-        assert bot.fetch(server.base+'/another').outcome=='blocked'
+        assert bot.fetch(server.base+'/failure').reason == 'resource_hold'
         assert len(server.log)==before
 
-@pytest.mark.parametrize('host',['naver.com','naver.me','booking.naver.com','pstatic.net','naver.net','a.naver.co.kr','instagram.com','www.instagram.com'])
+@pytest.mark.parametrize('host',['instagram.com','www.instagram.com'])
 def test_denied_before_network(bot,server,host):
     assert bot.fetch('https://'+host).outcome=='denied'
     assert not bot.register_candidate('https://'+host)
@@ -133,13 +139,14 @@ def test_size_limits_and_gzip(bot,server,venue):
     server.add('/gzip-large',gzip.compress(b'x'*(2*1024**2+1)),headers={'Content-Type':'text/html','Content-Encoding':'gzip'})
     assert bot.fetch(server.base+'/gzip-large').reason=='size limit'
 
-def test_retry_after_terminal(bot,server):
-    server.add('/limited','Too many requests',429,{'Content-Type':'text/html','Retry-After':'120'})
+@pytest.mark.parametrize('status',[429,503])
+def test_retry_after_terminal(bot,server,status):
+    server.add('/limited','Too many requests',status,{'Content-Type':'text/html','Retry-After':'120'})
     result=bot.fetch(server.base+'/limited')
     assert result.outcome=='blocked' and result.retry_after
     assert bot.fetch(server.base+'/limited').outcome=='blocked'
-    assert len(server.log)==2
-    assert bot.db.execute('SELECT next_at FROM sources').fetchone()[0]==result.retry_after
+    assert len(server.log)==1
+    assert bot.host_policy.stopped(server.base+'/other') == ('host_backoff', result.retry_after)
 
 def test_sanitized_and_excluded(bot,server,venue):
     email='fake'+'@'+'example.test'; secret='z'*40
@@ -159,10 +166,10 @@ def test_concurrent_single_domain(bot,server,venue):
     with ThreadPoolExecutor(max_workers=4) as pool:
         results=list(pool.map(lambda _:bot.fetch(server.base+'/venue'),range(4)))
     assert all(r.ok for r in results)
-    assert bot.clock.monotonic()==20
-    assert len(server.log)==5
+    assert bot.clock.monotonic()==0
+    assert len(server.log)==4
 
-def test_spacing_survives_fetcher_restart(bot,server,venue):
+def test_spacing_survives_fetcher_restart(bot,server,venue, news_hosts):
     bot.settings.min_interval=5
     server.add('/venue',venue)
     assert bot.fetch(server.base+'/venue').ok
@@ -180,12 +187,13 @@ def test_browser_shell_is_failure_but_available_to_guarded_renderer(bot,server):
     assert bot.db.execute('SELECT reason FROM failures').fetchone()[0]=='empty_body'
     with pytest.raises(ValueError): bot.fetch(server.base+'/app',kind='uncounted')
 
-def test_unreachable_robots_fails_closed(bot,server,monkeypatch):
+def test_unreachable_robots_fails_closed(bot,server,monkeypatch, news_hosts):
     import requests
     def unavailable(*args,**kwargs):
         raise requests.ConnectionError('offline fixture failure')
     monkeypatch.setattr(bot.session,'get',unavailable)
-    assert bot.fetch(server.base+'/venue').outcome=='robots_disallowed'
+    result = bot.fetch(server.base+'/venue')
+    assert (result.outcome, result.reason) == ('error', 'robots_unavailable')
     assert len(server.log)==0
     assert bot.db.execute('SELECT count(*) FROM request_log').fetchone()[0]==2
 
@@ -214,21 +222,20 @@ def fake_http(bot,monkeypatch):
     return routes,calls
 
 
-@pytest.mark.parametrize('policy', [LEGACY, COLLECTION], ids=['legacy', 'collection'])
+@pytest.mark.parametrize('policy', [LEGACY, COLLECTION, DISCOVERY])
 def test_root_redirect_adds_trailing_slash_once(bot, fake_http, venue, policy):
     routes, calls = fake_http
     bot.policy = policy
     bot.public_scope = policy is COLLECTION
     root = 'https://venue.example'
     start, destination = root + '/kr?x=1', root + '/kr/?x=1'
-    if policy is LEGACY:
-        routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[start] = (301, {'Location': '/kr/?x=1'}, b'')
     routes[destination] = (200, {'Content-Type': 'text/html'}, venue)
 
     result = bot.fetch(start)
 
-    assert result.ok and result.url == destination and result.identity_url == start
+    assert result.ok and result.url == destination
+    assert result.identity_url == (destination if policy.preserve_path else start)
     assert [url for url, _ in calls] == list(routes)
     statuses = bot.db.execute("SELECT status FROM fetch_log WHERE kind='body' ORDER BY id")
     assert [row[0] for row in statuses] == [301, 200]
@@ -266,7 +273,6 @@ def test_redirect_recovery_leaves_taskowned_failure(bot, fake_http, venue):
     routes, _ = fake_http
     root = 'https://venue.example'
     start = root + '/kr'
-    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[start] = (301, {'Location': '/kr/'}, b'')
     routes[root + '/kr/'] = (200, {'Content-Type': 'text/html'}, venue)
     with bot.db:
@@ -283,7 +289,6 @@ def test_redirect_recovery_leaves_taskowned_failure(bot, fake_http, venue):
 def test_redirect_equivalent_target_is_self_loop(bot, fake_http, path, destination):
     routes, calls = fake_http
     root = 'https://venue.example'
-    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[root + path] = (302, {'Location': destination}, b'')
 
     result = bot.fetch(root + path, preserve_path=True)
@@ -295,7 +300,6 @@ def test_redirect_equivalent_target_is_self_loop(bot, fake_http, path, destinati
 def test_redirect_query_only_is_progress(bot, fake_http, venue):
     routes, calls = fake_http
     root = 'https://venue.example'
-    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[root + '/a?x=1'] = (302, {'Location': '?x=2'}, b'')
     routes[root + '/a?x=2'] = (200, {'Content-Type': 'text/html'}, venue)
 
@@ -311,7 +315,6 @@ def test_redirect_checks_decoded_path_before_request(bot, fake_http, location, r
                         lambda *values: is_excluded(*values, terms=('excluded-fixture',)))
     routes, calls = fake_http
     root = 'https://venue.example'
-    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[root + '/guide'] = (302, {'Location': location}, b'')
 
     result = bot.fetch(root + '/guide')
@@ -340,7 +343,6 @@ def test_news_robots_deny_equivalent_redirect_escape(bot, fake_http, escape, mon
 def test_root_redirect_chain_still_hits_limit(bot, fake_http):
     routes, calls = fake_http
     root = 'https://venue.example'
-    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     for hop in range(6):
         routes[root + f'/g{hop}'] = (301, {'Location': f'/g{hop + 1}'}, b'')
 
@@ -361,7 +363,7 @@ def test_202_challenge_stays_blocked(bot, fake_http):
     result = bot.fetch(root + '/guide')
 
     assert result.outcome == 'blocked' and result.status == 202
-    assert bot.fetch(root + '/another').outcome == 'blocked'
+    assert bot.fetch(root + '/guide/', preserve_path=True).reason == 'resource_hold'
     assert [url for url, _ in calls] == list(routes)
 
 
@@ -369,16 +371,15 @@ def test_202_challenge_stays_blocked(bot, fake_http):
 def test_subpage_requests_slash_form_directly(bot, fake_http, venue, path):
     routes, calls = fake_http
     root = 'https://venue.example'
-    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[root + path.rstrip('/')] = (307, {'Location': path}, b'')
     routes[root + path] = (200, {'Content-Type': 'text/html'}, venue)
     result = bot.fetch(root + path + '?utm_source=nav#info', subpage=True)
     assert result.ok
-    assert [url for url, _ in calls] == [root + '/robots.txt', root + path]
+    assert [url for url, _ in calls] == [root + path]
     assert all(not kwargs['allow_redirects'] for _, kwargs in calls)
 
 
-def test_subpage_redirect_preserves_path_and_checks_destination_robots(bot, fake_http, venue):
+def test_subpage_redirect_preserves_path_and_checks_destination_robots(bot, fake_http, venue, news_hosts):
     routes, calls = fake_http
     root, destination = 'https://venue.example', 'https://info.venue.example'
     routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
@@ -392,7 +393,7 @@ def test_subpage_redirect_preserves_path_and_checks_destination_robots(bot, fake
     assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='aux'").fetchone()[0] == 2
 
 
-def test_subpage_redirect_robots_denies_only_slash_path(bot, fake_http):
+def test_subpage_redirect_robots_denies_only_slash_path(bot, fake_http, news_hosts):
     routes, calls = fake_http
     root = 'https://venue.example'
     routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nDisallow: /sauna/\n')
@@ -406,7 +407,6 @@ def test_subpage_redirect_robots_denies_only_slash_path(bot, fake_http):
 def test_subpage_rejects_external_redirect_or_downgrade_before_any_destination_request(bot, fake_http, destination):
     routes, calls = fake_http
     root = 'https://venue.example'
-    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[root + '/guide/'] = (302, {'Location': destination}, b'')
     assert bot.fetch(root + '/guide/', subpage=True).outcome == 'denied'
     assert [url for url, _ in calls] == list(routes)
@@ -416,38 +416,34 @@ def test_subpage_rejects_external_redirect_or_downgrade_before_any_destination_r
 def test_subpage_redirect_limit_is_two(bot, fake_http, venue, hops):
     routes, calls = fake_http
     root = 'https://venue.example'
-    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     for index in range(hops):
         routes[root + f'/guide{index}/'] = (308, {'Location': f'/guide{index + 1}/'}, b'')
     routes[root + f'/guide{hops}/'] = (200, {'Content-Type': 'text/html'}, venue)
     result = bot.fetch(root + '/guide0/', subpage=True)
     assert result.outcome == ('ok' if hops == 2 else 'error')
-    assert [url for url, _ in calls] == [root + '/robots.txt'] + [root + f'/guide{i}/' for i in range(3)]
+    assert [url for url, _ in calls] == [root + f'/guide{i}/' for i in range(3)]
 
 
 def test_default_fetch_retains_path_and_external_redirect_semantics(bot, fake_http, venue):
     routes, calls = fake_http
     root, destination = 'https://venue.example', 'https://other.example'
-    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[root + '/guide'] = (302, {'Location': destination + '/sauna/'}, b'')
-    routes[destination + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[destination + '/sauna/'] = (200, {'Content-Type': 'text/html'}, venue)
     assert bot.fetch(root + '/guide/').ok
     assert [url for url, _ in calls] == list(routes)
 
 
-@pytest.mark.parametrize('destination', ['https://naver.com/guide/', 'https://venue.example/runport/'])
+@pytest.mark.parametrize('destination', ['https://instagram.com/guide/', 'https://venue.example/runport/'])
 def test_subpage_redirect_keeps_denials(bot, fake_http, destination):
     routes, calls = fake_http
     root = 'https://venue.example'
-    routes[root + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[root + '/guide/'] = (302, {'Location': destination}, b'')
     assert bot.fetch(root + '/guide/', subpage=True).outcome == 'denied'
     assert [url for url, _ in calls] == list(routes)
 
-@pytest.mark.parametrize('http_status',[None,500,503])
+@pytest.mark.parametrize('http_status',[None,500])
 @pytest.mark.parametrize('https_status',[200,404])
-def test_http_robots_unavailable_upgrades_to_https(bot,fake_http,venue,http_status,https_status):
+def test_http_robots_unavailable_upgrades_to_https(bot,fake_http,venue,http_status,https_status, news_hosts):
     import requests
     routes,calls=fake_http
     origin='http://www.example-sauna.test'
@@ -464,37 +460,32 @@ def test_http_robots_unavailable_upgrades_to_https(bot,fake_http,venue,http_stat
     assert not bot._stopped
     assert not bot.db.execute("SELECT 1 FROM sources WHERE state='inaccessible'").fetchone()
     assert not bot.db.execute('SELECT 1 FROM failures').fetchone()
-    # Both in-memory and persisted robots results retain the upgrade decision.
-    assert bot.fetch(origin+path).ok
-    bot._robots.clear()
-    assert bot.fetch(origin+path).ok
-    assert [c[0] for c in calls]==list(routes)+[secure+path]*2
     assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='aux'").fetchone()[0]==2
-    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0]==3
+    assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='bodies'").fetchone()[0]==1
     assert bot.session.headers['User-Agent']==USER_AGENT
 
 @pytest.mark.parametrize('status,body',[(401,b''),(403,b''),(429,b''),(500,b''),
-    (200,b'User-agent: *\nDisallow: /'),(200,b'<h1>Captcha</h1>'),(404,b'<h1>Verify you are human</h1>')])
-def test_https_upgrade_robots_still_fail_closed(bot,fake_http,status,body):
+    (200,b'User-agent: *\nDisallow: /'),(200,b'<h1>Captcha</h1>')])
+def test_https_upgrade_robots_still_fail_closed(bot,fake_http,status,body, news_hosts):
     routes,calls=fake_http
     routes['http://example-sauna.test/robots.txt']=(500,{},b'')
     routes['https://example-sauna.test/robots.txt']=(status,{'Content-Type':'text/plain'},body)
     result=bot.fetch('http://example-sauna.test/visit')
-    assert result.outcome==result.reason=='robots_disallowed'
-    assert [c[0] for c in calls]==list(routes)
-    assert bot.db.execute('SELECT state,reason FROM sources').fetchone()[:]==('inaccessible','robots_disallowed')
-    assert bot.fetch('http://example-sauna.test/other').outcome=='blocked'
-    assert len(calls)==2
+    expected = 'robots_disallowed' if b'Disallow' in body else 'error' if status == 500 else 'blocked'
+    assert result.outcome == expected
+    assert result.url == 'https://example-sauna.test/visit'
+    assert [c[0] for c in calls] == list(routes)
 
 @pytest.mark.parametrize('status,body',[(401,b''),(403,b''),(429,b''),
     (200,b'User-agent: *\nDisallow: /'),(200,b'<h1>Captcha</h1>')])
-def test_http_robots_disallow_never_probes_https(bot,fake_http,status,body):
+def test_http_robots_disallow_never_probes_https(bot,fake_http,status,body, news_hosts):
     routes,calls=fake_http
     routes['http://example-sauna.test/robots.txt']=(status,{'Content-Type':'text/plain'},body)
-    assert bot.fetch('http://example-sauna.test/visit').outcome=='robots_disallowed'
-    assert [c[0] for c in calls]==list(routes)
+    expected = 'robots_disallowed' if b'Disallow' in body else 'blocked'
+    assert bot.fetch('http://example-sauna.test/visit').outcome == expected
+    assert [c[0] for c in calls] == list(routes)
 
-def test_https_upgrade_respects_request_caps(bot,fake_http):
+def test_https_upgrade_respects_request_caps(bot,fake_http, news_hosts):
     routes,calls=fake_http
     bot.settings.aux_cap=1
     routes['http://example-sauna.test/robots.txt']=(500,{},b'')
@@ -503,7 +494,7 @@ def test_https_upgrade_respects_request_caps(bot,fake_http):
     assert not bot._stopped
     assert not bot.db.execute('SELECT 1 FROM sources').fetchone()
 
-def test_https_upgrade_respects_denylist(bot,fake_http,monkeypatch):
+def test_https_upgrade_respects_denylist(bot,fake_http,monkeypatch, news_hosts):
     routes,calls=fake_http
     routes['http://example-sauna.test/robots.txt']=(500,{},b'')
     original=bot._reason_denied
@@ -511,22 +502,22 @@ def test_https_upgrade_respects_denylist(bot,fake_http,monkeypatch):
     assert bot.fetch('http://example-sauna.test/visit').outcome=='denied'
     assert [c[0] for c in calls]==list(routes)
 
-def test_https_upgrade_only_probes_once_after_redirect(bot,fake_http):
+def test_https_upgrade_only_probes_once_after_redirect(bot,fake_http, news_hosts):
     routes,calls=fake_http
     routes['http://example-sauna.test/robots.txt']=(500,{},b'')
     routes['https://example-sauna.test/robots.txt']=(200,{},b'User-agent: *\nAllow: /')
     routes['https://example-sauna.test/visit']=(302,{'Location':'http://other-sauna.test/visit'},b'')
     routes['http://other-sauna.test/robots.txt']=(500,{},b'')
-    assert bot.fetch('http://example-sauna.test/visit').outcome=='robots_disallowed'
+    assert bot.fetch('http://example-sauna.test/visit').reason=='robots_unavailable'
     assert [c[0] for c in calls]==list(routes)
 
 
-def test_https_upgrade_preserves_redirect_slash(bot, fake_http, venue):
+def test_https_upgrade_preserves_redirect_slash(bot, fake_http, venue, news_hosts):
     routes, calls = fake_http
     insecure, secure = 'http://venue.example', 'https://venue.example'
     routes[secure + '/robots.txt'] = (200, {}, b'User-agent: *\nAllow: /')
     routes[secure + '/guide'] = (302, {'Location': insecure + '/visit/'}, b'')
-    routes[insecure + '/robots.txt'] = (503, {}, b'')
+    routes[insecure + '/robots.txt'] = (500, {}, b'')
     routes[secure + '/visit/'] = (200, {'Content-Type': 'text/html'}, venue)
 
     result = bot.fetch(secure + '/guide')
@@ -534,7 +525,7 @@ def test_https_upgrade_preserves_redirect_slash(bot, fake_http, venue):
     assert result.ok and result.url == secure + '/visit/' and result.identity_url == secure + '/visit'
     assert [url for url, _ in calls] == list(routes)
 
-def test_robots_same_site_redirect_budget_spacing(bot,fake_http,venue):
+def test_robots_same_site_redirect_budget_spacing(bot,fake_http,venue, news_hosts):
     routes,calls=fake_http
     bot.settings.min_interval=5
     routes['http://example.com/robots.txt']=(301,{'Location':'https://www.example.com/robots.txt'},b'')
@@ -544,23 +535,22 @@ def test_robots_same_site_redirect_budget_spacing(bot,fake_http,venue):
     assert [c[0] for c in calls]==list(routes)
     assert all(not c[1]['allow_redirects'] for c in calls)
     assert bot.session.headers['User-Agent']==USER_AGENT
-    assert bot.clock.elapsed==10
+    assert bot.clock.elapsed==5
     assert bot.db.execute("SELECT used FROM budgets_daily WHERE kind='aux'").fetchone()[0]==2
-    cached=bot.db.execute("SELECT * FROM robots_cache WHERE origin='http://example.com'").fetchone()
-    assert cached['status']==200 and cached['allowed']==1
+    assert bot.host_policy.cached_robots('http://example.com') == 'User-agent: *\nDisallow: /private'
     assert bot.fetch('http://example.com/private').outcome=='robots_disallowed'
     assert len(calls)==3
 
 @pytest.mark.parametrize('location',['https://example.org/robots.txt','https://www.example.com/home',None])
-def test_robots_redirect_rejected(bot,fake_http,location):
+def test_robots_redirect_rejected(bot,fake_http,location, news_hosts):
     routes,calls=fake_http
     routes['https://example.com/robots.txt']=(301,{'Location':location} if location else {},b'')
     assert bot.fetch('https://example.com/page').outcome=='robots_disallowed'
     assert len(calls)==1
-    assert bot.db.execute('SELECT status,allowed FROM robots_cache').fetchone()[:]==(301,0)
+    assert bot.host_policy.cached_robots('https://example.com') is None
 
 @pytest.mark.parametrize('hops',[5,6])
-def test_robots_redirect_hop_limit(bot,fake_http,venue,hops):
+def test_robots_redirect_hop_limit(bot,fake_http,venue,hops, news_hosts):
     routes,calls=fake_http
     urls=['https://example.com/robots.txt']+[f'https://hop{i}.example.com/robots.txt' for i in range(hops)]
     for start,end in zip(urls,urls[1:]): routes[start]=(302,{'Location':end},b'')
@@ -570,37 +560,17 @@ def test_robots_redirect_hop_limit(bot,fake_http,venue,hops):
     assert result.outcome==('ok' if hops==5 else 'robots_disallowed')
     assert len(calls)==(7 if hops==5 else 6)
 
-def test_robots_redirect_challenge_disallowed(bot,fake_http):
+def test_robots_redirect_challenge_disallowed(bot,fake_http, news_hosts):
     routes,calls=fake_http
     routes['https://example.com/robots.txt']=(307,{'Location':'https://www.example.com/robots.txt'},b'')
     routes['https://www.example.com/robots.txt']=(200,{'Content-Type':'text/html'},b'<h1>Verify you are human</h1>')
-    assert bot.fetch('https://example.com/page').outcome=='robots_disallowed'
+    assert bot.fetch('https://example.com/page').outcome=='blocked'
     assert len(calls)==2
 
-def test_robots_redirect_aux_budget_stops_hops(bot,fake_http):
+def test_robots_redirect_aux_budget_stops_hops(bot,fake_http, news_hosts):
     routes,calls=fake_http
     bot.settings.aux_cap=1
     routes['https://example.com/robots.txt']=(308,{'Location':'https://www.example.com/robots.txt'},b'')
     assert bot.fetch('https://example.com/page').outcome=='cap_reached'
     assert len(calls)==1
     assert not bot.db.execute('SELECT 1 FROM robots_cache').fetchone()
-
-def test_run_robots_expiry_retries_fresh_request(bot,fake_http,venue):
-    from hanset_active.runner import run
-    from hanset_active.util.timeutil import kst_now
-    routes,calls=fake_http
-    url='https://example.com/page'
-    routes['https://example.com/robots.txt']=(503,{},b'')
-    assert bot.register_candidate(url)
-    with bot.db: bot.db.execute('INSERT INTO seed_domains VALUES (?,?,?,?)',('fixture','fixture','example.com',kst_now(bot.clock).isoformat()))
-    run(bot,max_requests=1,initialize=False,providers=[])
-    assert bot.db.execute('SELECT state FROM tasks').fetchone()[0]=='dead'
-    assert run(bot,max_requests=2,initialize=False,providers=[])['requests']==0
-    bot.clock.sleep(86401)
-    routes['https://example.com/robots.txt']=(301,{'Location':'https://www.example.com/robots.txt'},b'')
-    routes['https://www.example.com/robots.txt']=(200,{'Content-Type':'text/plain'},b'User-agent: *\nDisallow:')
-    routes[url]=(200,{'Content-Type':'text/html'},venue)
-    assert run(bot,max_requests=3,initialize=False,providers=[])['requests']==3
-    assert bot.db.execute('SELECT state FROM tasks WHERE url=?',(url,)).fetchone()[0]=='done'
-    assert bot.db.execute('SELECT state FROM sources').fetchone()[0]!='inaccessible'
-    assert [c[0] for c in calls]==['https://example.com/robots.txt','https://example.com/robots.txt','https://www.example.com/robots.txt',url]

@@ -11,10 +11,10 @@ from .search import Tavily
 from .web_seeds import WebSeeds
 from ..crawl_policy import DISCOVERY
 from ..fetcher import Fetcher
-from ..util.timeutil import kst_now
+from ..util.timeutil import Clock, kst_now
 from ..util.urls import registrable_domain
 from ..locks import AlreadyRunning, RunLock
-from ..web_proxy import configured
+from ..web_proxy import resolve_run
 
 SOURCES = ('licenses', 'directories', 'sitemaps', 'tavily')
 SOURCE_ALIASES = {'datago': 'licenses', 'search': 'tavily'}
@@ -133,11 +133,11 @@ def discover(settings, db, *, sources=None, max_calls=None, clock=None, session=
 
 
 def _run(settings, db, selected, max_calls, clock, session, tavily_transport, lock):
-    try:
-        proxy = configured()
-    except ValueError:
-        return _summary(state='proxy_invalid')
-    fetcher = Fetcher(settings, db, clock, proxy=proxy, public_scope=True, policy=DISCOVERY)
+    clock = clock or Clock()
+    egress, blocked, _ = resolve_run(clock=clock, host_dir=settings.data_dir)
+    if blocked:
+        return _summary(state=blocked)
+    fetcher = Fetcher(settings, db, clock, egress=egress, public_scope=True, policy=DISCOVERY)
     fetcher.facts_only = True
     if session is not None:
         fetcher.session.close()
@@ -171,6 +171,9 @@ def _run(settings, db, selected, max_calls, clock, session, tavily_transport, lo
             if usage:
                 stats[adapter]['calls'] = usage[0]
             total.update(counts)
-        return _summary(total, sources=stats)
+        result = _summary(total, sources=stats)
+        if fallback := egress.public():
+            result['egress'] = fallback
+        return result
     finally:
         fetcher.close()

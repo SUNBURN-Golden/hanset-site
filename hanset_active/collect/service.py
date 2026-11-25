@@ -1,5 +1,6 @@
 """Web runs and desktop Instagram ingestion. No browser session is read or launched."""
 import json
+import logging
 import re
 import sqlite3
 from collections import OrderedDict
@@ -31,7 +32,8 @@ from .safety import venue_identity_safe
 from .state import State
 from .store import connect as claim_connect
 from .store import (digest, record, prune_web_target_blocks, recent_web_target_block,
-                    remember_web_target_block, remember_web_target_observation, validated_authorization, web_target_history)
+                    remember_web_target_block, remember_web_target_observation, reopen_non_news_robots_holds,
+                    validated_authorization, web_target_history)
 from .targets import LINK_IDENTITY, canonical_requested_url, fetch_url_allowed, resolve_jobs, search_specs
 from .web import classify_page, select_subpages
 from .web_extraction import WebExtraction, batches_fit
@@ -108,8 +110,10 @@ def public_result(result):
             'attempted', 'heal_exit', 'retries', 'recovered')}
     egress = result.get('web_egress')
     if (out['mode'] in ('web', 'status') and isinstance(egress, dict)
-            and set(egress) == {'mode', 'reason', 'phase'} and egress['mode'] == 'direct'
-            and egress['reason'] == 'proxy_unavailable' and egress['phase'] in ('preflight', 'mid_run')):
+            and set(egress) == {'event', 'mode', 'reason', 'phase'}
+            and egress['event'] == web_proxy.FALLBACK_EVENT and egress['mode'] == 'direct'
+            and egress['reason'] in web_proxy.FALLBACK_REASONS
+            and egress['phase'] in web_proxy.FALLBACK_PHASES):
         out['web_egress'] = dict(egress)
     blob = json.dumps(out, ensure_ascii=False)
     for secret in secrets():
@@ -306,8 +310,6 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
         data_dir=settings.active_dir,
         testing=testing,
         allow_private_hosts=testing,
-        min_interval=0 if testing else 5,
-        global_gap=0 if testing else 1,
     )
     history = None
     skipped = {}
@@ -315,12 +317,13 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
     unsafe = 0
     egress = None
     extraction = None
+    reopened = {}
 
     def finish_web(body):
         # Fetch/extraction results take precedence over cooldown notes in the
         # bounded public page list; the aggregate retains the full skip count.
         body['pages'].extend({'url': url, 'disposition': 'recent_block_skipped'} for url in skipped)
-        rejections = dict(body.get('rejections') or {})
+        rejections = {**(body.get('rejections') or {}), **{k: v for k, v in reopened.items() if v}}
         if extraction is not None:
             body['counts'] = extraction.counts
             rejections.update(extraction.rejections)
@@ -332,8 +335,8 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
             rejections['recent_unchanged_deferred'] = len(deferred_urls)
         if rejections:
             body['rejections'] = rejections
-        if egress:
-            body['web_egress'] = egress
+        if egress is not None and (fallback := egress.public()):
+            body['web_egress'] = fallback
         return _finish(state, body, clock)
 
     def cooling(url, identity_mode=None):
@@ -344,6 +347,9 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
 
     try:
         history = claim_connect(settings.data_dir)
+        reopened = reopen_non_news_robots_holds(history, ledger, state, clock, testing)
+        if any(reopened.values()):
+            logging.getLogger(__name__).info('%s', json.dumps({'event': 'robots_hold_maintenance', **reopened}))
         prune_web_target_blocks(history, clock=clock)
         scope_id = deterministic_id('web-target-file', str(path)) if targets_path else 'default'
         grants = WebGrants(history, scope_id, complete=complete, testing=testing,
@@ -439,17 +445,9 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
         if not pending and not deferred:
             reason = notes[0]['disposition'] if notes else 'no_urls'
             return finish_web(_base('stopped', reason, success=False, collected=False, mode='web', pages=notes))
-        try:
-            proxy = web_proxy.configured()
-        except ValueError:
-            return finish_web(_base('stopped', 'proxy_invalid', success=False, collected=False, mode='web', pages=notes))
-        if proxy:
-            blocked, state.proxy_heal = web_proxy.preflight_with_retry(proxy, clock=clock, host_dir=settings.active_dir)
-            if blocked == 'proxy_unavailable':
-                proxy = ''
-                egress = {'mode': 'direct', 'reason': blocked, 'phase': 'preflight'}
-            elif blocked:
-                return finish_web(_base('stopped', blocked, success=False, collected=False, mode='web', pages=notes))
+        egress, blocked, state.proxy_heal = web_proxy.resolve_run(clock=clock, host_dir=settings.active_dir)
+        if blocked:
+            return finish_web(_base('stopped', blocked, success=False, collected=False, mode='web', pages=notes))
         pages = list(notes[:PAGE_SAMPLE])
         proposal_evidence = []
         stop_reason = None
@@ -464,7 +462,7 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                 if not facts_only:
                     leases = stack.enter_context(closing(open_leases(settings.active_dir)))
                     stack.enter_context(RunLock(leases, active_settings.data_dir, 'collect-web', clock=clock))
-                fetcher = Fetcher(active_settings, audit, clock, proxy=proxy, public_scope=True, policy=COLLECTION)
+                fetcher = Fetcher(active_settings, audit, clock, egress=egress, public_scope=True, policy=COLLECTION)
                 fetcher.discover_links = True
                 if facts_only:
                     fetcher.facts_only = True
@@ -482,8 +480,6 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                         fetched = fetcher.fetch(job['url'], subpage=bool(job.get('discovered_subpage')),
                                                 url_allowed=url_allowed, **fetch_options)
                         proxy_outage = fetched.outcome == 'error' and fetched.reason == 'proxy_unavailable'
-                        if proxy_outage or getattr(fetcher, 'proxy_failed', False) is True:
-                            egress = {'mode': 'direct', 'reason': 'proxy_unavailable', 'phase': 'mid_run'}
                         if fetched.outcome == 'cap_reached':
                             stop_reason = 'active_body_cap'
                             break
@@ -504,6 +500,7 @@ def _drain_web(settings, state, ledger, router, *, targets_path, clock, search, 
                                                        'robots_unavailable', 'robots_redirect')
                         if fetched.status not in BACKOFF_STATUSES and not transient:
                             remember_web_target_block(history, job['url'], disposition, status=fetched.status,
+                                                      final_url=fetched.url or job['url'],
                                                       clock=clock, testing=testing, identity_mode=identity_mode)
                         if disposition != 'ready':
                             remember_web_target_observation(

@@ -140,7 +140,7 @@ class Pipeline(unittest.TestCase):
     def guide_policy(self):
         self.cfg['extension_origins'] = [EXTENSION, OTHER_EXTENSION]
         policy = self.cfg['policies'][0]
-        policy.update(paths=['/guides/'], disallow=['/guides/private/'])
+        policy.update(paths=['/guides/public', '/guides/autonomous'], disallow=['/guides/private/'])
         return policy
 
     def test_grant_registers_guides_origin_and_submission_checks_exact_paths(self):
@@ -218,6 +218,7 @@ class Pipeline(unittest.TestCase):
                     self.assertEqual(tls.return_value.request.call_args.args[:2], ('GET', '/guides/public'))
         self.w.revoke(res)
 
+    @patch('crawler.config.is_korean_news', lambda url: url.startswith('https://source.test'))
     def test_stale_or_removed_approval_still_allows_grant_revocation(self):
         policy = self.guide_policy()
         fresh_review = policy['robots_reviewed_at']
@@ -719,6 +720,7 @@ class Pipeline(unittest.TestCase):
         self.assertEqual([row[0] for row in self.store.db.execute('SELECT record_id FROM reservations')], [second_id])
         self.assertIsNone(self.record(first_id).get('last_attempt_at'))
 
+    @patch('hanset_active.crawl_policy._NEWS_DOMAINS', {'z-expired.test'})
     def test_expired_seed_is_held_and_renewal_restores_collection(self):
         from crawler.__main__ import main
         from crawler.rate_limiter import KST
@@ -764,9 +766,11 @@ class Pipeline(unittest.TestCase):
         self.w = Worker(self.store, self.cfg, lambda: self.now)
         self.assertEqual(cli('report')['access_holds'], 0)
         with patch('crawler.network_gate.public_addresses', side_effect=resolve) as dns, \
-                patch('crawler.network_gate.PinnedTLS') as tls:
+                patch('crawler.network_gate.PinnedTLS') as tls, \
+                patch('crawler.network_gate.time.sleep', side_effect=lambda seconds: setattr(self, 'now', self.now + seconds)):
             tls.return_value.getresponse.side_effect = [
                 MemoryResponse(),
+                MemoryResponse(body=b'User-agent: *\nAllow: /', content_type='text/plain'),
                 MemoryResponse(body=b'<rss><channel></channel></rss>', content_type='application/rss+xml'),
             ]
             status, clip = self.post('/reserve', {'clip_id': uid(), 'url': clip_url, 'document_id': uid()})
@@ -819,11 +823,12 @@ class Pipeline(unittest.TestCase):
             self.assertIsNotNone(renewed['collected_at'])
             self.assertEqual(cli('report')['access_holds'], 0)
             self.assertEqual(holds_audited(), ['robots_review_stale'])
-            self.assertEqual([call.args[0] for call in dns.call_args_list], [current_host, expired_host])
-            self.assertEqual([call.args[0] for call in tls.call_args_list], [current_host, expired_host])
+            self.assertEqual([call.args[0] for call in dns.call_args_list], [current_host, expired_host, expired_host])
+            self.assertEqual([call.args[0] for call in tls.call_args_list], [current_host, expired_host, expired_host])
             self.assertEqual([row[0] for row in self.store.db.execute(
-                'SELECT host FROM requests ORDER BY rowid')], [current_host, expired_host])
+                'SELECT host FROM requests ORDER BY rowid')], [current_host, expired_host, expired_host])
 
+    @patch('crawler.config.is_korean_news', lambda url: url.startswith('https://source.test'))
     def test_seed_registration_reconciles_a_previously_clipped_url(self):
         seed = SOURCE_ORIGIN + '/kr'
         _, record_id = self.accept(seed)
@@ -879,7 +884,7 @@ class Pipeline(unittest.TestCase):
         today = dt.datetime.fromtimestamp(self.now, dt.timezone.utc).date()
         cases = [
             ('day_90', 90, None),
-            ('day_91', 91, 'robots_review_stale'),
+            ('day_91_non_news', 91, None),
             ('venue_removed', 0, 'official_approval_revoked'),
             ('policy_removed', 0, 'access_not_approved'),
         ]
@@ -1522,6 +1527,7 @@ class Safety(unittest.TestCase):
         for value in ('회원 전용 대화', '회원전용 채팅', 'Members only conversation', 'members-only chat', 'private message'):
             with self.assertRaisesRegex(Rejected, 'private_context'): text(value)
 
+    @patch('hanset_active.crawl_policy._NEWS_DOMAINS', {'source.test'})
     def test_robots_review_uses_injected_worker_clock(self):
         from crawler.config import policy_for
         cfg = config()
@@ -1537,6 +1543,7 @@ class Safety(unittest.TestCase):
                     worker.reserve(uid(), 'https://source.test/kr', uid(), 'auto_discovery')
             finally: store.close()
 
+    @patch('crawler.config.is_korean_news', lambda url: True)
     def test_browser_origin_eligibility_uses_normalized_origin_and_kst_review_age(self):
         from crawler.config import browser_policy_for_origin
         now = dt.datetime(2026, 10, 22, 16, tzinfo=dt.timezone.utc).timestamp()
@@ -1590,7 +1597,8 @@ class Safety(unittest.TestCase):
             with self.assertRaises(Rejected): external_path(p / 'new.sqlite3')
 
     def test_url_and_dns_preflight(self):
-        for url in ('https://naver.com/a', 'https://source.test/?token=hidden', 'https://user:pass' + chr(64) + 'source.test/',
+        self.assertEqual(safe_url('https://blog.naver.com/a'), 'https://blog.naver.com/a')
+        for url in ('https://source.test/?token=hidden', 'https://user:pass' + chr(64) + 'source.test/',
                     'file:///tmp/a', 'https://source.test/calendar/a', 'https://source.test/?page=200',
                     'https://source.test/%252e%252e/private'):
             with self.assertRaises(Rejected, msg=url): safe_url(url)
@@ -1641,6 +1649,7 @@ class Safety(unittest.TestCase):
         policy_for(cfg, 'https://source.test/public/article')
         with self.assertRaises(Rejected): policy_for(cfg, 'https://source.test/public-private')
 
+    @patch('hanset_active.crawl_policy._NEWS_DOMAINS', {'source.test'})
     def test_seed_config_validation_checks_safety_and_policy_coverage(self):
         from crawler.config import policy_for
 
@@ -1669,13 +1678,18 @@ class Safety(unittest.TestCase):
             policy_for(cfg, private_seed, now=NOW)
         self.assertEqual(policy_for(cfg, private_seed, now=NOW, required=False), {})
 
-    def test_collector_defaults_are_empty_approval_and_hard_budget_caps(self):
+    def test_collector_validates_approval_defaults_and_configured_limits(self):
         cfg = load()
         self.assertEqual(cfg['policies'], [])
         self.assertEqual((cfg['daily_candidates'], cfg['daily_new_bodies'], cfg['daily_attempts']), (500, 200, 200))
         with tempfile.TemporaryDirectory() as t:
             path = Path(t) / 'config.json'
-            for unsafe in ({'daily_candidates': 501}, {'min_interval': 0}, {'domain_concurrency': 2}):
+            allowed = dict(daily_candidates=1000, daily_new_bodies=1000, daily_attempts=1000,
+                           min_interval=0, global_gap=0)
+            path.write_text(json.dumps(allowed))
+            self.assertEqual({key: load(path)[key] for key in allowed}, allowed)
+            for unsafe in ({'daily_candidates': 0}, {'min_interval': -1}, {'global_gap': float('inf')},
+                           {'domain_concurrency': 2}):
                 path.write_text(json.dumps(unsafe))
                 with self.assertRaises(Rejected): load(path)
 

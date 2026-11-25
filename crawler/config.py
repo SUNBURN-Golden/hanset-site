@@ -8,6 +8,9 @@ import unicodedata
 from pathlib import Path
 from urllib.parse import urlsplit, quote, unquote
 
+from hanset_active.crawl_policy import is_korean_news, is_naver
+from hanset_active.util.urls import is_collect_denied
+
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -40,22 +43,22 @@ def load(path=None):
                 'request_timeout', 'max_redirects'):
         if type(cfg[key]) is not int or cfg[key] <= 0:
             raise Rejected('invalid_config')
-    if (cfg['max_depth'] > 2 or not isinstance(cfg['min_interval'], (int, float))
-            or not math.isfinite(cfg['min_interval']) or cfg['min_interval'] < 5
-            or cfg['domain_concurrency'] != 1
-            or any(cfg[k] > cap for k, cap in [('daily_candidates', 500),
-                                              ('daily_new_bodies', 200), ('daily_attempts', 200)])):
+    if (cfg['max_depth'] > 2 or type(cfg['domain_concurrency']) is not int or cfg['domain_concurrency'] != 1
+            or any(type(cfg[key]) not in (int, float) or not math.isfinite(cfg[key]) or cfg[key] < 0
+                   for key in ('min_interval', 'global_gap'))):
         raise Rejected('unsafe_config')
     for p in cfg['policies']:
         u = urlsplit(p['origin'])
         if u.scheme != 'https' or not u.hostname or u.port not in (None, 443) or u.path or u.query or u.username:
             raise Rejected('invalid_policy_origin')
-        if not p.get('public') or not p.get('paths') or not p.get('robots_reviewed_at'):
+        if not p.get('public') or not p.get('paths') or (
+                is_korean_news(p['origin']) and not p.get('robots_reviewed_at')):
             raise Rejected('incomplete_policy')
-        try:
-            dt.date.fromisoformat(p['robots_reviewed_at'])
-        except (ValueError, TypeError):
-            raise Rejected('invalid_robots_review_date') from None
+        if 'robots_reviewed_at' in p:
+            try:
+                dt.date.fromisoformat(p['robots_reviewed_at'])
+            except (ValueError, TypeError):
+                raise Rejected('invalid_robots_review_date') from None
         if any(not x.startswith('/') for x in p['paths']):
             raise Rejected('invalid_policy_path')
         delay = p.get('crawl_delay', 0)
@@ -69,7 +72,7 @@ def load(path=None):
         raise Rejected('invalid_extension_origin')
     # Registry values are operator input, never inferred from discovered text.
     for seed in cfg['seeds']:
-        seed_policy(cfg, seed)
+        seed_policy(cfg, seed, check_freshness=False)
     return cfg
 
 
@@ -83,7 +86,10 @@ def _origin_key(url):
 
 
 def _review_is_fresh(policy, now):
-    reviewed = dt.date.fromisoformat(policy['robots_reviewed_at'])
+    try:
+        reviewed = dt.date.fromisoformat(policy.get('robots_reviewed_at'))
+    except (TypeError, ValueError):
+        return False
     # Operators date robots reviews in KST.
     today = dt.datetime.fromtimestamp(time.time() if now is None else now,
                                       dt.timezone(dt.timedelta(hours=9))).date()
@@ -94,9 +100,11 @@ def browser_policy_for_origin(cfg, origin, now=None):
     """Check eligibility to register browser consent for a canonical HTTPS origin."""
     key = _origin_key(urlsplit(origin))
     reason = 'access_not_approved'
+    if is_collect_denied(origin):
+        raise Rejected(reason)
     for p in cfg['policies']:
         if _origin_key(urlsplit(p['origin'])) == key and p.get('public') and p.get('browser'):
-            if _review_is_fresh(p, now):
+            if p.get('paths') and (not is_korean_news(origin) or _review_is_fresh(p, now)):
                 return p
             reason = 'robots_review_stale'
     raise Rejected(reason)
@@ -105,6 +113,8 @@ def browser_policy_for_origin(cfg, origin, now=None):
 def _matching_policy(cfg, url):
     from .privacy_filter import safe_url
     u = urlsplit(safe_url(url))
+    if is_collect_denied(url):
+        return None, u.path
     key = _origin_key(u)
     for p in cfg['policies']:
         paths = [policy_path(x) for x in p['paths']]
@@ -118,23 +128,28 @@ def _disallowed(policy, path):
     return any(path.startswith(policy_path(x)) for x in policy.get('disallow', []))
 
 
-def seed_policy(cfg, url):
-    """Validate configured seed coverage without granting current network access."""
+def seed_policy(cfg, url, *, now=None, check_freshness=True):
+    """Check an explicit seed; config loading validates coverage independently of age."""
     policy, path = _matching_policy(cfg, url)
-    if not policy or not policy.get('public') or _disallowed(policy, path):
+    news = is_korean_news(url)
+    if not policy or not policy.get('public') or (news and _disallowed(policy, path)):
         raise Rejected('access_not_approved')
+    if news and check_freshness and not _review_is_fresh(policy, now):
+        raise Rejected('robots_review_stale')
     return policy
 
 
 def policy_for(cfg, url, browser=False, now=None, required=True):
     policy, path = _matching_policy(cfg, url)
+    reason = 'access_not_approved'
     if policy and policy.get('public') and (not browser or policy.get('browser')):
-        if not _review_is_fresh(policy, now):
-            if required:
-                raise Rejected('robots_review_stale')
-            return {}
-        if not _disallowed(policy, path):
+        news = is_korean_news(url)
+        if news and not _review_is_fresh(policy, now):
+            reason = 'robots_review_stale'
+        elif not news or not _disallowed(policy, path):
+            if policy.get('official_venues') and (news or is_naver(url)):
+                return {**policy, 'official_venues': []}
             return policy
     if required:
-        raise Rejected('access_not_approved')
+        raise Rejected(reason)
     return {}  # Manual DOM clips may be clues; this never grants network access.

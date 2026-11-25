@@ -21,7 +21,7 @@ from ..locks import RunLock
 from ..network_store import open_leases
 from ..runner import run
 from ..util.timeutil import Clock, kst_now
-from ..web_proxy import configured
+from ..web_proxy import resolve_run
 from hanset_twin.daemon import run_once
 from hanset_twin.store import connect as twin_connect, open_active_readonly
 from .config import CollectSettings, DEFAULT_MODEL, configured_model, outside
@@ -251,12 +251,18 @@ class Scheduled:
             return (result['state'] == 'ok' and result['sources'].keys() == set(seeds.SOURCES)
                     and all(row['status'] in SEED_COMPLETE for row in result['sources'].values()))
         if name == 'active':
-            fetcher = Fetcher(active, guard.db, clock, proxy=configured(), public_scope=True, policy=COLLECTION)
+            egress, blocked, _ = resolve_run(clock=clock, host_dir=settings.active_dir)
+            if blocked:
+                print(json.dumps({'state': 'stopped', 'reason': blocked}))
+                return False
+            fetcher = Fetcher(active, guard.db, clock, egress=egress, public_scope=True, policy=COLLECTION)
             fetcher.facts_only = True
             try:
                 result = run(fetcher, max_minutes=25, admission=guard)
             finally:
                 fetcher.close()
+            if fallback := egress.public():
+                result['web_egress'] = fallback
             print(json.dumps(result))
             return result.get('checkpoint_complete') is True
 

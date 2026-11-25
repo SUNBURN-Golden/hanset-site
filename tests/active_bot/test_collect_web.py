@@ -129,7 +129,7 @@ def test_restart_retries_model_then_new_day_is_duplicate(server, tmp_path, monke
 
 
 def test_robots_naver_and_locks(server, tmp_path, monkeypatch):
-    monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
+    monkeypatch.setattr('hanset_active.fetcher.is_korean_news', lambda url: True)
     enable_qwen(monkeypatch)
     server.add('/private', _page())
     server.add('/go', '', status=302, headers={'Location': server.base + '/hours', 'Content-Type': 'text/plain'})
@@ -245,7 +245,7 @@ def test_daily_duplicate_receipts_produce_distinct_transitions(server, tmp_path,
 
 @pytest.mark.parametrize('kind', ['robots', 'blocked', 'empty', 'login'])
 def test_unusable_pages_cannot_change_stored_baseline(server, tmp_path, monkeypatch, kind):
-    monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
+    monkeypatch.setattr('hanset_active.fetcher.is_korean_news', lambda url: True)
     from hanset_active.collect.store import connect_readonly
     enable_qwen(monkeypatch)
     settings = _settings(tmp_path)

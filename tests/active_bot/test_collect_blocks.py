@@ -1,6 +1,7 @@
 """URL cooldowns across runs, using only fake HTTP and model responses."""
 import json
 import sqlite3
+from contextlib import closing
 from types import SimpleNamespace
 
 import pytest
@@ -62,7 +63,8 @@ def test_genuine_holds_skip_before_credentials_and_proxy_then_expire(tmp_path, m
     routes = {ROOT + '/robots.txt': (200, b'User-agent: *\nAllow: /\n'),
               ROOT: (200, html())}
     if kind == 'robots_disallowed':
-        monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
+        monkeypatch.setattr('hanset_active.fetcher.is_korean_news', lambda url: True)
+        monkeypatch.setattr('hanset_active.collect.store.is_korean_news', lambda url: True)
         routes[ROOT + '/robots.txt'] = (200, b'User-agent: *\nDisallow: /\n')
     elif kind == 'login_wall':
         routes[ROOT] = (200, b'<main>Sign in<input type="password"></main>')
@@ -84,7 +86,7 @@ def test_genuine_holds_skip_before_credentials_and_proxy_then_expire(tmp_path, m
         today = service.run_web(settings, targets_path=path, clock=clock, testing=True)
         assert today['reason'] == 'recent_block_skipped' and today['success'] and not today['collected']
         assert today['counts']['pages'] == 0 and today['budgets']['model_calls'] == 0
-        assert today['rejections'] == {'recent_block_skipped': 1}
+        assert today['rejections']['recent_block_skipped'] == 1
         assert State(settings.data_dir, clock).data['completed'] == {}
         assert len(requests) == before and blocks(settings) == saved
         clock.sleep(13 * DAY - 1)
@@ -103,7 +105,8 @@ def test_collateral_domain_stop_never_creates_child_hold(tmp_path, monkeypatch, 
     settings, path = setup_run(tmp_path, monkeypatch, initial)
     clock = FakeClock()
     if first == 'robots':
-        monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
+        monkeypatch.setattr('hanset_active.fetcher.is_korean_news', lambda url: True)
+        monkeypatch.setattr('hanset_active.collect.store.is_korean_news', lambda url: True)
         routes = {ROOT + '/robots.txt': (200, b'User-agent: *\nDisallow: /\n'),
                   ROOT + '/sauna': (200, html())}
         blocked_url, collateral = ROOT, ROOT + '/sauna'
@@ -117,20 +120,25 @@ def test_collateral_domain_stop_never_creates_child_hold(tmp_path, monkeypatch, 
     capture_extraction(monkeypatch)
     result = service.run_web(settings, targets_path=path, clock=clock, testing=True)
     assert result['success']
-    assert evaluations[-1] == (collateral, 'blocked', None)
-    assert collateral not in requests
+    if first == 'robots':
+        assert evaluations[-1] == (collateral, 'blocked', None)
+        assert collateral not in requests
+    else:
+        assert evaluations[-1] == (collateral, 'ok', 200)
+        assert collateral in requests
     assert [(row[0], row[1]) for row in blocks(settings)] == [
         (digest(blocked_url), 'robots_disallowed' if first == 'robots' else 'login_wall')]
     clock.sleep(DAY)
     routes[ROOT + '/robots.txt'] = (200, b'User-agent: *\nAllow: /\n')
     again = service.run_web(settings, targets_path=path, clock=clock, testing=True)
     assert again['success'] and collateral in requests
-    assert any(page['url'] == blocked_url and page['disposition'] == 'recent_block_skipped' for page in again['pages'])
+    with closing(connect(settings.data_dir)) as db:
+        assert recent_web_target_block(db, blocked_url, clock=clock, testing=True)
     assert not any(row[0] == digest(collateral) for row in blocks(settings))
 
 
 def test_subpage_robots_denial_does_not_request_body(tmp_path, monkeypatch):
-    monkeypatch.setattr('hanset_active.crawl_policy.korean_news', lambda url: True)
+    monkeypatch.setattr('hanset_active.fetcher.is_korean_news', lambda url: True)
     settings, path = setup_run(tmp_path, monkeypatch)
     routes = {ROOT + '/robots.txt': (200, b'User-agent: *\nDisallow: /price\n'),
               ROOT: (200, html('<a href="/price">Price</a><a href="/about">About</a>'))}
@@ -209,7 +217,7 @@ def test_many_skips_do_not_hide_fetches_or_fill_checkpoint(tmp_path, monkeypatch
 def test_malformed_cooldown_fails_closed(tmp_path, monkeypatch):
     settings, path = setup_run(tmp_path, monkeypatch)
     db = connect(settings.data_dir)
-    db.execute('INSERT INTO web_target_blocks VALUES (?,?,?)', (digest(ROOT), 'blocked', 'invalid'))
+    db.execute('INSERT INTO web_target_blocks(url_hash,disposition,blocked_at) VALUES (?,?,?)', (digest(ROOT), 'blocked', 'invalid'))
     db.commit()
     db.close()
     calls = fake_pages(monkeypatch, {})

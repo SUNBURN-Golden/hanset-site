@@ -47,8 +47,7 @@ def safe_url(value):
         raise Rejected('non_public_destination')
     if (u.scheme != 'https' or not host or u.username or u.password or port not in (None, 443)
             or EMAIL.search(decoded) or SECRET.search(decoded) or PHONE.search(decoded)
-            or host == 'naver.com' or host.endswith('.naver.com') or host == 'naver.net'
-            or host.endswith('.naver.net') or any(x in u.path.lower().split('/') for x in
+            or any(x in u.path.lower().split('/') for x in
                     ('login', 'signin', 'inbox', 'messages', 'account', 'profile'))):
         raise Rejected('unsafe_url')
     query = parse_qsl(u.query, keep_blank_values=True)

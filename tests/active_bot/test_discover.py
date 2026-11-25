@@ -29,7 +29,7 @@ def test_providers(bot,server,provider_class,body,monkeypatch):
     hits=provider.search('sauna','en',10)
     assert hits and 'Sauna' in hits[0].title
     assert bot.db.execute('SELECT state FROM provider_state').fetchone()[0]=='ready'
-    assert len(server.log)>=2
+    assert [row['path'] for row in server.log] == [route]
 
 def test_brave_disabled(bot,monkeypatch):
     monkeypatch.delenv('BRAVE_API_KEY',raising=False)
@@ -97,7 +97,7 @@ def test_mentions_links_reverse_and_guards(bot):
     venue=bot.db.execute('SELECT * FROM venues').fetchone()
     for strategy in ('site_links','lang_counterpart','attachments','images','search','directory'):
         assert followups(bot.db,venue,'price_day_pass',[{'links':links}],strategy=strategy)
-    assert context.candidate('https://naver.com/test',low_prior=True) is None
+    assert context.candidate('https://naver.com/test',low_prior=True) is not None
     excluded=context.profile['exclusion_terms'][0]
     assert context.candidate('https://else.example',text=excluded,low_prior=True) is None
     assert not context.candidate('https://deep.example',low_prior=True,depth=3)
@@ -110,6 +110,7 @@ def test_budget_stop(bot,server):
 
 def test_brave_auth_scoped_to_api_not_robots(bot,server,monkeypatch):
     monkeypatch.setenv('BRAVE_API_KEY','fixture-only')
+    monkeypatch.setattr('hanset_active.crawl_policy._NEWS_DOMAINS', {'127.0.0.1'})
     context=Discovery(bot)
     provider=Brave(context.get,bot.db,clock=bot.clock,endpoint=server.base+'/search')
     params=provider.params('sauna','en',10)

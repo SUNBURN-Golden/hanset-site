@@ -80,7 +80,6 @@ def test_freeze_admission_and_full_plan_replay(env, tmp_path, shared_domains):
         'naver.com', 'example.test', 'booking.test', 'maps.test',
     }
     assert upsert_venue(db, 'RUNPORT Box B', website=DECLINED) is None
-    assert upsert_venue(db, 'Seed Spa A', website=NAVER) is None
     by_url = {url: target for target in assembly(env)['targets'] for url in target['urls']}
     assert by_url[NAVER]['venue_id'].startswith('seed:') and by_url[DECLINED]['venue_id'].startswith('seed:')
     assert not db.execute('SELECT 1 FROM venues').fetchone()
@@ -185,7 +184,7 @@ def test_legacy_runner_keeps_original_seed_admission_and_first_website(env, monk
                               register_candidate=Mock())
     monkeypatch.setattr(runner, 'replenish_search', Mock())
     runner.bootstrap(fetcher)
-    fetcher.register_candidate.assert_called_once_with(OWN)
+    assert [call.args[0] for call in fetcher.register_candidate.call_args_list] == [NAVER, OWN]
 
 
 @pytest.mark.parametrize('destination', [INSTAGRAM, 'https://instagr.am/seed',

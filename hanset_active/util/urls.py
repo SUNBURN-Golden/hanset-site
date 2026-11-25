@@ -1,13 +1,12 @@
 """Deterministic URL identity without DNS resolution or network access."""
 import ipaddress
-import re
 import socket
 from urllib.parse import urlsplit, urlunsplit, parse_qsl, urlencode, unquote, unquote_to_bytes
 from .pii import strip_pii
 
-DENIED = ('naver.com', 'naver.me', 'pstatic.net', 'naver.net', 'instagram.com', 'instagr.am', 'cdninstagram.com')
-DECLINED_LISTING_TERMS = ('runport', '런포트')
 COLLECT_DENIED = ('instagram.com', 'instagr.am', 'cdninstagram.com')
+DENIED = COLLECT_DENIED
+DECLINED_LISTING_TERMS = ('runport', '런포트')
 
 def canonicalize(url: str, base: str | None = None, *, preserve_path: bool = False) -> str:
     """Normalize identity by default; opt in to retaining a fetch path verbatim."""
@@ -58,7 +57,7 @@ def registrable_domain(url: str) -> str:
 
 def is_denied(url: str, denied_domains=DENIED) -> bool:
     host = (urlsplit(url).hostname or '').lower().rstrip('.')
-    return any(host == d or host.endswith('.' + d) for d in denied_domains) or bool(re.search(r'(^|\.)naver\.', host))
+    return any(host == d or host.endswith('.' + d) for d in denied_domains)
 
 def is_collect_denied(url: str) -> bool:
     host = (urlsplit(url).hostname or '').lower().rstrip('.')
