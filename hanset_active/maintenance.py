@@ -3,7 +3,11 @@ from collections import Counter
 from datetime import datetime
 import json
 from urllib.parse import urlsplit
+from .crawl_policy import KoreanNewsRobots, is_korean_news
 from .db import deterministic_id
+from .fetcher import USER_AGENT
+from .host_policy import origin
+from .locks import hostname
 from .util.followups import allows_followup, portal_domains, FOCUSED_STRATEGIES
 from .util.timeutil import kst_now
 from .util.urls import canonicalize, is_denied, is_excluded, registrable_domain
@@ -47,7 +51,7 @@ def _tracked_domains(db):
     wikipedia, openstreetmap, and similar origins stay out unless a tracked
     venue actually lists that registrable domain.
     """
-    portals=portal_domains()
+    portals=portal_domains() - {'naver.com', 'daum.net'}
     found=set()
     for (domain,) in db.execute('SELECT DISTINCT domain FROM seed_domains'):
         _add_domain(found, domain, portals)
@@ -61,70 +65,91 @@ def _tracked_domains(db):
             for item in listed: _add_domain(found, item, portals)
     return found
 
-def _latest_seed_robots(db):
-    latest={}
-    tracked=_tracked_domains(db)
-    for row in db.execute('SELECT * FROM robots_cache'):
-        domain=registrable_domain(row['origin'])
-        if domain in tracked and (domain not in latest or datetime.fromisoformat(row['fetched_at'])>datetime.fromisoformat(latest[domain]['fetched_at'])):
-            latest[domain]=row
-    return latest
+def _robots_class(url):
+    """Only an effective HTTP URL with a usable hostname proves a policy class."""
+    try:
+        canonicalize(url, preserve_path=True)
+        parts = urlsplit(url)
+        if hostname(url) not in ('naver.com', 'daum.net') or parts.path not in ('', '/'):
+            return 'news' if is_korean_news(url) else 'non_news'
+    except (ValueError, TypeError, UnicodeError):
+        pass
+    return 'unresolved'
 
-def _https_url(url):
-    parts=urlsplit(url)
-    if parts.scheme!='http': return url
-    return canonicalize(parts._replace(scheme='https').geturl())
 
-def _robots_permits(row, url):
-    """Cached origin was fetchable and its robots.txt allows this URL."""
-    if not row['allowed']: return False
-    from urllib.robotparser import RobotFileParser
-    from .fetcher import USER_AGENT
-    parser=RobotFileParser()
-    parser.parse((row['body'] or '').splitlines())
-    return bool(parser.can_fetch(USER_AGENT, url))
-
-def requeue_robots_trials(db, clock=None):
-    """Reopen expired transient failures, plus one HTTP-to-HTTPS upgrade trial.
-
-    Seeds and tracked venue sites are eligible. Directory sources are not.
-    The one-shot HTTPS upgrade rewrites an http trial URL to that same host
-    and path on https.
-    """
-    now=kst_now(clock); reopened=[]
-    latest=_latest_seed_robots(db)
+def reopen_non_news_robots(db, clock=None):
+    """Reopen legacy work only when its stored effective denial URL proves eligibility."""
+    stamp = kst_now(clock).isoformat()
+    counts = dict(reopened_tasks=0, reopened_sources=0, kept_news=0, unresolved=0)
+    reason = 'robots_policy_reopened'
     with db:
-        for domain,row in latest.items():
-            status=row['status']
-            # Cached HTTP unavailability can be reused by the HTTPS fallback;
-            # this one-time migration need not wait for expiry or retry budget.
-            upgrade_retry=(urlsplit(row['origin']).scheme=='http' and (status is None or 500<=status<600)
-                and not db.execute("SELECT 1 FROM failures WHERE domain=? AND reason='https_upgrade_retry'",(domain,)).fetchone())
-            if not upgrade_retry and (datetime.fromisoformat(row['expires_at'])>=now or not (status is None or status==429 or 500<=status<600 or status in (301,302,303,307,308))): continue
-            source=db.execute("SELECT * FROM sources WHERE domain=? AND state='inaccessible' AND reason='robots_disallowed'",(domain,)).fetchone()
-            if not source: continue
-            if db.execute("SELECT 1 FROM tasks WHERE domain=? AND kind='trial' AND state IN ('pending','running')",(domain,)).fetchone(): continue
-            task=db.execute("SELECT t.* FROM tasks t WHERE domain=? AND kind='trial' AND state='dead' AND EXISTS (SELECT 1 FROM failures f WHERE f.task_id=t.task_id AND f.reason='robots_disallowed' AND f.state='dead') ORDER BY created_at,task_id LIMIT 1",(domain,)).fetchone()
-            if not task: continue
-            attempts=db.execute("SELECT max(max(attempts,repeat_failures)) FROM tasks WHERE domain=? AND kind='trial'",(domain,)).fetchone()[0] or 0
-            retries=db.execute("SELECT coalesce(max(attempts),0) FROM failures WHERE domain=? AND reason='robots_unavailable_retry'",(domain,)).fetchone()[0]
-            retries=max(retries,attempts-1)
-            if retries>=3 and not upgrade_retry: continue
-            reason='https_upgrade_retry' if upgrade_retry else 'robots_unavailable_retry'
-            stamp=now.isoformat()
-            # An HTTP trial reopened for the one-shot upgrade must itself request
-            # HTTPS, so the next fetch reads that origin's robots.txt and still
-            # fails closed when the HTTPS robots file is unavailable.
-            url=_https_url(task['url']) if upgrade_retry else task['url']
-            # Preserve the initial failure plus this retry even if the run
-            # stops before execution. Audit counts also cover other trial URLs.
-            db.execute("UPDATE tasks SET state='pending',url=?,next_at=?,lease_until=NULL,updated_at=?,repeat_failures=? WHERE task_id=?",(url,stamp,stamp,retries+2,task['task_id']))
-            # Candidate state forces a fresh relevance trial after robots succeeds.
-            db.execute("UPDATE sources SET state='candidate',reason=?,next_at=? WHERE domain=?",(reason,stamp,domain))
-            db.execute("INSERT INTO failures(failure_id,task_id,url,domain,reason,state,attempts,next_at,created_at) VALUES (?,?,?,?,?,'pending',?,?,?) ON CONFLICT(task_id,url,reason) DO UPDATE SET attempts=excluded.attempts,state='pending',next_at=excluded.next_at",
-                (deterministic_id(task['task_id'],reason),task['task_id'],url,domain,reason,1 if upgrade_retry else retries+1,stamp,stamp))
-            reopened.append(domain)
-    return reopened
+        failures = db.execute("""
+            SELECT f.* FROM failures f JOIN tasks t ON f.task_id=t.task_id
+            WHERE f.reason='robots_disallowed' AND f.state='dead' AND t.state='dead'
+              AND NOT EXISTS (SELECT 1 FROM failures audit
+                              WHERE audit.task_id=t.task_id AND audit.reason=?)
+              AND NOT EXISTS (SELECT 1 FROM failures last WHERE last.task_id=t.task_id
+                              AND last.state='dead' AND last.reason!='robots_disallowed'
+                              AND last.created_at>=f.created_at)
+        """, (reason,)).fetchall()
+        # Tied historical rows can include different redirect destinations.
+        by_task = {}
+        for failure in failures:
+            by_task.setdefault(failure['task_id'], []).append(failure)
+        for task_id, rows in by_task.items():
+            classes = {_robots_class(row['url']) for row in rows}
+            if 'news' in classes:
+                counts['kept_news'] += 1
+            elif classes != {'non_news'}:
+                counts['unresolved'] += 1
+            elif db.execute("""UPDATE tasks SET state='pending', attempts=0, repeat_failures=0,
+                              next_at=NULL, lease_until=NULL, updated_at=?
+                              WHERE task_id=? AND state='dead'""", (stamp, task_id)).rowcount:
+                failure = rows[0]
+                db.execute("""INSERT INTO failures(failure_id,task_id,url,domain,reason,state,created_at)
+                              VALUES (?,?,?,?,?,'pending',?)""",
+                           (deterministic_id(task_id, reason), task_id, failure['url'], failure['domain'], reason, stamp))
+                counts['reopened_tasks'] += 1
+
+        tracked = _tracked_domains(db)
+        for (domain,) in db.execute("""SELECT domain FROM sources
+                    WHERE state='inaccessible' AND reason='robots_disallowed'""").fetchall():
+            if domain not in tracked:
+                continue
+            classes = {_robots_class(row['url']) for row in db.execute(
+                "SELECT url FROM failures WHERE domain=? AND reason='robots_disallowed'", (domain,))}
+            if is_korean_news('https://' + domain) or 'news' in classes:
+                counts['kept_news'] += 1
+            elif classes != {'non_news'}:
+                counts['unresolved'] += 1
+            else:
+                db.execute("""UPDATE sources SET state='candidate', reason=?, next_at=NULL
+                              WHERE domain=?""", (reason, domain))
+                counts['reopened_sources'] += 1
+    return counts
+
+
+def _robots_permits(url, news_cache, now):
+    if not is_korean_news(url):
+        return True
+    if news_cache is None:
+        return False
+    row = news_cache.execute('SELECT body,expires_at FROM news_robots WHERE origin=?', (origin(url),)).fetchone()
+    return bool(row and datetime.fromisoformat(row[1]) > now
+                and KoreanNewsRobots(row[0], user_agent=USER_AGENT).can_fetch(url))
+
+
+def _dead_trials(db):
+    tracked = _tracked_domains(db)
+    for domain in tracked:
+        if db.execute("SELECT 1 FROM tasks WHERE domain=? AND kind='trial' AND state IN ('pending','running')",
+                      (domain,)).fetchone():
+            continue
+        task = db.execute("""SELECT * FROM tasks WHERE domain=? AND kind='trial'
+                            ORDER BY updated_at DESC,created_at DESC,task_id LIMIT 1""", (domain,)).fetchone()
+        if task and task['state'] == 'dead':
+            yield domain, task
+
 
 # One domain-level reopen. The task then uses the normal non-terminal attempt cap.
 SPA_SHELL_RETRY_LIMIT=1
@@ -135,20 +160,17 @@ def _render_failure(reason):
     text=(reason or '').strip().casefold()
     return text=='error' or ('render' in text and 'fail' in text)
 
-def requeue_spa_shell_trials(db, clock=None):
-    """Reopen one dead empty_body trial when the latest robots cache allows it.
+def requeue_spa_shell_trials(db, clock=None, *, news_cache=None):
+    """Reopen one dead empty_body trial when the current policy permits it.
 
     The domain is a seed or a tracked venue site. Recorded as spa_shell_retry
     and not repeated for that domain. Attempts reset so the reopen gets the
     normal retry cap. Inaccessible sources and disallowed robots are left alone.
     """
     now=kst_now(clock); reopened=[]
-    latest=_latest_seed_robots(db)
     with db:
-        for domain,row in latest.items():
-            if db.execute("SELECT 1 FROM tasks WHERE domain=? AND kind='trial' AND state IN ('pending','running')",(domain,)).fetchone(): continue
-            task=db.execute("SELECT * FROM tasks WHERE domain=? AND kind='trial' ORDER BY updated_at DESC,created_at DESC,task_id LIMIT 1",(domain,)).fetchone()
-            if not task or task['state']!='dead' or not _robots_permits(row, task['url']): continue
+        for domain,task in _dead_trials(db):
+            if not _robots_permits(task['url'], news_cache, now): continue
             death=db.execute("SELECT reason FROM failures WHERE task_id=? AND state='dead' ORDER BY created_at DESC,failure_id DESC LIMIT 1",(task['task_id'],)).fetchone()
             if not death or death['reason']!='empty_body': continue
             retries=db.execute("SELECT coalesce(max(attempts),0) FROM failures WHERE domain=? AND reason='spa_shell_retry'",(domain,)).fetchone()[0]
@@ -166,7 +188,7 @@ def requeue_spa_shell_trials(db, clock=None):
             reopened.append(domain)
     return reopened
 
-def requeue_browser_aux_softfail_trials(db, clock=None):
+def requeue_browser_aux_softfail_trials(db, clock=None, *, news_cache=None):
     """One more reopen when spa_shell_retry already died on a render error.
 
     The empty-body reopen was spent while a single aux asset failure aborted
@@ -175,12 +197,9 @@ def requeue_browser_aux_softfail_trials(db, clock=None):
     sources stay dead. Attempts reset so the reopen gets a normal retry cap.
     """
     now=kst_now(clock); reopened=[]
-    latest=_latest_seed_robots(db)
     with db:
-        for domain,row in latest.items():
-            if db.execute("SELECT 1 FROM tasks WHERE domain=? AND kind='trial' AND state IN ('pending','running')",(domain,)).fetchone(): continue
-            task=db.execute("SELECT * FROM tasks WHERE domain=? AND kind='trial' ORDER BY updated_at DESC,created_at DESC,task_id LIMIT 1",(domain,)).fetchone()
-            if not task or task['state']!='dead' or not _robots_permits(row, task['url']): continue
+        for domain,task in _dead_trials(db):
+            if not _robots_permits(task['url'], news_cache, now): continue
             death=db.execute("SELECT reason FROM failures WHERE task_id=? AND state='dead' ORDER BY created_at DESC,failure_id DESC LIMIT 1",(task['task_id'],)).fetchone()
             if not death or not _render_failure(death['reason']): continue
             if not db.execute("SELECT 1 FROM failures WHERE domain=? AND reason='spa_shell_retry'",(domain,)).fetchone(): continue

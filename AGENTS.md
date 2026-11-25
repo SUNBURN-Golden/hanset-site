@@ -37,3 +37,14 @@ Violating any of them = reject the PR. If a rule seems to conflict with a task, 
 - Do not commit: `dist/`, `.venv/`, backups (`*.bak*`, `_prev*`), logs, mail text, venue contact details, tokens/keys/JWTs.
 - Before opening a PR, scan the diff for phone numbers, emails other than hanset@soulbound.co.kr, and secret-like strings.
 - Content data changes (CSV/JSON) come from the operations bot; if a frontend change needs new data fields, open an issue and describe the field.
+
+## Collector network policy (hanset_active / crawler)
+
+These rules govern collection. The site-lock rules above still apply.
+
+- Use the maintained Korean news list in `hanset_active/profiles/kr_news_domains.txt`. Only listed hosts and their subdomains have a robots.txt gate, Crawl-delay, and a five-second minimum request interval.
+- Serialize requests by exact hostname. All other hosts have no crawl delay. Sitemap discovery may read robots.txt for sitemap URLs.
+- Send a fixed HANSET collector User-Agent identifying `hanset@soulbound.co.kr`.
+- If the optional proxy is unavailable or its exit IP mismatches, use the box IP for the run and report one `proxy_fallback_direct` event. Record refusals and stop as appropriate. Never bypass a 403, captcha, login, paywall, or other block, or switch egress or accounts to evade one.
+- Public Naver non-news pages are eligible as third-party source claims. Naver news hosts follow robots.txt. Collect Instagram only through the official `@hanset.mag` account.
+- Log costs without internal cost caps. Keep secrets out of logs.

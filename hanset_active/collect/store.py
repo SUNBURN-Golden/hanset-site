@@ -5,6 +5,10 @@ import os
 import re
 import sqlite3
 import struct
+from hanset_active.crawl_policy import is_korean_news
+from hanset_active.locks import hostname
+from hanset_active.util.urls import canonicalize
+
 from datetime import datetime, timedelta
 from functools import cache
 
@@ -161,7 +165,20 @@ BLOCK_SCHEMA = '''
 CREATE TABLE IF NOT EXISTS web_target_blocks (
     url_hash TEXT PRIMARY KEY,
     disposition TEXT NOT NULL CHECK (disposition IN ('robots_disallowed','login_wall','blocked')),
-    blocked_at TEXT NOT NULL
+    blocked_at TEXT NOT NULL,
+    requested_url TEXT,
+    effective_url TEXT,
+    effective_host TEXT,
+    policy_class TEXT
+);
+CREATE TABLE IF NOT EXISTS web_block_releases (
+    url_hash TEXT NOT NULL,
+    blocked_at TEXT NOT NULL,
+    requested_url TEXT NOT NULL,
+    effective_url TEXT,
+    released_at TEXT NOT NULL,
+    reason TEXT NOT NULL,
+    PRIMARY KEY (url_hash, blocked_at)
 );
 '''
 _BLOCK_DISPOSITIONS = frozenset({'robots_disallowed', 'login_wall', 'blocked'})
@@ -200,6 +217,11 @@ def connect(directory):
     _migrate(db)
     db.executescript(CHANGE_SCHEMA)
     db.executescript(BLOCK_SCHEMA)
+    with db:
+        db.execute('BEGIN IMMEDIATE')
+        _add_columns(db, 'web_target_blocks', {
+            'requested_url': 'TEXT', 'effective_url': 'TEXT', 'effective_host': 'TEXT', 'policy_class': 'TEXT',
+        })
     from .web_grants import SCHEMA as GRANT_SCHEMA
     db.executescript(GRANT_SCHEMA)
     os.chmod(path, 0o600)
@@ -278,7 +300,7 @@ def _prune_web_target_blocks(db, now):
     # Parse before deleting: malformed state must never silently bypass a hold.
     expired = []
     for row in db.execute('SELECT * FROM web_target_blocks'):
-        if _block_expiry(row) <= now:
+        if _block_expiry(row) <= now and row['disposition'] != 'robots_disallowed':
             expired.append((row['url_hash'],))
     db.executemany('DELETE FROM web_target_blocks WHERE url_hash=?', expired)
 
@@ -292,22 +314,99 @@ def recent_web_target_block(db, url, *, clock=None, testing=False, identity_mode
     from .targets import canonical_requested_url
     key = digest(canonical_requested_url(url, testing=testing, identity_mode=identity_mode))
     row = db.execute('SELECT * FROM web_target_blocks WHERE url_hash=?', (key,)).fetchone()
-    return bool(row and kst_now(clock) < _block_expiry(row))
+    if not row or kst_now(clock) >= _block_expiry(row):
+        return False
+    if row['disposition'] != 'robots_disallowed' or row['policy_class'] != 'non_news':
+        return True
+    return not db.execute("SELECT 1 FROM web_block_releases WHERE url_hash=? AND blocked_at=?",
+                          (key, row['blocked_at'])).fetchone()
 
 
-def remember_web_target_block(db, url, disposition, *, status, clock=None, testing=False, identity_mode=None):
+def remember_web_target_block(db, url, disposition, *, status, final_url=None, clock=None,
+                              testing=False, identity_mode=None):
     """Only per-URL evaluations establish holds; collateral domain stops do not."""
     if disposition not in _BLOCK_DISPOSITIONS or (disposition != 'robots_disallowed' and status is None):
         return
     from .targets import canonical_requested_url
-    key = digest(canonical_requested_url(url, testing=testing, identity_mode=identity_mode))
+    requested = canonical_requested_url(url, testing=testing, identity_mode=identity_mode)
+    effective = None
+    if final_url:
+        try:
+            canonical_requested_url(final_url, testing=testing)
+            effective = canonicalize(final_url, preserve_path=True)
+        except ValueError:
+            pass
+    if disposition == 'robots_disallowed' and not effective:
+        raise ValueError('robots_effective_url_required')
+    host = hostname(effective) if effective else None
+    policy_class = ('news' if is_korean_news(effective) else 'non_news') if disposition == 'robots_disallowed' else 'unknown'
     now = kst_now(clock)
     with db:
         _prune_web_target_blocks(db, now)
-        db.execute('''INSERT INTO web_target_blocks(url_hash,disposition,blocked_at) VALUES (?,?,?)
+        db.execute("""INSERT INTO web_target_blocks
+                      (url_hash,disposition,blocked_at,requested_url,effective_url,effective_host,policy_class)
+                      VALUES (?,?,?,?,?,?,?)
                       ON CONFLICT(url_hash) DO UPDATE SET
-                      disposition=excluded.disposition,blocked_at=excluded.blocked_at''',
-                   (key, disposition, now.isoformat()))
+                      disposition=excluded.disposition,blocked_at=excluded.blocked_at,
+                      requested_url=excluded.requested_url,effective_url=excluded.effective_url,
+                      effective_host=excluded.effective_host,policy_class=excluded.policy_class""",
+                   (digest(requested), disposition, now.isoformat(), requested, effective, host, policy_class))
+
+
+def reopen_non_news_robots_holds(history, ledger, state, clock, testing):
+    from .targets import canonical_requested_url
+
+    counts = dict(robots_hold_reopened=0, robots_hold_news_kept=0, robots_hold_unresolved=0)
+    released = []
+    rows = history.execute("""SELECT b.* FROM web_target_blocks b
+        WHERE b.disposition='robots_disallowed' AND NOT EXISTS (
+            SELECT 1 FROM web_block_releases r WHERE r.url_hash=b.url_hash AND r.blocked_at=b.blocked_at)
+    """).fetchall()
+    for row in rows:
+        if row['policy_class'] == 'news':
+            counts['robots_hold_news_kept'] += 1
+            continue
+        try:
+            requested, effective = row['requested_url'], row['effective_url']
+            proven = (row['policy_class'] == 'non_news' and bool(row['effective_host'])
+                      and bool(requested) and digest(requested) == row['url_hash']
+                      and canonical_requested_url(requested, testing=testing)
+                      and bool(effective) and hostname(effective) == row['effective_host']
+                      and canonical_requested_url(effective, testing=testing)
+                      and not is_korean_news(effective))
+        except (ValueError, TypeError, UnicodeError):
+            proven = False
+        if not proven:
+            counts['robots_hold_unresolved'] += 1
+            continue
+        released.append(row)
+    if not released:
+        return counts
+
+    # Clean both completion stores before recording releases. If interrupted,
+    # the next run repeats the cleanup only for still-unreleased blocks.
+    urls = {row['requested_url'] for row in released}
+    with ledger:
+        ledger.executemany("DELETE FROM web_completions WHERE requested_url=? AND disposition='robots_disallowed'",
+                           ((url,) for url in urls))
+    for url, disposition in tuple(state.data['completed'].items()):
+        if disposition != 'robots_disallowed':
+            continue
+        try:
+            canonical = canonical_requested_url(url, testing=testing)
+        except ValueError:
+            continue
+        if url in urls or canonical in urls:
+            del state.data['completed'][url]
+    state.save()
+    stamp = kst_now(clock).isoformat()
+    with history:
+        history.executemany("""INSERT OR IGNORE INTO web_block_releases
+                              VALUES (?,?,?,?,?,'robots_policy_reopened')""",
+                            ((row['url_hash'], row['blocked_at'], row['requested_url'], row['effective_url'], stamp)
+                             for row in released))
+    counts['robots_hold_reopened'] = len(released)
+    return counts
 
 
 def _observation_time(value):

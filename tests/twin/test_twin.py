@@ -106,12 +106,14 @@ def test_unverified_and_ai_never_fill_values(env):
     a.doc('https://blog.naver.com/x', '2026-10-01T10:00:00+09:00', [('tattoo_policy', 'allowed', 'fact', '문신 가능')], 'alpha::', 'third_party')
     a.doc('https://listicle.example/top10', '2026-10-01T11:00:00+09:00', [('hours', {'hours': '05:00-23:00'}, 'fact', '05:00-23:00')], 'top10sauna::', 'third_party')
     run()
-    assert twin.execute("SELECT count(*) FROM facts WHERE value_json IS NOT NULL").fetchone()[0] == 0
+    assert twin.execute("SELECT status FROM facts WHERE value_json IS NOT NULL").fetchone()[0] == 'source_claim'
+    assert twin.execute("SELECT count(*) FROM facts WHERE value_json IS NOT NULL").fetchone()[0] == 1
     assert twin.execute("SELECT count(*) FROM facts WHERE status='ai_inference'").fetchone()[0] == 0
     assert twin.execute("SELECT count(*) FROM facts WHERE status='unverified' AND effective_to IS NULL").fetchone()[0] >= 15
     kinds = {r[0] for r in twin.execute('SELECT kind FROM review_queue')}
     assert {'ambiguous_extraction', 'unresolved_subject'} <= kinds
-    assert twin.execute("SELECT count(*) FROM work_items WHERE canonical_url LIKE '%naver%'").fetchone()[0] == 0
+    assert twin.execute("SELECT supported FROM source_rights WHERE domain='naver.com'").fetchone()[0] == 0
+    assert twin.execute("SELECT count(*) FROM work_items WHERE canonical_url LIKE '%naver%'").fetchone()[0] == 1
 
 def test_representative_question_answers_with_evidence(env):
     a, twin, run, _ = env

@@ -5,7 +5,7 @@ from .html import extract as extract_html
 from ..fetcher import FetchResult, detect_outcome, USER_AGENT
 from ..util.pii import strip_pii
 from ..util.hashing import content_hash
-from ..util.urls import canonicalize, registrable_domain, is_excluded
+from ..util.urls import canonicalize, is_excluded
 from ..util.timeutil import kst_now
 from ..web_proxy import HEAVY_RESOURCES
 NAME='browser'
@@ -49,9 +49,9 @@ def fetch(fetcher, url: str) -> FetchResult:
     url=canonicalize(url)
     if fetcher._reason_denied(url):
         return FetchResult(strip_pii(url),'denied',reason='denied host',fetch_method=NAME)
-    domain=registrable_domain(url)
-    if domain in fetcher._stopped:
-        return FetchResult(strip_pii(url),'blocked',fetch_method=NAME)
+    stopped, retry_after = fetcher._stopped_reason(url)
+    if stopped:
+        return FetchResult(strip_pii(url), 'blocked', reason=stopped, retry_after=retry_after, fetch_method=NAME)
     allowed,reason=fetcher._robots_allowed(url)
     if not allowed:
         return FetchResult(strip_pii(url),reason,fetch_method=NAME)
@@ -61,7 +61,7 @@ def fetch(fetcher, url: str) -> FetchResult:
         return FetchResult(strip_pii(url),'error',reason='browser unavailable',fetch_method=NAME)
     failure=[]
     with sync_playwright() as p:
-        proxy=getattr(fetcher,'proxy','')
+        proxy = fetcher.egress.request_proxy()
         if proxy:
             from ..web_proxy import browser_server
             # Defense in depth: every request is also routed through Fetcher.
@@ -114,7 +114,7 @@ def fetch(fetcher, url: str) -> FetchResult:
                 return FetchResult(strip_pii(url),failure[0],fetch_method=NAME)
             if not getattr(fetcher, 'public_scope', False) and is_excluded(body.decode()):
                 return FetchResult(strip_pii(url),'denied',reason='excluded',fetch_method=NAME)
-            outcome=detect_outcome(body,'text/html',200,public_scope=getattr(fetcher, 'public_scope', False))
+            outcome=detect_outcome(body,'text/html',200)
             return FetchResult(strip_pii(url),outcome,status=200,content=body if outcome=='ok' else b'',content_type='text/html',content_hash=content_hash(body,'text/html') if outcome=='ok' else '',fetch_method=NAME,fetched_at=kst_now(fetcher.clock).isoformat())
         finally:
             browser.close()

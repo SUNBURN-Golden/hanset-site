@@ -18,7 +18,7 @@ from .util.timeutil import kst_now
 from .util.pii import strip_pii
 from .util.urls import is_denied, is_excluded
 from .maintenance import (close_article_title_venues, prune_offsite_followups,
-                          requeue_browser_aux_softfail_trials, requeue_robots_trials,
+                          reopen_non_news_robots, requeue_browser_aux_softfail_trials,
                           requeue_spa_shell_trials, scrub_portal_venue_domains)
 from .venues import is_article_title
 
@@ -124,12 +124,10 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
             close_article_title_venues(db, clock=clock)
             scrub_portal_venue_domains(db,clock=clock)
             prune_offsite_followups(db,clock=clock,apply=True)
-            for domain in requeue_robots_trials(db,clock=clock):
-                fetcher._stopped.pop(domain,None)
-            for domain in requeue_spa_shell_trials(db,clock=clock):
-                fetcher._stopped.pop(domain,None)
-            for domain in requeue_browser_aux_softfail_trials(db,clock=clock):
-                fetcher._stopped.pop(domain,None)
+            robots_reopen = reopen_non_news_robots(db, clock=clock)
+            news_cache = fetcher.host_policy.db
+            requeue_spa_shell_trials(db, clock=clock, news_cache=news_cache)
+            requeue_browser_aux_softfail_trials(db, clock=clock, news_cache=news_cache)
             recover(db,clock=clock)
             # With exclusive flock, all remaining running tasks are orphaned:
             # do not wait for a killed process's future lease to expire.
@@ -164,7 +162,7 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
                         clock.sleep(min(60,max(0,delay)))
                         lock.heartbeat()
                         continue
-                    task = _pick(scheduler,selected,deadline,{domain:last+max(fetcher.settings.min_interval,fetcher._delay.get(domain,0)) for domain,last in fetcher._last.items() if domain not in fetcher._stopped})
+                    task = _pick(scheduler, selected, deadline)
                     if task is None: break
                     until = lock.heartbeat()
                     with db:
@@ -196,14 +194,14 @@ def run(fetcher, *, max_minutes=None, max_requests=None, classes=None, dry_run=F
                 executor.close()
                 if old_handler is not None: signal.signal(signal.SIGTERM,old_handler)
                 with db:
-                    db.execute('UPDATE runs SET finished_at=?,state=?,requests=?,stats=? WHERE run_id=?',(kst_now(clock).isoformat(),state,executor.requests,json.dumps({'completed':completed}),run_id))
-            return {'state':state,'run_id':run_id,'requests':executor.requests,'completed':completed,
+                    db.execute('UPDATE runs SET finished_at=?,state=?,requests=?,stats=? WHERE run_id=?',(kst_now(clock).isoformat(),state,executor.requests,json.dumps({'completed':completed, 'robots_reopen': robots_reopen}),run_id))
+            return {'state':state,'run_id':run_id,'requests':executor.requests,'completed':completed, 'robots_reopen': robots_reopen,
                     'checkpoint_complete': state in ('done', 'budget_reached') and not unexpected_failures}
     except AlreadyRunning:
         return {'state':'already_running','requests':0}
 
 
-def _pick(scheduler, selected, deadline, cooldowns=None):
+def _pick(scheduler, selected, deadline):
     """Preserve scheduler fairness without allowing unselected task classes."""
     # The Stage B picker has no class predicate. Its queue can be filtered with
     # a connection facade; the class filter itself changes no queue state.
@@ -220,5 +218,5 @@ def _pick(scheduler, selected, deadline, cooldowns=None):
                 params = tuple(sorted(selected))+tuple(params)
             return original.execute(sql,params)
     scheduler.db = Filtered()
-    try: return scheduler.pick(deadline=deadline,cooldowns=cooldowns)
+    try: return scheduler.pick(deadline=deadline)
     finally: scheduler.db = original

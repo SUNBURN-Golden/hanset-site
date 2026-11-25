@@ -164,7 +164,7 @@ Only newly discovered children enable the fetcher's subpage mode: paths stay
 intact through normalization, with at most two HTTPS redirects within the
 initial registrable domain. External redirects and downgrades are rejected
 before destination robots or body requests. Every permitted hop still passes
-URL denial checks and robots evaluation against its preserved path; a robots
+URL denial checks. News hosts also get robots evaluation against the preserved path. A robots
 denial never requests the destination body. Automatic redirects stay disabled.
 A shell the fetcher returns as `empty_body` without
 HTML cannot yield links; the classifier's `empty_body` fallback can when the
@@ -192,8 +192,9 @@ for an independently approved venue subpage.
 Holds last 14 days per URL. `recent_block_skipped` makes no fetcher call, consumes
 no page slot, and adds no completion. Skips preserve the existing timestamp.
 At expiry the URL is eligible and a new genuine terminal result starts a fresh
-hold. Expired entries are pruned when opening cooldown
-state and in each write transaction; malformed entries fail as `state_corrupt`.
+hold. Expired login and block holds are pruned when opening cooldown state
+and in each write transaction. Expired robots holds remain available for policy
+maintenance. Malformed entries fail as `state_corrupt`.
 Skip notes follow fetch/extraction notes so the 200-entry public status sample
 preserves real results; `rejections.recent_block_skipped` reports the total.
 When no unfinished URL remains outside cooldown, the result is successful with
@@ -202,16 +203,17 @@ When no unfinished URL remains outside cooldown, the result is successful with
 Search leads must pass both the approved-domain and safe-URL checks. A rejected
 identity produces an `unsafe_url_skipped` note without exposing the URL.
 
-Web collection applies robots.txt, Crawl-delay and per-site spacing to the
-Korean news hosts listed in `hanset_active/profiles/kr_news_domains.txt`. News
-requests wait at least five seconds or the longer applicable Crawl-delay.
-The collector reserves the robots request before dispatch and caches terminal
-200, 404 or 410 policies by origin for 24 hours. Failed attempts can be retried.
-The request lock is shared by all schemes and ports of the same hostname.
-Naver blogs and place listings use that lock without crawl spacing. A 429 or
-503 stops the hostname for the run. The collector records Retry-After and
-applies a 14-day hold to a resource after repeated blocks. A confirmed proxy
-outage allows the fetcher to continue on the box's own IP.
+Active collection applies robots.txt, Crawl-delay, and a five-second minimum
+interval only to Korean news hosts in `hanset_active/profiles/kr_news_domains.txt`.
+The collector caches usable robots policies by origin for 24 hours. The request
+lock covers all schemes and ports of the exact hostname. Other hosts make one
+request at a time with no crawl delay. Sitemap discovery may read robots.txt
+for sitemap URLs. Public Naver non-news pages are eligible as third-party source
+claims. Naver pages and Korean news outlets are ineligible as official venue
+sources. A 429 or 503 stops the hostname for the run. The collector records
+Retry-After and resource holds. It releases legacy robots holds only when the
+stored effective URL proves a non-news denial and records the release counts
+in the run result.
 
 A search-only target can fetch every safe lead in its approved domains. Each
 `tavily` venue and field pair retains its own grant even when two searches find
@@ -403,20 +405,16 @@ attempt count once.
 ## Optional web proxy recovery
 
 Public collector fetches can use `HANSET_WEB_PROXY`, a loopback SOCKS5 URL.
-Collect-web preflight runs under the collector process lock before constructing
-the fetcher. Scheduled active and seed fetches also fall back to the direct
-connection on a confirmed transport outage.
-Every retry probes the same configured proxy. If the final probe reports
-`proxy_unavailable`, the run fetches directly. A wrong exit IP stops the run
-with `proxy_exit_mismatch`. Invalid proxy configuration stops it with
-`proxy_invalid`.
+Collect-web, scheduled active, and seed discovery use bounded preflight probes.
+A final `proxy_unavailable` or `proxy_exit_mismatch` switches the run to the box
+IP. `proxy_invalid` and `proxy_check_refused` stop collection.
 
-A mid-run connection error switches subsequent jobs to direct egress only if
-the proxy is unreachable. The failed URL consumes its attempt and receives an
-`error` observation. It can be retried on a subsequent run. Domain stops,
-budgets, and robots cache entries carry over to direct egress. Site refusals
-leave routing alone. DeepSeek, Qwen, Tavily and Instagram use their existing
-routing.
+A confirmed outage before response headers permits one direct attempt. If a
+body stream is interrupted by a confirmed proxy outage, the collector discards
+the partial body, records an error, and uses the box IP from the next URL. HTTP
+403, captchas, login walls, paywalls, and other site refusals are never replayed
+on another egress. Domain stops and robots cache entries carry over. Instagram
+session handling and provider cost accounting are tracked in separate work items.
 
 After an initial failed probe, an unset or blank
 `HANSET_WEB_PROXY_HEAL_CMD` causes two additional probes, after successive
@@ -466,8 +464,11 @@ These diagnostics never enter `checkpoint.json`. Older status files remain
 readable, and Instagram results do not acquire this field. Public status only
 accepts the exact four fields with their declared types.
 
-Direct fallback adds `web_egress` with `mode: direct`, `reason: proxy_unavailable`
-and `phase: preflight` or `mid_run` to the result and public status.
+The collector logs one `proxy_fallback_direct` event per fallback. Public
+`web_egress` has exactly four fields. The `event` is `proxy_fallback_direct`,
+`mode` is `direct`, `reason` is `proxy_unavailable` or `proxy_exit_mismatch`, and
+`phase` is `preflight` or `mid_run`. Seed discovery returns this object as
+`egress`.
 
 Preflight preserves its existing detection limit: without
 `HANSET_WEB_PROXY_EXIT_IP`, it checks only the TCP listener. Detecting a

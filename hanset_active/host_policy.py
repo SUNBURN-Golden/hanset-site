@@ -121,7 +121,7 @@ class HostPolicy:
 
     def store_robots(self, url, body, crawl_delay, attempt):
         with self.db:
-            updated = self.db.execute('UPDATE host_timing SET crawl_delay=? WHERE host=? AND robots_attempt=?',
+            updated = self.db.execute('UPDATE host_timing SET crawl_delay=?,robots_attempt=NULL WHERE host=? AND robots_attempt=?',
                                       (crawl_delay, hostname(url), attempt))
             if updated.rowcount:
                 expiry = datetime.fromisoformat(attempt) + ROBOTS_TTL

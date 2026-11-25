@@ -57,7 +57,7 @@ class Worker:
             raise Rejected('excluded_venue')
         if any(v['venue_id'] in self.cfg['excluded_venues'] and url in (safe_url(value) for value in v.get('urls', [])) for v in self.cfg['venues']):
             raise Rejected('excluded_venue')
-        configured_policy = seed_policy(self.cfg, url) if seed else None
+        configured_policy = seed_policy(self.cfg, url, check_freshness=False) if seed else None
         def insert(conn):
             old = conn.execute('SELECT id, channel FROM records WHERE brand=? AND url=?', ('HANSET', url)).fetchone()
             if old:

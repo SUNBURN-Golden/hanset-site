@@ -158,7 +158,7 @@ def test_echo_response_is_redacted_before_pii_and_url_filtering(tmp_path, caplog
 
 
 @pytest.mark.parametrize('url', [
-    'https://instagram.com/example/', 'https://naver.com/', 'https://localhost/',
+    'https://instagram.com/example/', 'https://localhost/',
     'https://user:password' + chr(64) + 'silver.example/', 'https://silver.example/?token=private',
     'https://silver.example/?contact=hidden%40example.test', 'https://silver.example/\\bad',
     'javascript:alert(1)', 'https://silver.example:invalid/',

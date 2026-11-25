@@ -17,6 +17,8 @@ CREATE TABLE IF NOT EXISTS reservations(id TEXT PRIMARY KEY, clip_id TEXT UNIQUE
  byte_count INTEGER DEFAULT 0, extension_origin TEXT, FOREIGN KEY(record_id) REFERENCES records(id));
 CREATE TABLE IF NOT EXISTS domains(host TEXT PRIMARY KEY, epoch INTEGER DEFAULT 0, owner TEXT,
  next_at REAL DEFAULT 0, stopped_until REAL DEFAULT 0, failures INTEGER DEFAULT 0);
+CREATE TABLE IF NOT EXISTS news_robots(origin TEXT PRIMARY KEY, body TEXT NOT NULL,
+ crawl_delay REAL NOT NULL, fetched_at REAL NOT NULL, expires_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS requests(id TEXT PRIMARY KEY, reservation_id TEXT, generation INTEGER,
  host TEXT, state TEXT, started REAL);
 CREATE UNIQUE INDEX IF NOT EXISTS one_connection ON requests(host) WHERE state='active';

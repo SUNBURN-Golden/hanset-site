@@ -1,9 +1,9 @@
 {
-  "_schema": "HANSET source collection rules & cadence registry (2026-10-23). Strict compliance: public/official sources and open APIs only; never bypass login walls, paywalls, or technical blocks; never scrape Naver; never copy venue photos.",
+  "_schema": "HANSET source collection rules & cadence registry (2026-10-23). Strict compliance: public sources and open APIs only; never bypass login walls, paywalls, or technical blocks; public Naver non-news pages allowed; Korean news hosts follow robots.txt; never copy venue photos.",
   "brand": "HANSET",
   "compliance_policy": {
     "bypass_login_paywall_or_blocks": false,
-    "naver_scraping_or_extension_collection": false,
+    "naver_public_non_news_pages": "allowed; Korean news hosts follow robots.txt; no extension/scraping bypass",
     "venue_photo_collection": false,
     "relist_declined_venues": false,
     "store_format": "Facts, short evidence notes, check date, and canonical official URL only (never full-text copy)"

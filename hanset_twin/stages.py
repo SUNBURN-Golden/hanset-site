@@ -5,6 +5,7 @@ import json
 import re
 from pathlib import Path
 from urllib.parse import urlsplit
+from hanset_active.crawl_policy import is_korean_news, is_naver
 from hanset_active.extract import html as html_rules
 from hanset_active.db import deterministic_id
 from hanset_active.extract import fields as field_rules
@@ -14,15 +15,17 @@ from hanset_active.extract.validation import (ACTIVE_VALIDATION_VERSION, _roundu
                                               page_verdict, portals as _portals)
 
 def _own_site(url):
-    return '' if url and registrable_domain(url) in _portals() else (url or '')
+    if url and not (is_naver(url) or is_korean_news(url) or registrable_domain(url) in _portals()):
+        return url
+    return ''
 from . import ontology as onto
 from .store import dumps
 
 CSV_COLUMNS_TEXT = ('notable', 'notes', 'price_note')
 SUPPORTED_NOTE = {
     'instagram.com': 'Required source, NOT collected: login wall and no approved Graph API token. No account rotation, impersonation or proxies.',
-    'naver.com': 'Excluded by owner rule (no Naver). Not collected.',
-    'catchtable.co.kr': 'robots.txt disallows crawling. Not collected.',
+    'naver.com': 'Portal/news umbrella; only public non-news pages may be used as source claims. Korean news hosts follow robots.txt. No extension/scraping bypass.',
+    'catchtable.co.kr': 'Booking platform. Venue information is third-party evidence.',
 }
 
 class Ctx:
@@ -55,7 +58,7 @@ def discover(ctx, cursor):
             db.execute('INSERT OR IGNORE INTO candidate_branches(subject_ref,name,name_ko,website,city,origin,updated_at) VALUES (?,?,?,?,?,?,?)',
                        ('active:' + v['venue_key'], v['name'], v['name_ko'], v['website'], v['city'], 'active_store', at)); n += 1
     for domain, note in SUPPORTED_NOTE.items():
-        if structured and domain != 'instagram.com':
+        if structured and domain == 'catchtable.co.kr':
             continue
         db.execute('INSERT OR REPLACE INTO source_rights VALUES (?,?,?,?,?,?,?,?,?)',
                    (domain, 'sns' if 'instagram' in domain else 'third_party', '[]', 'none', None, 'not stored', 0, note, at))
@@ -343,8 +346,11 @@ def _extract_active_item(ctx, w):
                     qualifiers = matches[0]['value'].copy()
                     if qualifiers.get('scope') == 'unspecified': qualifiers.pop('scope', None)
                     value = {**value, **qualifiers}
+        source_url = o['source_url']
+        source_type = ('third_party' if source_url and (is_naver(source_url) or is_korean_news(source_url))
+                       else o['source_type'])
         _add_candidate(ctx.db, w, 'active:' + o['venue_key'], field, value, o['unit'], o['label_status'],
-                       o['source_type'], o['source_url'], o['quote'], json.loads(o['locator']) if o['locator'] else None, o['obs_id'], w['fetched_at'])
+                       source_type, source_url, o['quote'], json.loads(o['locator']) if o['locator'] else None, o['obs_id'], w['fetched_at'])
         venue = ctx.active.execute('SELECT * FROM venues WHERE venue_key=?', (o['venue_key'],)).fetchone()
         reason = _active_obs_verdict(ctx, o, raw, venue)
         if reason:

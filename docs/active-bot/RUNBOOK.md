@@ -183,6 +183,13 @@ usage disabled. Billing changes require 준태님's approval. [Tavily ledger](IG
 
 The discovery wrapper records results under `HANSET_ACTIVE_DIR/logs`.
 Incomplete license and sitemap passes resume at the next invocation.
+Scheduled active, web collection, and seed discovery run bounded proxy preflight.
+If the proxy is down or the exit IP mismatches, the run continues on the box IP
+and logs one `proxy_fallback_direct` event. Invalid configuration
+(`proxy_invalid`) and a refusal from the exit check (`proxy_check_refused`) stop
+collection. The status object `web_egress` (`egress` for seed discovery) contains
+`event`, `mode` (`direct`), `reason` (`proxy_unavailable` or
+`proxy_exit_mismatch`), and `phase` (`preflight` or `mid_run`).
 Instagram intake remains an operator summary plus the post URL.
 [Scheduler installation](#cron) · [Web collector](COLLECTOR.md)
 
@@ -194,6 +201,6 @@ python3 -m pytest tests/active_bot -q
 
 Tests use loopback HTTP and fake clocks. PDF/OCR tests skip when their system
 binary is unavailable; the crash test kills a test subprocess after a persisted
-raw insert. The legacy `run` queue retains its production spacing. Discovery and web
-collection apply robots and crawl spacing to Korean news hosts. All three
-entry points use the exact-hostname request lock.
+raw insert. Active entry points share an exact-hostname request lock. Robots
+checks, Crawl-delay, and the five-second minimum interval apply to listed
+Korean news hosts. Other hosts have no crawl delay.

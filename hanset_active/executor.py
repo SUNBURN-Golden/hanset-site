@@ -10,6 +10,7 @@ from bs4 import BeautifulSoup
 from . import evaluator, gaps, labeling, venues
 from .collect.safety import evidence_rejection
 from .collect.config import official_site
+from .crawl_policy import is_korean_news, is_naver
 from .db import deterministic_id
 from .fetcher import FetchResult
 from .discover import Discovery, directories, links, mentions
@@ -262,11 +263,12 @@ class Executor:
             venue = self.db.execute('SELECT * FROM venues WHERE venue_id=?',(vid,)).fetchone() if vid else None
         # Registered relevance alone does not prove a page is an original source.
         original = evaluator.evaluate(result.url,[doc],venue_name=name,profile=self.context.profile)['original']
-        if original and not directory_detail:
+        own_site_eligible = not (is_korean_news(result.url) or is_naver(result.url))
+        if original and own_site_eligible and not directory_detail:
             with self.db: self.db.execute("UPDATE sources SET source_type='own_site' WHERE source_id=?",(source_id,))
-        source_type = 'aggregator' if evaluator.is_aggregator(result.url,self.context.profile) else 'own_site' if venue and (original or source['source_type']=='own_site') else 'third_party'
-        if directory_detail: source_type = 'official_directory'
-        if venue and doc['extractor'] in ('pdf','ocr') and domain in json.loads(venue['domains'] or '[]'):
+        source_type = 'aggregator' if evaluator.is_aggregator(result.url,self.context.profile) else 'own_site' if own_site_eligible and venue and (original or source['source_type']=='own_site') else 'third_party'
+        if directory_detail and own_site_eligible: source_type = 'official_directory'
+        if own_site_eligible and venue and doc['extractor'] in ('pdf','ocr') and domain in json.loads(venue['domains'] or '[]'):
             source_type = 'attachment'
         if self.facts_only and not (
                 source_type == 'own_site' and original and venue and official_site(result.url)

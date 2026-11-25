@@ -1,28 +1,27 @@
 """One identity, no bypasses: guarded HTTP with persistent budgets and robots."""
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
-from email.utils import parsedate_to_datetime
 import threading
 from urllib.parse import urlsplit, urljoin, parse_qsl, urlencode, unquote
-from urllib.robotparser import RobotFileParser
 import re
 import logging
 import requests
 from bs4 import BeautifulSoup
 from .config import Settings
 from .db import consume_budget, deterministic_id
-from .crawl_policy import LEGACY, KoreanNewsRobots
+from .crawl_policy import LEGACY, KoreanNewsRobots, is_korean_news
 from .host_policy import BACKOFF_STATUSES, HostPolicy, origin
 from .locks import host_lock, hostname
 from .util.timeutil import Clock, kst_now, kst_day
 from .util.urls import (canonicalize, registrable_domain, is_collect_denied, is_denied, is_excluded,
                         literal_private, same_fetch_target)
 from .util.pii import strip_pii
+from .web_proxy import Egress, configured, is_heavy
 from .util.hashing import content_hash
 
 USER_AGENT='HansetActiveBot/1.0 (+mailto:hanset@soulbound.co.kr)'
-BLOCK_STATUSES = (401, 403, 429, 202)
+BLOCK_STATUSES = (401, 403, 429, 202, 402, 407, 451)
+PROXY_RETRY_DIRECT = "proxy_retry_direct"
 _CREDENTIAL_QUERY = frozenset({
     'servicekey', 'service_key', 'apikey', 'api_key', 'key', 'password', 'token',
     'access_token', 'secret', 'session', 'sid', 'auth', 'authorization', 'sig', 'signature',
@@ -31,10 +30,6 @@ _CREDENTIAL_QUERY = frozenset({
 
 def _safe_public_query(url):
     return not any(key.casefold() in _CREDENTIAL_QUERY for key, _ in parse_qsl(urlsplit(unquote(url)).query))
-
-
-def _normalize_percent_case(value):
-    return re.sub(r'%[0-9A-Fa-f]{2}', lambda match: match[0].upper(), value)
 
 
 def _safe_transport_log(record):
@@ -71,14 +66,14 @@ class FetchResult:
         return self.outcome=='ok'
 
 
-def detect_outcome(content: bytes, content_type: str, status: int, *, public_scope=False, allow_short=False) -> str:
-    if status in BLOCK_STATUSES or (public_scope and status==402):
+def detect_outcome(content: bytes, content_type: str, status: int, *, allow_short=False) -> str:
+    if status in BLOCK_STATUSES:
         return 'blocked'
     if status>=400:
         return 'error'
     if 'html' not in content_type and content.strip():
-        if public_scope and content_type.startswith('text/') and re.match(
-                rb'\s*(?:access denied|just a moment|captcha|verify you are human)', content[:256], re.I):
+        if content_type.startswith('text/') and re.match(
+                rb'\s*(?:access denied|just a moment|captcha|verify you are human|subscribers only|subscription required)', content[:256], re.I):
             return 'blocked'
         return 'ok'
     soup=BeautifulSoup(content,'lxml')
@@ -87,8 +82,8 @@ def detect_outcome(content: bytes, content_type: str, status: int, *, public_sco
         return 'blocked'
     if soup.select_one('input[type="password"]') or (len(text)<500 and re.search(r'로그인|sign in|log in|cookie (?:wall|consent)',text,re.I)):
         return 'login_wall'
-    if public_scope and re.search(r'\b(?:subscribe|subscription required|members only)\s+to (?:read|continue)|'
-                                  r'\b(?:this (?:content|article) is for subscribers only|subscription required to access)\b|'
+    if re.search(r'\b(?:subscribers only|members only|subscription (?:is )?required)\b|'
+                 r'\bsubscribe to (?:read|continue|view|access)\b|'
                                   r'구독자 전용|구독하시면.{0,24}(?:읽|볼 수)',text,re.I):
         return 'blocked'
     from .extract.html import extract
@@ -98,18 +93,16 @@ def detect_outcome(content: bytes, content_type: str, status: int, *, public_sco
     return 'ok'
 
 class Fetcher:
-    def __init__(self, settings: Settings | None = None, db=None, clock: Clock | None = None, proxy: str = '', *, public_scope=False, policy=LEGACY):
+    def __init__(self, settings: Settings | None = None, db=None, clock: Clock | None = None, proxy: str = '', *, public_scope=False, policy=LEGACY, egress: Egress | None = None):
         self.policy=policy
         self.run_id = None
         self.settings=settings or Settings()
         self.public_scope=public_scope
         self.discover_links = False
-        # Collect-web can continue directly after a confirmed transport outage.
-        self.proxy=''
-        self.proxy_failed=False
-        if proxy:
-            from .web_proxy import configured
-            self.proxy=configured({'HANSET_WEB_PROXY':proxy})
+        if egress is None:
+            proxy = configured({'HANSET_WEB_PROXY': proxy})
+            egress = Egress(mode='proxy', proxy=proxy) if proxy else Egress()
+        self.egress = egress
         if db is None:
             raise ValueError('fetch_audit_required')
         self.db = db
@@ -118,15 +111,11 @@ class Fetcher:
         self.session=requests.Session()
         self.session.trust_env=False
         self.session.headers.update({'User-Agent':USER_AGENT,'Accept-Encoding':'gzip'})
-        if self.proxy:
-            self.session.proxies={'http':self.proxy,'https':self.proxy}
+        if request_proxy := self.egress.request_proxy():
+            self.session.proxies.update({'http': request_proxy, 'https': request_proxy})
         self._locks={}
         self._guard=threading.RLock()
-        self._global_lock=threading.Lock()
-        self._last={}
-        self._global_last=None
         self._delay={}
-        self._robots={}
         self._stopped={}
     @contextmanager
     def _lock(self, url):
@@ -187,44 +176,21 @@ class Fetcher:
                 ((deterministic_id(self._audit_url(url, 'body'), None, 'error'),)
                  for url in candidates))
 
-    def _stop_scope(self,url):
-        return hostname(url) if self.policy.news_only else registrable_domain(url)
-
     def _stopped_reason(self, url):
         with self._guard:
-            reason = self._stopped.get(self._stop_scope(url), '')
-            if self.policy.news_only:
-                persistent, retry = self.host_policy.stopped(url)
-                return reason or persistent, retry
-            return reason, None
+            reason = self._stopped.get(hostname(url), '')
+            persistent, retry = self.host_policy.stopped(url)
+            return reason or persistent, retry
 
-    def _wait(self,domain,url):
-        if self.policy.news_only:
-            if self.policy.robots(url):
-                with self._guard:
-                    delay = self.host_policy.delay(url, self._delay.get(hostname(url), 0))
-                self.clock.sleep(delay)
-                with self._guard:
-                    self.host_policy.dispatch(url)
+    def _wait(self, url):
+        if not is_korean_news(url):
             return
-        now=self.clock.monotonic()
         with self._guard:
-            row=self.db.execute('SELECT ts FROM fetch_log WHERE domain=? ORDER BY id DESC LIMIT 1',(domain,)).fetchone()
-        if row:
-            age=(self.clock.now()-datetime.fromisoformat(row[0])).total_seconds()
-            self._last[domain]=now-max(0,age)
-        wait=max(0,self._last.get(domain, float('-inf'))+max(self.settings.min_interval,self._delay.get(domain,0))-now)
-        self.clock.sleep(wait)
-        with self._global_lock:
-            if self._global_last is None:
-                with self._guard:
-                    row=self.db.execute('SELECT ts FROM fetch_log ORDER BY id DESC LIMIT 1').fetchone()
-                if row:
-                    self._global_last=self.clock.monotonic()-max(0,(self.clock.now()-datetime.fromisoformat(row[0])).total_seconds())
-            if self._global_last is not None:
-                self.clock.sleep(max(0,self._global_last+self.settings.global_gap-self.clock.monotonic()))
-            self._global_last=self.clock.monotonic()
-            self._last[domain]=self._global_last
+            delay = self.host_policy.delay(url, self._delay.get(hostname(url), 0))
+        self.clock.sleep(delay)
+        with self._guard:
+            self.host_policy.dispatch(url)
+
     def register_candidate(self,url: str) -> bool:
         try:
             url=canonicalize(url)
@@ -248,6 +214,12 @@ class Fetcher:
         self._stopped[domain]=reason
         with self._guard, self.db:
             self.db.execute("INSERT INTO sources(source_id,domain,state,reason) VALUES (?,?,'inaccessible',?) ON CONFLICT(domain) DO UPDATE SET state='inaccessible',reason=excluded.reason",(deterministic_id(domain),domain,reason))
+    def _refuse(self, url, reason):
+        with self._guard:
+            self.host_policy.refuse(url)
+            if is_korean_news(url):
+                self._inaccessible(hostname(url), reason)
+
     def _request(self,url,kind,headers=None, *, service_key=None, audit_source=None):
         domain=registrable_domain(url)
         with self._lock(url):
@@ -258,35 +230,33 @@ class Fetcher:
                 cap=self.settings.aux_cap if kind!='body' else self.settings.body_cap
                 if self.policy.use_daily_budgets and not consume_budget(self.db,'aux' if kind!='body' else 'bodies',cap,self.clock):
                     return None,b'', 'cap_reached', None
-            self._wait(domain,url)
+            self._wait(url)
             status=None
             body=b''
             response=None
             reason=''
             transfer_complete = False
-            proxy_down=False
             outcome=None
-            request_proxy=self.proxy
+            request_proxy = self.egress.request_proxy()
             try:
                 outbound=url + (("&" if urlsplit(url).query else "?") + urlencode({"serviceKey": service_key}) if service_key else "")
-                response=self.session.get(outbound,headers={**(headers or {}), 'User-Agent': USER_AGENT},allow_redirects=False,timeout=(self.settings.timeout,self.settings.timeout),stream=True)
+                # Per-dispatch proxies keep the snapshot stable during fallback on another host.
+                proxies = dict.fromkeys(('http', 'https'), request_proxy or None)
+                response=self.session.get(outbound,proxies=proxies,headers={**(headers or {}), 'User-Agent': USER_AGENT},allow_redirects=False,timeout=(self.settings.timeout,self.settings.timeout),stream=True)
                 status=response.status_code
-                if self.policy.news_only:
-                    # Commit refusals as soon as headers establish them, before
-                    # streaming, logging, closing the response or callbacks.
-                    with self._guard:
-                        if status in BACKOFF_STATUSES:
-                            self.host_policy.block(url, response.headers.get('Retry-After', ''))
-                            self._stopped[hostname(url)] = 'host_backoff'
-                        elif status in (*BLOCK_STATUSES, 402):
-                            self.host_policy.refuse(url)
-                            self._inaccessible(hostname(url), 'blocked')
+                # Refusal headers take precedence over body reads and egress fallback.
+                host = hostname(url)
+                news = is_korean_news(url)
+                with self._guard:
+                    if status in BACKOFF_STATUSES:
+                        self.host_policy.block(url, response.headers.get('Retry-After', ''))
+                        self._stopped[host] = 'host_backoff'
+                if status in BLOCK_STATUSES and (news or status not in BACKOFF_STATUSES):
+                    self._refuse(url, 'blocked')
                 ct=response.headers.get('Content-Type','').lower()
                 limit=8*1024**2 if 'pdf' in ct else 4*1024**2 if ct.startswith('image/') else 2*1024**2
-                from .web_proxy import is_heavy
-                if self.public_scope and (status in (*BLOCK_STATUSES, 402) or
-                                          (self.policy.news_only and status in BACKOFF_STATUSES)):
-                    pass  # The response status already establishes the refusal.
+                if status in (*BLOCK_STATUSES, *BACKOFF_STATUSES):
+                    pass
                 elif request_proxy and is_heavy(ct):
                     reason='heavy resource'
                 elif int(response.headers.get('Content-Length','0'))>limit:
@@ -300,36 +270,40 @@ class Fetcher:
                             break
                     else:
                         transfer_complete = True
-                if (self.policy.news_only and kind != 'robots' and not service_key and not reason
-                        and not 300 <= status < 400 and status not in BACKOFF_STATUSES):
-                    outcome = detect_outcome(body, ct, status, public_scope=self.public_scope,
+                if (kind != 'robots' and not service_key and not reason
+                        and not 300 <= status < 400 and status not in (*BLOCK_STATUSES, *BACKOFF_STATUSES)):
+                    outcome = detect_outcome(body, ct, status,
                                              allow_short=self.policy.allow_short)
-                    if outcome in ('blocked', 'login_wall') and status not in (*BLOCK_STATUSES, 402):
-                        with self._guard:
-                            self.host_policy.refuse(url)
-                            self._inaccessible(hostname(url), outcome)
+                    if outcome in ('blocked', 'login_wall'):
+                        self._refuse(url, outcome)
             except (requests.RequestException, ValueError) as exc:
-                reason=type(exc).__name__
-                if request_proxy and status is None and isinstance(exc,requests.ConnectionError):
+                reason = type(exc).__name__
+                transport_error = isinstance(exc, (requests.ConnectionError, requests.Timeout,
+                                                   requests.exceptions.ChunkedEncodingError,
+                                                   requests.exceptions.ContentDecodingError))
+                if transport_error and body and kind != 'robots' and not service_key and 200 <= status < 300:
+                    partial_outcome = detect_outcome(body, ct, status)
+                    if partial_outcome in ('blocked', 'login_wall'):
+                        outcome, reason = partial_outcome, ''
+                        self._refuse(url, outcome)
+                body = b''
+                if reason and request_proxy and transport_error:
                     from .web_proxy import reachable
                     if not reachable(request_proxy):
-                        proxy_down=True
+                        self.egress.fallback('proxy_unavailable', 'mid_run')
+                        with self._guard:
+                            if proxies := getattr(self.session, 'proxies', None):
+                                proxies.clear()
+                        reason = (PROXY_RETRY_DIRECT if response is None and self.policy.retry_direct and
+                                  isinstance(exc, (requests.ConnectionError, requests.Timeout))
+                                  else 'proxy_unavailable')
             finally:
                 try:
                     if response is not None:
                         response.close()
                 finally:
-                    self._log_request(url, domain, kind, status, body, transfer_complete, reason, audit_source)
-            if proxy_down:
-                with self._guard:
-                    self.proxy_failed=True
-                    if self.public_scope:
-                        self.session.proxies.clear()
-                        self.proxy=''
-                if self.public_scope:
-                    return None,b'','proxy_unavailable', None
-                from .web_proxy import ProxyUnavailable
-                raise ProxyUnavailable('proxy_unavailable')
+                    audit_reason = 'proxy_unavailable' if reason == PROXY_RETRY_DIRECT else reason
+                    self._log_request(url, domain, kind, status, body, transfer_complete, audit_reason, audit_source)
             return response,body,reason,outcome
 
     def _log_request(self, url, domain, kind, status, body, complete, reason, audit_source):
@@ -339,7 +313,7 @@ class Fetcher:
             self.db.execute('''INSERT INTO request_log(url,domain,ts,status,kind,bytes,transfer_complete,run_id,adapter,outcome)
                                VALUES (?,?,?,?,?,?,?,?,?,?)''',
                             (*args, int(complete), self.run_id, audit_source,
-                             (reason or f'http_{status}') if audit_source else None))
+                             reason or (f'http_{status}' if audit_source else None)))
             self.db.execute('INSERT INTO fetch_log(url,domain,ts,status,kind,bytes) VALUES (?,?,?,?,?,?)', args)
     def _walk_robots(self, target, *, url_allowed, audit_source, reservations=None):
         scope = registrable_domain(target)
@@ -367,7 +341,7 @@ class Fetcher:
                     break
                 redirect = canonicalize(destination, preserve_path=True)
                 if (registrable_domain(redirect) != scope or urlsplit(redirect).path != '/robots.txt'
-                        or self._reason_denied(redirect) or not self.policy.robots(redirect)
+                        or self._reason_denied(redirect) or not is_korean_news(redirect)
                         or same_fetch_target(redirect, target)):
                     break
             except (ValueError, UnicodeError):
@@ -393,10 +367,11 @@ class Fetcher:
                                                    reservations=reservations)
             decoded = raw.decode('utf-8', errors='replace')
             challenge = re.match(r'\s*(?:just a moment|captcha|verify you are human|access denied)', decoded, re.I)
-            if status == 200 and decoded.lstrip().startswith('<'):
-                if detect_outcome(raw, 'text/html', status or 200, public_scope=True) in ('blocked', 'login_wall'):
+            if decoded.lstrip().startswith('<'):
+                if detect_outcome(raw, 'text/html', 200) in ('blocked', 'login_wall'):
                     challenge = True
-                error = error or 'robots_unavailable'
+                if status == 200:
+                    error = error or 'robots_unavailable'
             if error or status not in (200, 404, 410) or challenge:
                 for reserved_url, reserved_at in reservations.values():
                     with self._lock(reserved_url), self._guard:
@@ -406,9 +381,10 @@ class Fetcher:
                             self._inaccessible(hostname(reserved_url), 'blocked')
                 if status in BACKOFF_STATUSES:
                     return False, 'host_backoff'
-                if challenge or status in (*BLOCK_STATUSES, 402):
+                if challenge or status in BLOCK_STATUSES:
                     return False, 'blocked'
-                if error in ('proxy_unavailable', 'robots_pending', 'host_backoff', 'resource_hold', 'blocked', 'robots_redirect'):
+                if error in (PROXY_RETRY_DIRECT, 'proxy_unavailable', 'robots_pending', 'host_backoff',
+                             'resource_hold', 'blocked', 'robots_redirect', 'cap_reached'):
                     return False, error
                 return False, 'robots_unavailable'
             # Policy directives only. Percent escapes in paths are significant.
@@ -417,67 +393,25 @@ class Fetcher:
             body = '\n'.join(directives) if status == 200 else ''
             if strip_pii(unquote(body)) != unquote(body):
                 body = 'User-agent: *\nDisallow: /'
-            body = _normalize_percent_case(body)
-            parser = KoreanNewsRobots(body)
+            parser = KoreanNewsRobots(body, user_agent=USER_AGENT)
             for reserved_url, reserved_at in reservations.values():
                 with self._lock(reserved_url), self._guard:
                     self.host_policy.store_robots(reserved_url, body, parser.delay, reserved_at)
         else:
-            parser = KoreanNewsRobots(body)
+            parser = KoreanNewsRobots(body, user_agent=USER_AGENT)
         self._delay[host] = parser.delay
-        allowed = parser.can_fetch(USER_AGENT, _normalize_percent_case(url))
-        return allowed, '' if allowed else 'robots_disallowed'
-
-    def _legacy_robots_allowed(self, url, *, url_allowed, audit_source):
-        key = origin(url)
-        now = self.clock.now()
-        with self._guard:
-            cached = self._robots.get(key)
-            if cached and cached[0] > now:
-                parser, allowed, status = cached[1:]
-            else:
-                parser = None
-                row = self.db.execute('SELECT * FROM robots_cache WHERE origin=?', (key,)).fetchone()
-        if parser is None:
-            if row and datetime.fromisoformat(row['expires_at']) > now:
-                body, allowed, status = row['body'], bool(row['allowed']), row['status']
-                expires = datetime.fromisoformat(row['expires_at'])
-            else:
-                status, raw, error = self._walk_robots(key + '/robots.txt', url_allowed=url_allowed,
-                                                       audit_source=audit_source)
-                if error in ('cap_reached', 'proxy_unavailable'):
-                    return False, error
-                allowed = not error and (status == 200 or (status is not None and 400 <= status < 500
-                                                            and status not in (401, 403, 429)))
-                decoded = strip_pii(raw.decode('utf-8', errors='replace'))
-                body = decoded if status == 200 else ''
-                if re.search('just a moment|captcha|verify you are human', decoded, re.I):
-                    allowed = False
-                now = self.clock.now()
-                expires = now + timedelta(hours=24)
-                with self._guard, self.db:
-                    self.db.execute('INSERT OR REPLACE INTO robots_cache VALUES (?,?,?,?,?,?,?)',
-                                    (key, body, status, now.isoformat(), expires.isoformat(), int(allowed),
-                                     '' if allowed else 'robots unavailable'))
-            parser = RobotFileParser()
-            parser.parse(body.splitlines() if allowed else ['User-agent: *', 'Disallow: /'])
-            self._delay[self._stop_scope(url)] = parser.crawl_delay(USER_AGENT) or parser.crawl_delay('*') or 0
-            self._robots[key] = (expires, parser, allowed, status)
-        if not allowed and (status is None or 500 <= status < 600):
-            return False, 'robots_unavailable'
-        allowed = allowed and parser.can_fetch(USER_AGENT, url)
+        allowed = parser.can_fetch(url)
         return allowed, '' if allowed else 'robots_disallowed'
 
     def _robots_allowed(self, url, *, url_allowed=None, audit_source=None):
-        if not self.policy.robots(url):
+        if not is_korean_news(url):
             return True, ''
-        check = self._news_robots_allowed if self.policy.news_only else self._legacy_robots_allowed
         # A second process must observe the completed cache write even if it
         # acquired the request lock just after the robots response closed.
         # The walk takes only one request lock at a time and never takes a
         # second policy lock when it follows a redirect to another host.
         with host_lock(self.settings.data_dir, hostname(url), robots=True):
-            return check(url, url_allowed=url_allowed, audit_source=audit_source)
+            return self._news_robots_allowed(url, url_allowed=url_allowed, audit_source=audit_source)
 
     def fetch(self,url: str, *, kind: str = 'body', parent_url: str | None = None, task_id: str | None = None, discovered_via: str | None = None, _browser_shell: bool = False, api_headers: dict | None = None, subpage: bool = False, url_allowed=None, service_key: str | None = None, audit_source=None, preserve_path=False) -> FetchResult:
         """Guard each request and apply any caller-supplied URL scope before redirects."""
@@ -498,7 +432,7 @@ class Fetcher:
                 safe_url = self._audit_url(url, kind)
                 with self._guard,self.db:
                     self.db.execute("""INSERT INTO failures(failure_id,task_id,url,domain,reason,state,created_at)
-                        VALUES (?,?,?,?,?,?,?) ON CONFLICT(failure_id) DO UPDATE SET state='pending'
+                        VALUES (?,?,?,?,?,?,?) ON CONFLICT DO UPDATE SET state='pending'
                         WHERE failures.task_id IS NULL AND failures.reason='error' AND failures.state='resolved'""",
                         (deterministic_id(safe_url,ref['task_id'],outcome),ref['task_id'],safe_url,registrable_domain(url),outcome,'dead' if outcome in ('blocked','login_wall','robots_disallowed') else 'pending',kst_now(self.clock).isoformat()))
             elif outcome == 'ok' and kind == 'body' and ref['task_id'] is None:
@@ -543,33 +477,31 @@ class Fetcher:
                 if denied:
                     return result('denied',denied)
                 allowed,reason=self._robots_allowed(upgraded,url_allowed=url_allowed,audit_source=audit_source)
-                if allowed:
-                    url=upgraded
+                url=upgraded
             if not allowed:
                 if reason=='cap_reached':
                     return result('cap_reached',reason)
-                if reason=='proxy_unavailable':
-                    if self.policy.retry_direct and not retried_direct:
-                        retried_direct=True
-                        continue
-                    return result('error',reason)
-                if reason == 'robots_redirect':
+                if reason == PROXY_RETRY_DIRECT and not retried_direct:
+                    retried_direct = True
+                    continue
+                if reason in ('robots_disallowed', 'robots_redirect'):
+                    if reason == 'robots_disallowed':
+                        self._inaccessible(hostname(url), reason)
                     return result('robots_disallowed', reason)
-                if self.policy.news_only and reason != 'robots_disallowed':
-                    stopped, retry = self._stopped_reason(url)
-                    return result('blocked' if stopped or reason in ('blocked', 'host_backoff', 'resource_hold') else 'error',
-                                  stopped or reason, retry_after=retry)
-                self._inaccessible(self._stop_scope(url),'robots_disallowed')
-                return result('robots_disallowed','robots_disallowed')
+                stopped, retry = self._stopped_reason(url)
+                return result('blocked' if stopped or reason in ('blocked', 'host_backoff', 'resource_hold') else 'error',
+                              stopped or ('proxy_unavailable' if reason == PROXY_RETRY_DIRECT else reason),
+                              retry_after=retry)
             response,body,error,outcome=self._request(url,kind,headers=api_headers if (urlsplit(url).scheme,urlsplit(url).netloc)==auth_origin else None, service_key=service_key, audit_source=audit_source)
-            if error=='proxy_unavailable' and self.policy.retry_direct and not retried_direct:
+            if error == PROXY_RETRY_DIRECT and not retried_direct:
                 retried_direct=True
                 continue
             if error:
                 stopped, retry = self._stopped_reason(url)
                 if stopped:
                     return result('blocked', stopped, retry_after=retry)
-                return result('cap_reached' if error=='cap_reached' else 'error',error)
+                return result('cap_reached' if error=='cap_reached' else 'error',
+                              'proxy_unavailable' if error == PROXY_RETRY_DIRECT else error)
             status=response.status_code
             if service_key and 300<=status<400:
                 return result('error','api_redirect',status=status)
@@ -601,26 +533,11 @@ class Fetcher:
             ct=response.headers.get('Content-Type','application/octet-stream').lower()
             if service_key:
                 body=body.replace(service_key.encode(),b'[redacted]')
-            retry=None
-            if self.policy.news_only and status in BACKOFF_STATUSES:
+            if status in BACKOFF_STATUSES:
                 return result('blocked', status=status, retry_after=self._stopped_reason(url)[1])
             if outcome is None:
-                outcome=detect_outcome(body,ct,status,public_scope=self.public_scope,
+                outcome=detect_outcome(body,ct,status,
                                        allow_short=self.policy.allow_short)
-            if status==429:
-                raw=response.headers.get('Retry-After','')
-                try:
-                    retry=(self.clock.now()+timedelta(seconds=max(0,int(raw)))).isoformat()
-                except ValueError:
-                    try:
-                        retry=parsedate_to_datetime(raw).isoformat()
-                    except (ValueError,TypeError):
-                        retry=(self.clock.now()+timedelta(hours=24)).isoformat()
-            if outcome in ('blocked','login_wall') and not self.policy.news_only:
-                self._inaccessible(self._stop_scope(url),outcome)
-                if retry:
-                    with self._guard,self.db:
-                        self.db.execute('UPDATE sources SET next_at=? WHERE domain=?',(retry,self._stop_scope(url)))
             # Excluded response bodies never leave this boundary or enter logs.
             if not self.public_scope and is_excluded(url,body.decode('utf-8',errors='replace')):
                 return result('denied','excluded',status=status)
@@ -633,7 +550,7 @@ class Fetcher:
                 links = [(anchor['href'], strip_pii(anchor.get_text(' ', strip=True)))
                          for anchor in BeautifulSoup(body, 'lxml').select('a[href]:not([download])')]
             sanitized=strip_pii(body) if not (service_key or 'pdf' in ct or ct.startswith('image/')) else body
-            return result(outcome,status=status,content=sanitized if outcome=='ok' or preserve_shell else b'',content_type=ct,content_hash=content_hash(sanitized,ct) if outcome=='ok' else '',retry_after=retry,links=links)
+            return result(outcome,status=status,content=sanitized if outcome=='ok' or preserve_shell else b'',content_type=ct,content_hash=content_hash(sanitized,ct) if outcome=='ok' else '',links=links)
         return result('error','redirect limit')
     def close(self):
         self.session.close()

@@ -1,15 +1,13 @@
-"""Optional egress proxy for daily web collection.
-
-`HANSET_WEB_PROXY` (socks5h:// or socks5:// on a loopback host) is read by
-the collect-web run alone. A transport outage allows subsequent jobs to use
-direct egress. An unexpected exit IP stops the run. Model API calls use their
-own direct connection.
-"""
+"""Optional, run-scoped egress for public web collection."""
+from dataclasses import dataclass, field
 import ipaddress
+import json
+import logging
 import os
 import shlex
 import socket
 import subprocess
+import threading
 from contextlib import nullcontext
 from urllib.parse import urlsplit
 
@@ -27,8 +25,61 @@ HEAVY_TYPES = ('image/', 'font/', 'audio/', 'video/', 'application/font', 'appli
 HEAVY_RESOURCES = frozenset({'image', 'font', 'media', 'imageset', 'texttrack', 'manifest'})
 
 
-class ProxyUnavailable(Exception):
-    """The configured proxy failed on a fetch without public scope."""
+FALLBACK_REASONS = ('proxy_unavailable', 'proxy_exit_mismatch')
+FALLBACK_PHASES = ('preflight', 'mid_run')
+FALLBACK_EVENT = 'proxy_fallback_direct'
+
+
+def log_event(event):
+    logging.getLogger(__name__).warning('%s', json.dumps(event))
+
+
+@dataclass
+class Egress:
+    mode: str = 'direct'
+    reason: str = ''
+    phase: str = 'unset'
+    proxy: str = field(default='', repr=False)
+    _emitted: bool = field(default=False, init=False, repr=False)
+    _lock: object = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def request_proxy(self):
+        with self._lock:
+            return self.proxy if self.mode == 'proxy' else ''
+
+    def fallback(self, reason, phase, log=log_event):
+        if reason not in FALLBACK_REASONS or phase not in FALLBACK_PHASES:
+            raise ValueError('invalid_egress_fallback')
+        with self._lock:
+            if self._emitted:
+                return False
+            self.mode, self.reason, self.phase, self.proxy = 'direct', reason, phase, ''
+            self._emitted = True
+        log({'event': FALLBACK_EVENT, 'phase': phase, 'reason': reason})
+        return True
+
+    def public(self):
+        with self._lock:
+            if self._emitted:
+                return {'event': FALLBACK_EVENT, 'mode': 'direct',
+                        'reason': self.reason, 'phase': self.phase}
+        return None
+
+
+def resolve_run(proxy_setting=None, *, clock, host_dir, log=log_event):
+    """Return the run egress, a terminal reason (if any), and heal diagnostics."""
+    try:
+        proxy = configured() if proxy_setting is None else configured({ENV: proxy_setting})
+    except ValueError:
+        return None, 'proxy_invalid', new_heal_status()
+    if not proxy:
+        return Egress(), '', new_heal_status()
+    reason, heal = preflight_with_retry(proxy, clock=clock, host_dir=host_dir)
+    egress = Egress(mode='proxy', proxy=proxy)
+    if reason in FALLBACK_REASONS:
+        egress.fallback(reason, 'preflight', log)
+        return egress, '', heal
+    return (None if reason else egress), reason, heal
 
 
 def parse(value):

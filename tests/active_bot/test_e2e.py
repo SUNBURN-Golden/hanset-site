@@ -245,7 +245,8 @@ def test_gap_labels_with_coverage(bot,server):
     assert gaps.resolve(bot.db,rows['price_day_pass']['gap_id'])=='conflict'
 
 
-def test_pagination_checkpoint_resumes_without_refetch(bot,server):
+def test_pagination_checkpoint_resumes_without_refetch(bot,server,monkeypatch):
+    monkeypatch.setattr('hanset_active.fetcher.is_korean_news', lambda url: True)
     server.add('/list','<main><h1>Seoul sauna directory listing</h1><p>'+('Visitor directory information. '*6)+'</p><a rel="next" href="/list?page=2">Next</a></main>')
     server.add('/list?page=2','<main><h1>Seoul sauna directory listing page two</h1><p>'+('Visitor directory information continues here. '*6)+'</p></main>')
     enqueue(bot.db,kind='directory',payload={'id':'local','kind':'html_list','url':server.base+'/list','max_pages':2},task_class='backfill')
@@ -317,7 +318,7 @@ def test_redirect_identity_is_reused(bot, server):
     assert bot.db.execute('SELECT url FROM sources').fetchone()[0] == identity
     trials = bot.db.execute('SELECT url FROM source_trials').fetchall()
     assert [row[0] for row in trials] == [identity]
-    assert [r['path'] for r in server.log] == ['/robots.txt', '/kr', '/kr/', '/kr']
+    assert [r['path'] for r in server.log] == ['/kr', '/kr/', '/kr']
 
 
 def test_redirect_checkpoint_returns_effective_url(bot, server):
@@ -336,7 +337,7 @@ def test_redirect_checkpoint_returns_effective_url(bot, server):
 
     assert result.ok and result.url == effective and result.identity_url == identity
     assert effective in resumed.documents
-    assert [r['path'] for r in server.log] == ['/robots.txt', '/kr', '/kr/']
+    assert [r['path'] for r in server.log] == ['/kr', '/kr/']
 
 
 def test_canonical_elsewhere_is_not_own_fact(bot,server):

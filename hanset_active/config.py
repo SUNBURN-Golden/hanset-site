@@ -14,8 +14,8 @@ def load_profile(path: str | Path | None = None) -> dict:
 @dataclass
 class Settings:
     data_dir: Path = field(default_factory=lambda: Path(os.environ.get('HANSET_ACTIVE_DIR', '/workspace/hanset-data/active')))
-    min_interval: float = 5.0
-    global_gap: float = 1.0
+    min_interval: float = 0.0
+    global_gap: float = 0.0
     candidate_cap: int = 500
     body_cap: int = 200
     aux_cap: int = 800
@@ -27,10 +27,10 @@ class Settings:
         self.data_dir = Path(self.data_dir).resolve()
         if self.data_dir == REPO_ROOT or REPO_ROOT in self.data_dir.parents:
             raise ValueError('Data directory must be outside checkout')
-        if not math.isfinite(self.min_interval) or self.min_interval < 0 or (not self.testing and self.min_interval < 5):
-            raise ValueError('Production spacing must be at least five seconds')
-        if not math.isfinite(self.global_gap) or self.global_gap < 0 or (not self.testing and self.global_gap < 1):
-            raise ValueError('Production global spacing must be at least one second')
+        if not math.isfinite(self.min_interval) or self.min_interval < 0:
+            raise ValueError('News spacing must be finite and nonnegative')
+        if not math.isfinite(self.global_gap) or self.global_gap < 0:
+            raise ValueError('Global gap must be finite and nonnegative')
         for name, cap in [('candidate_cap',500),('body_cap',200),('aux_cap',800)]:
             if not isinstance(getattr(self,name),int) or not 0 <= getattr(self,name) <= cap:
                 raise ValueError('Daily cap cannot be raised')

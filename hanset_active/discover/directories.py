@@ -1,5 +1,6 @@
 """Public directory adapters using the common guarded discovery budget."""
 from urllib.parse import urlencode
+from ..crawl_policy import is_korean_news, is_naver
 from .search import Tavily, Nominatim, DiscoveryDeferred, usable_providers, provider_names, provider_retry_at
 from .sitemaps import expand, expand_feed, list_pages
 
@@ -93,7 +94,9 @@ def detail(content, url, profile, *, public_source=False):
             continue
         if urlsplit(link['url']).hostname==urlsplit(url).hostname: continue
         # The portal's own sub-sites (e.g. other-language hosts) are never the venue website.
-        if registrable_domain(link['url']) in portals: continue
+        if (registrable_domain(link['url']) in portals
+                or is_naver(link['url']) or is_korean_news(link['url'])):
+            continue
         external.append(link)
     labelled=set()
     for anchor in soup.select('a[href]'):

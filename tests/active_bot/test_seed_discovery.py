@@ -16,7 +16,7 @@ from hanset_active.collect import service, targets
 from hanset_active.collect.plan import assemble_targets, run_plan
 from hanset_active.collect.store import connect as claim_connect
 from hanset_active.config import Settings
-from hanset_active.crawl_policy import COLLECTION, DISCOVERY, korean_news
+from hanset_active.crawl_policy import COLLECTION, DISCOVERY, is_korean_news
 from hanset_active.db import connect
 from hanset_active.discover import datago, seeds
 from hanset_active.discover.candidates import Candidates, Observation
@@ -210,8 +210,8 @@ def test_license_and_known_sitemap_attach_to_one_identity(state, tmp_path, monke
             return license_page(1, 1, [license_row()])
         if url.startswith(_GYMS):
             return license_page(1, 0, [])
-        assert not url.endswith('/robots.txt')
-        return {'https://seedspa.test/sitemap.xml': response(body=index, content_type='application/xml'),
+        return {'https://seedspa.test/robots.txt': response(body='User-agent: *\nDisallow: /', content_type='text/plain'),
+                'https://seedspa.test/sitemap.xml': response(body=index, content_type='application/xml'),
                 'https://seedspa.test/areas.xml': response(body=sitemap_body, content_type='application/xml'),
                 _OWN: page('Seed Spa A', address)}.get(url, response(404))
 
@@ -327,7 +327,7 @@ def test_public_search_policy_keeps_naver_and_runport(state, monkeypatch):
 
 def test_news_only_robots_spacing_terminal_block_and_direct_fallback(state, monkeypatch):
     settings, clock, db = state
-    assert not korean_news(_BLOG) and korean_news('https://n.news.naver.com/item')
+    assert not is_korean_news(_BLOG) and is_korean_news('https://n.news.naver.com/item')
     news = 'https://news.naver.com'
     events = []
 
@@ -350,10 +350,11 @@ def test_news_only_robots_spacing_terminal_block_and_direct_fallback(state, monk
         assert fetcher.fetch(_BLOG + '/after-news').ok
         assert fetcher.fetch('https://instagram.com/venue').outcome == 'denied'
         assert fetcher.fetch('https://block.example/blocked').outcome == 'blocked'
-        assert fetcher.fetch('https://block.example/later').outcome == 'blocked'
+        assert fetcher.fetch('https://block.example/blocked').reason == 'resource_hold'
+        assert fetcher.fetch('https://block.example/later').ok
         assert events[:2] == [(_BLOG, 0), (_BLOG + '/other', 0)]
         assert events[2:5] == [(news + '/robots.txt', 0), (news + '/page', 5), (news + '/page2', 10)]
-        assert news + '/private' not in calls and 'https://block.example/later' not in calls
+        assert news + '/private' not in calls and 'https://block.example/later' in calls
     finally:
         fetcher.close()
 

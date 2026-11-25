@@ -6,6 +6,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from hanset_active.config import REPO_ROOT, load_profile
+from hanset_active.crawl_policy import NAVER_DOMAINS, is_korean_news
 from hanset_active.util import followups
 from hanset_active.util.urls import is_collect_denied, is_denied, is_excluded, registrable_domain
 
@@ -33,7 +34,7 @@ SHARED_WEB_DOMAINS = frozenset({
     'foursquare.com', 'g.page', 'goo.gl',
     'google.co.kr', 'google.com', 'hotels.com', 'kakao.com', 'kayak.com', 'openstreetmap.org',
     'trip.com', 'trivago.com', 'yelp.com',
-})
+}) | NAVER_DOMAINS
 
 _SHARED_HOST = re.compile(r'(?:^|\.)(?:blog|blogs|directory|directories|listings?|ota|maps?|reviews?|news)(?:\.|$)', re.I)
 
@@ -99,7 +100,7 @@ def canonical_instagram(value, *, handle=None):
 def official_site(url, *, profile=None):
     profile = load_profile() if profile is None else profile
     host = urlsplit(url).hostname
-    if (not host or _SHARED_HOST.search(host) or is_denied(url, profile['denied_domains']) or is_denied(url)
+    if (not host or is_korean_news(url) or _SHARED_HOST.search(host) or is_denied(url, profile['denied_domains']) or is_denied(url)
             or is_excluded(url, terms=profile['exclusion_terms'])):
         return False
     shared = followups.portal_domains(profile) | SHARED_WEB_DOMAINS | set(profile['reservation_platform_domains'])
