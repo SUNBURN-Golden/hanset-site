@@ -78,14 +78,25 @@ file and the request and receipt formats are in the
 Without readiness, the installer leaves the crontab intact and the watchdog
 skips wide collection.
 
-The supervisor writes a KST success timestamp in
-`/workspace/hanset-data/stamps/<job>.ok` after the payload completes.
-It checks each job's latest slot, including across midnight, once the slot
-is more than ten minutes old. Shared collector work runs oldest eligible
-slot first. Seed discovery and twin can proceed independently. The
-`<job>.attempt` file holds the slot of the dispatched catch-up. Contention
-leaves the slot eligible. A failed or killed catch-up spends that slot's
-attempt. Wrapper logs remain in each job's external `logs/` directory.
+The supervisor writes the scheduled KST slot to
+`/workspace/hanset-data/stamps/<job>.attempt` immediately before launching
+each ordinary or catch-up payload. It records successful completion time
+in `<job>.ok`. A launch error, payload failure, or kill after the attempt
+write spends the slot. The next ordinary retry is at 04:15 the next day for
+daily collection, at the next scheduled slot for wide collection, and at
+the next hourly slot for active. Publication recovery uses the wide
+checkpoint independently of the attempt stamp. Contention and deferrals
+before dispatch leave the slot eligible.
+
+The scheduler checks each job's latest slot, including across midnight,
+once the slot is more than ten minutes old. Shared collector catch-ups run
+oldest eligible slot first. Seed discovery and twin proceed independently.
+Ordinary active can yield to an unaccounted shared peer slot only when some
+declared job already has an `.ok` or `.attempt` stamp. The peer slot must
+fall after the previous active slot and at or before the current one. Each
+peer slot can therefore delay ordinary active by at most one hourly run.
+Catch-up active can still wait behind an oldest peer that cannot launch.
+Wrapper logs remain in each job's external `logs/` directory.
 Seed discovery arguments select a manual run, including `--max-calls 0`.
 Desktop ingest uses the existing manual wrapper mode.
 

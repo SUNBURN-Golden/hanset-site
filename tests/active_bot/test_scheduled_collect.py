@@ -64,6 +64,18 @@ class Wait:
         self.wait = finish
 
 
+@pytest.fixture
+def started_payloads(job, monkeypatch):
+    calls = []
+
+    def start(name, slot, _):
+        calls.append((name, slot))
+        return Wait(lambda: 0)
+
+    monkeypatch.setattr(job, 'start_payload', start)
+    return calls
+
+
 def ready(job, monkeypatch):
     monkeypatch.setenv('HANSET_AUTO_PUBLISH', '1')
     replace(job.outbox.root / 'readiness.json', json_bytes({
@@ -152,22 +164,138 @@ def test_admission_orders_shared_jobs_during_watchdog_and_ordinary_race(job, mon
                       ('active', at('20T04:35'))]
 
 
-def test_failed_ordinary_leaves_catchup_and_killed_payload_consumes_it(job, monkeypatch):
+def test_ordinary_failure_records_attempt_and_frees_next_active(job, monkeypatch):
+    calls = []
+
+    def start(name, slot, _):
+        calls.append((name, slot))
+        return Wait(lambda: 0 if name == 'active' else 1)
+
+    monkeypatch.setattr(job, 'start_payload', start)
+    job.clock.start = at('20T06:18')
+    daily_slot = at('20T04:15')
+    assert job.run_job('daily_collect') == (1, 'payload_incomplete')
+    assert scheduled.stamp(job.stamps / 'daily_collect.attempt') == daily_slot
+    assert not (job.stamps / 'daily_collect.ok').exists()
+    assert job.run_job('daily_collect', catchup=daily_slot) == (0, 'slot_complete')
+    assert calls == [('daily_collect', daily_slot)]
+
+    job.clock.start = at('20T06:35')
+    assert job.run_job('active') == (0, 'complete')
+    assert scheduled.stamp(job.stamps / 'active.attempt') == at('20T06:35')
+    assert job.run_job('active') == (0, 'slot_complete')
+    assert calls == [('daily_collect', daily_slot), ('active', at('20T06:35'))]
+
+    job.clock.start = at('21T04:26')
+    assert job.eligible(('daily_collect',)) == [(at('21T04:15'), 'daily_collect')]
+
+
+def test_fresh_install_ignores_previous_day_daily_slot(job, started_payloads):
+    job.clock.start = at('20T03:35')
+    assert job.eligible(('daily_collect',)) == [(at('19T04:15'), 'daily_collect')]
+    assert job.run_job('active') == (0, 'complete')
+    assert started_payloads == [('active', at('20T03:35'))]
+    assert scheduled.stamp(job.stamps / 'active.attempt') == at('20T03:35')
+
+
+def test_readiness_and_locks_are_not_dispatch_history(job, monkeypatch, started_payloads):
+    ready(job, monkeypatch)
+    replace(job.checkpoint, json_bytes({'stale': True}))
+    (job.stamps / 'admission-collector.lock').touch()
+    job.clock.start = at('20T04:35')
+    assert job.eligible(scheduled.SHARED_JOBS) == [
+        (at('20T03:15'), 'wide_collect'), (at('20T04:15'), 'daily_collect')]
+    assert job.run_job('active') == (0, 'complete')
+    assert started_payloads == [('active', at('20T04:35'))]
+    assert scheduled.stamp(job.stamps / 'active.attempt') == at('20T04:35')
+
+
+@pytest.mark.parametrize('kind', ['ok', 'attempt'])
+def test_missed_daily_defers_active_one_slot_then_active_runs(job, started_payloads, kind):
+    job.write_stamp('active', kind, at('20T03:35'))
+    job.clock.start = at('20T04:35')
+    assert job.run_job('active') == (0, 'older_slot_eligible')
+    assert started_payloads == []
+    assert scheduled.stamp(job.stamps / 'active.attempt') == (
+        at('20T03:35') if kind == 'attempt' else None)
+    assert not (job.stamps / 'daily_collect.ok').exists()
+    assert not (job.stamps / 'daily_collect.attempt').exists()
+
+    job.clock.start = at('20T05:35')
+    assert job.run_job('active') == (0, 'complete')
+    assert started_payloads == [('active', at('20T05:35'))]
+    assert scheduled.stamp(job.stamps / 'active.attempt') == at('20T05:35')
+
+
+def test_late_ordinary_active_does_not_defer_to_itself(job, started_payloads):
+    job.write_stamp('daily_collect', 'ok', at('20T04:15'))
+    job.clock.start = at('20T04:50')
+    assert job.eligible(('active',)) == [(at('20T04:35'), 'active')]
+    assert job.run_job('active') == (0, 'complete')
+    assert started_payloads == [('active', at('20T04:35'))]
+    assert scheduled.stamp(job.stamps / 'active.attempt') == at('20T04:35')
+    assert scheduled.stamp(job.stamps / 'active.ok') == at('20T04:50')
+
+
+def test_active_scans_all_peers_for_an_in_window_slot(job, monkeypatch, started_payloads):
+    ready(job, monkeypatch)
+    job.write_stamp('active', 'ok', at('20T03:35'))
+    job.clock.start = at('20T04:35')
+    assert job.eligible(scheduled.SHARED_JOBS) == [
+        (at('20T03:15'), 'wide_collect'), (at('20T04:15'), 'daily_collect')]
+    assert job.run_job('active') == (0, 'older_slot_eligible')
+    assert started_payloads == []
+    assert not (job.stamps / 'active.attempt').exists()
+
+
+def test_stale_peer_outside_window_does_not_block_active(job, monkeypatch, started_payloads):
+    ready(job, monkeypatch)
+    job.write_stamp('daily_collect', 'ok', at('20T04:15'))
+    job.write_stamp('active', 'ok', at('20T03:35'))
+    job.clock.start = at('20T04:35')
+    assert job.eligible(scheduled.SHARED_JOBS) == [(at('20T03:15'), 'wide_collect')]
+    assert job.run_job('active') == (0, 'complete')
+    assert started_payloads == [('active', at('20T04:35'))]
+
+
+def test_unready_wide_slot_inside_window_does_not_block_active(job, started_payloads):
+    job.write_stamp('daily_collect', 'ok', at('20T04:15'))
+    job.clock.start = at('20T05:35')
+    assert JOBS['wide_collect'].latest(kst_now(job.clock)) == at('20T05:15')
+    assert job.eligible(scheduled.SHARED_JOBS) == []
+    assert job.run_job('active') == (0, 'complete')
+    assert started_payloads == [('active', at('20T05:35'))]
+
+
+def test_unreadable_independent_stamp_counts_as_dispatch_history(job, started_payloads):
+    replace(job.stamps / 'seed_discovery.attempt', b'invalid\n')
+    job.clock.start = at('20T04:35')
+    assert job.run_job('active') == (0, 'older_slot_eligible')
+    assert started_payloads == []
+    assert not (job.stamps / 'active.attempt').exists()
+
+
+def test_failed_ordinary_records_attempt_and_killed_catchup_spends_slot(job, monkeypatch):
     job.clock.start = at('20T11:01')
     slot = JOBS['twin'].latest(kst_now(job.clock))
     monkeypatch.setattr(job, 'start_payload', lambda *_: Wait(lambda: 1))
-    assert job.run_job('twin')[0] == 1
-    assert not (job.stamps / 'twin.attempt').exists()
+    assert job.run_job('twin') == (1, 'payload_incomplete')
+    assert scheduled.stamp(job.stamps / 'twin.attempt') == slot
+    assert not (job.stamps / 'twin.ok').exists()
+    assert job.run_job('twin', catchup=slot) == (0, 'slot_complete')
+
+    job.clock.start = at('20T12:01')
+    next_slot = at('20T11:50')
 
     def kill(_name, _slot, fds):
         return subprocess.Popen([sys.executable, '-c', 'import os,signal; os.kill(os.getpid(), signal.SIGKILL)'],
                                 pass_fds=tuple(fds))
 
     monkeypatch.setattr(job, 'start_payload', kill)
-    assert job.run_job('twin', catchup=slot)[0] == 128 + signal.SIGKILL
-    assert scheduled.stamp(job.stamps / 'twin.attempt') == slot
+    assert job.run_job('twin', catchup=next_slot)[0] == 128 + signal.SIGKILL
+    assert scheduled.stamp(job.stamps / 'twin.attempt') == next_slot
     assert not (job.stamps / 'twin.ok').exists()
-    assert job.run_job('twin', catchup=slot) == (0, 'slot_complete')
+    assert job.run_job('twin', catchup=next_slot) == (0, 'slot_complete')
 
 
 @pytest.mark.parametrize('status, success', [('partial:license_response', False), ('skipped:invalid_key', False),

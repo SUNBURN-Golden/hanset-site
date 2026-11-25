@@ -3,6 +3,7 @@ import argparse
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
 from dataclasses import replace as with_settings
+from datetime import timedelta
 import fcntl
 import json
 import os
@@ -110,6 +111,25 @@ class Scheduled:
             raise ValueError('scheduled_attempt_invalid')
         return (success is not None and success >= slot) or (attempted is not None and attempted >= slot)
 
+    def dispatch_history(self):
+        """Check for declared job stamps by presence alone."""
+        return any((self.stamps / f'{name}.{kind}').exists()
+                   for name in JOBS for kind in ('ok', 'attempt'))
+
+    def defers_to_older(self, name, slot, catchup, due):
+        if not due:
+            return False
+        if catchup is not None:
+            return due[0] != (slot, name)
+        if name != 'active':
+            return due[0] != (slot, name) and due[0][0] <= slot
+        if not self.dispatch_history():
+            return False
+        # Each peer slot can delay ordinary active for one hourly slot.
+        previous = JOBS[name].latest(slot - timedelta(seconds=1))
+        return any(other != name and previous < peer_slot <= slot
+                   for peer_slot, other in due)
+
     def run_job(self, name, *, catchup=None):
         try:
             return self._run_job(name, catchup)
@@ -137,7 +157,7 @@ class Scheduled:
                 if catchup is not None and (slot != catchup or now - slot <= GRACE):
                     return 0, 'slot_deferred'
                 due = self.eligible(group, now)
-                if due and due[0] != (slot, name) and (catchup is not None or due[0][0] <= slot):
+                if self.defers_to_older(name, slot, catchup, due):
                     return (DEFERRED if catchup else 0), 'older_slot_eligible'
                 fds = [job_fd]
                 for path in self.payload_paths(name):
@@ -148,10 +168,10 @@ class Scheduled:
                 if JOBS[name].latest(now) != slot or self.accounted_for(name, slot):
                     return 0, 'slot_deferred'
                 due = self.eligible(group, now)
-                if due and due[0] != (slot, name) and (catchup is not None or due[0][0] <= slot):
+                if self.defers_to_older(name, slot, catchup, due):
                     return (DEFERRED if catchup else 0), 'older_slot_eligible'
-                if catchup is not None:
-                    self.write_stamp(name, 'attempt', slot)
+                # Record the slot before launch so it survives supervisor death.
+                self.write_stamp(name, 'attempt', slot)
                 child = self.start_payload(name, slot, fds)
                 if name == 'active':
                     print('run_start', flush=True)
