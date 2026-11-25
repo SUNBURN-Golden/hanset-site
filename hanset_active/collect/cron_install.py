@@ -11,7 +11,7 @@ import sys
 from . import CollectError
 from .config import outside
 from .handoff import Outbox
-from .schedules import CHECKOUT, DATA, JOBS, MARKER, owned_entries
+from .schedules import CHECKOUT, DAILY_PUBLISH, DATA, JOBS, MARKER, owned_entries
 
 ASSIGNMENT = re.compile(rb"""^[ \t]*CRON_TZ\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+))\s*$""")
 ZONE_LINE = re.compile(rb'^[ \t]*CRON_TZ\s*=')
@@ -90,7 +90,7 @@ def owned(line):
 
 def job_name(command):
     try:
-        words = shlex.split(os.fsdecode(command))
+        words = shlex.split(os.fsdecode(command), comments=True)
     except ValueError:
         return None
     if words and words[0] in ('env', '/usr/bin/env'):
@@ -104,15 +104,40 @@ def job_name(command):
     for name, script in (
         ('seed_discovery', JOBS['seed_discovery'].script),
         ('wide_collect', JOBS['wide_collect'].script),
+        ('daily_collect', JOBS['daily_collect'].script),
         ('watchdog', 'collect_watchdog.sh'),
     ):
-        if words[0] == f'{CHECKOUT}/scripts/{script}' and (name != 'wide_collect' or words[1:2] == ['wide']):
-            return name
+        if words[0] != f'{CHECKOUT}/scripts/{script}':
+            continue
+        if name == 'wide_collect' and words[1:2] != ['wide']:
+            continue
+        if name == 'daily_collect' and words[1:] not in ([], ['web']):
+            continue
+        return name
     return None
 
 
-def proposed(table, uninstall):
-    entries = {} if uninstall else owned_entries()
+DAILY_LINE = re.compile(rb'^([ 	]*15[ 	]+0?4[ 	]+\*[ 	]+\*[ 	]+\*[ 	]+)([^\r\n]+)(\r?\n)?$')
+DAILY_TAG = b' # hanset-collx-daily'
+
+
+def daily_entry(line, enabled):
+    match = DAILY_LINE.fullmatch(line)
+    if not match:
+        return None
+    prefix, command, ending = match.groups()
+    if command.startswith(DAILY_PUBLISH) and command.endswith(DAILY_TAG):
+        command = command[len(DAILY_PUBLISH):-len(DAILY_TAG)]
+    if job_name(command) != 'daily_collect':
+        return None
+    if enabled:
+        command = DAILY_PUBLISH + command + DAILY_TAG
+    return prefix + command + (ending or b'')
+
+
+def proposed(table, uninstall, *, daily_publish=False):
+    enabled = daily_publish and not uninstall
+    entries = {} if uninstall else owned_entries(daily_publish=enabled)
     lines = []
     # Split on LF only so unrelated lines (including CRLF) retain their bytes.
     for line in lf_lines(table):
@@ -122,7 +147,10 @@ def proposed(table, uninstall):
             if replacement is not None:
                 lines.append(replacement)
         else:
-            lines.append(line)
+            daily = daily_entry(line, enabled)
+            if daily is not None:
+                entries.pop('daily_collect', None)
+            lines.append(daily if daily is not None else line)
     if entries and lines and not lines[-1].endswith(b'\n'):
         lines.append(b'\n')
     lines.extend(entries.values())
@@ -164,8 +192,11 @@ def timezone_conflict(table, default):
             match = ASSIGNMENT.fullmatch(line.rstrip(b'\r\n'))
             zone = next((value.decode('ascii', 'replace') for value in match.groups() if value is not None), '') if match else None
         command = owned_command(line)
-        if command is not None and (default not in SEOUL or zone not in SEOUL):
-            return job_name(command) or 'managed_job'
+        if default not in SEOUL or zone not in SEOUL:
+            if command is not None:
+                return job_name(command) or 'managed_job'
+            if line.rstrip(b'\r\n').endswith(DAILY_TAG) and daily_entry(line, True) == line:
+                return 'daily_collect'
     return None
 
 
@@ -177,8 +208,11 @@ def show_diff(old, new):
         if line.startswith(b'-') and line != b'--- crontab\n':
             line = b'-[redacted]' + (b' ' + MARKER if owned(line[1:]) else b'') + b'\n'
         elif line.startswith(b'+') and line != b'+++ crontab (updated)\n':
-            if line[1:] not in owned_entries().values():
-                line = b'+[line ending]\n'
+            if line[1:] not in owned_entries(daily_publish=True).values():
+                if line[1:].rstrip(b'\r\n').endswith(DAILY_TAG) and daily_entry(line[1:], True) == line[1:]:
+                    line = b'+[04:15 daily collection with HANSET_AUTO_PUBLISH=1]\n'
+                else:
+                    line = b'+[line ending]\n'
         sys.stdout.buffer.write(line)
 
 
@@ -186,6 +220,7 @@ def main(argv=None, *, data_root=DATA):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--uninstall', action='store_true')
+    parser.add_argument('--daily-publish', action='store_true')
     args = parser.parse_args(argv)
     env = {**os.environ, 'LC_ALL': 'C'}
     try:
@@ -197,7 +232,7 @@ def main(argv=None, *, data_root=DATA):
         if (current.returncode != 1 or current.stdout or
                 not re.fullmatch(rb'(?:crontab: )?no crontab for [^\r\n]+\n?', current.stderr)):
             return diagnostic('crontab_read_failed')
-    desired = proposed(current.stdout, args.uninstall)
+    desired = proposed(current.stdout, args.uninstall, daily_publish=args.daily_publish)
     if args.dry_run:
         show_diff(current.stdout, desired)
     if not args.uninstall:

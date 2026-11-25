@@ -38,6 +38,8 @@ def _eligibility(claim, policy):
     reasons = []
     if claim.get('superseded'):
         reasons.append('superseded_evidence')
+    if claim.get('model_confirmed') is False:
+        reasons.append('model_confirmation_required')
     if claim.get('status') != 'source_claim' or claim.get('rights') != 'internal_review_only':
         reasons.append('claim_not_internal_source')
     if not _identity(claim):

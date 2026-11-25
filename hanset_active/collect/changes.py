@@ -62,7 +62,7 @@ def safe_text(text):
 def closure_state(value):
     if re.search(r'연중무휴|open_every_day|normally open|open (?:every day|daily)|no closures?', value, re.I):
         return 'no_closure'
-    if re.search(r'휴무|휴관|폐쇄|closed|closure', value, re.I):
+    if value.strip().rstrip('.') in ('폐업', '영구 폐업') or re.search(r'휴무|휴관|폐쇄|closed|closure', value, re.I):
         return 'closure_notice'
     return 'review_only'
 

@@ -44,13 +44,16 @@ class Outbox:
             return False
 
     @staticmethod
-    def request(slot, generation, ids):
+    def request(slot, generation, ids, *, job='wide_collect'):
         slot = slot.astimezone(KST).isoformat()
-        request_id = sha(json_bytes(['wide_collect', slot, generation]))
-        return {'schema_version': VERSION, 'request_id': request_id, 'slot': slot,
-                'generation_digest': generation, 'change_ids': ids}
+        request_id = sha(json_bytes([job, slot, generation]))
+        row = {'schema_version': VERSION, 'request_id': request_id, 'slot': slot,
+               'generation_digest': generation, 'change_ids': ids}
+        if job != 'wide_collect':
+            row['job'] = job
+        return row
 
-    def prepare(self, export_dir, result, slot):
+    def prepare(self, export_dir, result, slot, *, job='wide_collect'):
         """Verify and freeze the export before recording collection completion."""
         if result.get('reason') == 'no_events':
             return None
@@ -62,7 +65,7 @@ class Outbox:
             raise ValueError('export_invalid')
         self._stage_generation(export_dir / 'official-web-changes', generation)
         ids = self.verify_generation(generation)
-        return self.request(slot, generation, ids) if ids else None
+        return self.request(slot, generation, ids, job=job) if ids else None
 
     def _stage_generation(self, source, generation):
         directory(self.generations)
@@ -115,9 +118,10 @@ class Outbox:
         slot = kst_timestamp(request['slot'])
         generation = request['generation_digest']
         ids = request['change_ids']
-        if (not digest(generation) or not isinstance(ids, list) or not ids
+        job = request.get('job', 'wide_collect')
+        if (job not in ('wide_collect', 'daily_collect') or not digest(generation) or not isinstance(ids, list) or not ids
                 or not all(map(digest, ids)) or ids != sorted(set(ids))
-                or request != self.request(slot, generation, ids)):
+                or request != self.request(slot, generation, ids, job=job)):
             raise ValueError('request_invalid')
 
     def expose(self, request):
@@ -126,7 +130,7 @@ class Outbox:
             raise ValueError('request_generation_mismatch')
         path = self.requests / (request['request_id'] + '.json')
         data = json_bytes(request)
-        # All writes to this outbox are serialized by the scheduled wide job lock.
+        # All writes to this outbox are made under their scheduled job lock; the request ID includes the job.
         try:
             existing = read(path)
         except FileNotFoundError:
@@ -143,6 +147,9 @@ class Outbox:
             row = read_json(path)
             status = row['status']
             if status in ('pending', 'no_change'):
+                continue
+            # A malformed request has no validated identity to bind to an attempt.
+            if status == 'failed' and row.get('reason') == 'request_invalid':
                 continue
             completed = timestamp(row.get('completed_at'))
             recorded = timestamp(row.get('recorded_at'))

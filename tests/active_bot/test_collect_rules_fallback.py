@@ -190,7 +190,17 @@ def test_rules_only_replay_and_upgrade_keep_claim_ids_and_candidate_links(case, 
     ]
     review_policy = policy(settings, approval(url, venue_id='spa-0000', venue_key='spa-0000'))
     initial = run_promote(settings, policy_path=review_policy, clock=clock)
-    initial_facts = {row['field']: row for row in initial['facts']}
+    assert initial['facts'] == [] and initial['fact_candidates'] == []
+    assert all('model_confirmation_required' in claim['eligibility_reasons'] for claim in initial['claims'])
+
+    # Simulate an existing store reviewed before promotion required model confirmation.
+    from hanset_active.collect import promotion
+    eligibility = promotion._eligibility
+    with monkeypatch.context() as legacy:
+        legacy.setattr(promotion, '_eligibility',
+                       lambda claim, approved: eligibility({**claim, 'model_confirmed': True}, approved))
+        previous = run_promote(settings, policy_path=review_policy, clock=clock)
+    initial_facts = {row['field']: row for row in previous['facts']}
     assert set(initial_facts) == {'bath_composition', 'cold_bath_temp_c', 'price_day_pass', 'tattoo_policy'}
     with closing(connect_readonly(settings.data_dir)) as db:
         originals = {claim['field']: claim for claim in read_claims(db)}

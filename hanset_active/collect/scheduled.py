@@ -53,6 +53,7 @@ class Scheduled:
         self.testing = testing
         self.stamps = root / 'stamps'
         self.checkpoint = self.stamps / 'wide_collect.completion.json'
+        self.daily_checkpoint = self.stamps / 'daily_collect.completion.json'
         self.outbox = Outbox(root)
         self.metrics = DailyMetrics(root, settings, self.clock, testing=testing)
 
@@ -68,6 +69,13 @@ class Scheduled:
                 self.diagnostic('wide_collect', 'publication_checkpoint_unavailable')
         else:
             self.diagnostic('wide_collect', 'publication_readiness_required')
+        try:
+            with lock(self.stamps / 'daily_collect.lock'):
+                self.finish_daily()
+        except Busy:
+            pass
+        except SOURCE_ERRORS:
+            self.diagnostic('daily_collect', 'publication_checkpoint_unavailable')
         with ThreadPoolExecutor(max_workers=3) as workers:
             passes = [workers.submit(self.catch_up, group, launch)
                       for group in (SHARED_JOBS, ('seed_discovery',), ('twin',))]
@@ -150,6 +158,8 @@ class Scheduled:
                     if not self.outbox.ready() or os.environ.get('HANSET_AUTO_PUBLISH') != '1':
                         return 0, 'publication_readiness_required'
                     self.finish_wide()
+                elif name == 'daily_collect':
+                    self.finish_daily()
                 now = kst_now(self.clock)
                 slot = JOBS[name].latest(now)
                 if self.accounted_for(name, slot):
@@ -183,10 +193,15 @@ class Scheduled:
                 if name == 'wide_collect':
                     if not self.finish_wide(completed=kst_now(self.clock), expected_slot=slot):
                         return 1, 'publication_checkpoint_missing'
+                elif self.publishes_daily(name):
+                    if not self.finish_daily(completed=kst_now(self.clock), expected_slot=slot):
+                        return 1, 'publication_checkpoint_missing'
                 else:
                     self.write_stamp(name, 'ok', kst_now(self.clock))
             elif name == 'wide_collect':
-                self.discard_checkpoint()
+                self.discard_checkpoint(self.checkpoint)
+            elif name == 'daily_collect':
+                self.discard_checkpoint(self.daily_checkpoint)
             return (result if result >= 0 else 128 - result), 'complete' if result == 0 else 'payload_incomplete'
 
     def payload_paths(self, name):
@@ -270,40 +285,59 @@ class Scheduled:
                          admission=guard, testing=self.testing)
         print(json.dumps(public_result(result), ensure_ascii=False))
         complete = result.get('success') is True or result.get('state') == 'no_targets'
-        if name == 'wide_collect' and complete:
+        if complete and (name == 'wide_collect' or self.publishes_daily(name)):
             changes = result['changes']
             export = {'reason': 'no_events'} if changes['reason'] == 'no_events' else changes['export']
             if changes['reason'] not in ('ok', 'no_events') or changes.get('recovery_reason'):
                 return False
-            request = self.outbox.prepare(settings.data_dir, export, slot)
-            replace(self.checkpoint, json_bytes({'slot': slot.isoformat(), 'request': request,
+            request = self.outbox.prepare(settings.data_dir, export, slot, job=name)
+            path = self.checkpoint if name == 'wide_collect' else self.daily_checkpoint
+            replace(path, json_bytes({'slot': slot.isoformat(), 'request': request,
                                                  'completed_at': kst_now(clock).isoformat()}))
         return complete
 
+    @staticmethod
+    def publishes_daily(name):
+        return name == 'daily_collect' and os.environ.get('HANSET_AUTO_PUBLISH') == '1'
+
     def finish_wide(self, *, completed=None, expected_slot=None):
+        return self.finish('wide_collect', self.checkpoint, completed, expected_slot)
+
+    def finish_daily(self, *, completed=None, expected_slot=None):
+        return self.finish('daily_collect', self.daily_checkpoint, completed, expected_slot)
+
+    def finish(self, name, path, completed, expected_slot):
         try:
-            saved = read_json(self.checkpoint)
+            saved = read_json(path)
         except FileNotFoundError:
             return False
         slot = kst_timestamp(saved['slot'])
         saved_at = kst_timestamp(saved['completed_at'])
         request = saved['request']
-        if (JOBS['wide_collect'].latest(slot) != slot or saved_at < slot
+        if (JOBS[name].latest(slot) != slot or saved_at < slot
                 or (expected_slot is not None and slot != expected_slot)
-                or (request is not None and request['slot'] != saved['slot'])):
+                or (request is not None and (request['slot'] != saved['slot']
+                    or request.get('job', 'wide_collect') != name))):
             raise ValueError('publication_checkpoint_invalid')
-        success = stamp(self.stamps / 'wide_collect.ok')
         if request is not None:
             self.outbox.expose(request)
+        success = stamp(self.stamps / f'{name}.ok')
         completed = completed or saved_at
         if success is None or success < completed:
-            self.write_stamp('wide_collect', 'ok', completed)
-        self.discard_checkpoint()
+            self.write_stamp(name, 'ok', completed)
+        # Recovery can expose a request without attributing it to a new run.
+        token = os.environ.get('HANSET_RUN_TOKEN') if expected_slot is not None else None
+        replace(self.stamps / f'{name}.publication.json', json_bytes({
+            'schema_version': 1, 'job': name, 'slot': saved['slot'],
+            'request_id': request['request_id'] if request is not None else None,
+            'exposed_at': kst_now(self.clock).isoformat(), 'run_token': token,
+        }))
+        self.discard_checkpoint(path)
         return True
 
-    def discard_checkpoint(self):
+    def discard_checkpoint(self, path):
         try:
-            self.checkpoint.unlink()
+            path.unlink()
         except FileNotFoundError:
             return
         sync_directory(self.stamps)

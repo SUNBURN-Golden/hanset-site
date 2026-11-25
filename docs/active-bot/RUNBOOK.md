@@ -76,7 +76,9 @@ contract check before enabling the wide schedule. The versioned readiness
 file and the request and receipt formats are in the
 [publication handoff runbook](COLLECTOR.md#operations-publication-handoff).
 Without readiness, the installer leaves the crontab intact and the watchdog
-skips wide collection.
+skips wide collection. The 04:15 entry keeps its default behavior. Operations
+can enable publication there with `--daily-publish` on both the dry run and
+install.
 
 The supervisor writes the scheduled KST slot to
 `/workspace/hanset-data/stamps/<job>.attempt` immediately before launching
@@ -84,8 +86,8 @@ each ordinary or catch-up payload. It records successful completion time
 in `<job>.ok`. A launch error, payload failure, or kill after the attempt
 write spends the slot. The next ordinary retry is at 04:15 the next day for
 daily collection, at the next scheduled slot for wide collection, and at
-the next hourly slot for active. Publication recovery uses the wide
-checkpoint independently of the attempt stamp. Contention and deferrals
+the next hourly slot for active. Publication recovery uses the wide or
+opted-in daily checkpoint independently of the attempt stamp. Contention and deferrals
 before dispatch leave the slot eligible.
 
 The scheduler checks each job's latest slot, including across midnight,
@@ -99,6 +101,97 @@ Catch-up active can still wait behind an oldest peer that cannot launch.
 Wrapper logs remain in each job's external `logs/` directory.
 Seed discovery arguments select a manual run, including `--max-calls 0`.
 Desktop ingest uses the existing manual wrapper mode.
+
+### Managed site publication
+
+Run publication commands as the operations account in `/workspace/hanset-site`.
+The one-time readiness check takes the exact static directory preserved from
+the last successful upload. Use that artifact from the release record or
+operations' release storage.
+
+```sh
+cd /workspace/hanset-site
+scripts/auto_publish.sh --check-readiness --deployed-artifact "$CONFIRMED_RELEASE_DIR"
+scripts/install_collect_crons.sh --dry-run
+scripts/install_collect_crons.sh
+```
+
+Readiness deliberately exercises Outbox verification, artifact tampering,
+projection, rule-only evidence, WAL backup retention and receipt accounting
+in private temporary state. It records the confirmed baseline and writes
+`publication/v1/readiness.json` under `/workspace/hanset-data`. A failed
+re-check invalidates readiness and retains the prior baseline. Operations
+can pass `--rebaseline-baseline` with a newly confirmed artifact after a
+manual release.
+
+#### External operations prerequisites
+
+- Supply `$HANSET_IG_DIR/site_slug_map.json` with exact
+  `venue_id -> {venue_key, site_slug}` identities. A mapped slug must identify
+  one venue.
+- Supply `$HANSET_DATA_DIR/publication/v1/consent.json` with
+  `schema_version: 1` and a `venues` array. Each record needs `venue_id`,
+  `venue_key`, `slugs`, `names`, `aliases`, `official_urls`, `decision`
+  (`allowed` or `declined`) and ISO `decided_on`. Include the
+  `runport-mapo` refusal dated 2026-10-19.
+- Register `/workspace/fitness-hub/ops/deploy.sh` by writing
+  `hanset-release-v1` to its sibling `deploy.sh.hanset-contract` once the
+  script implements the contract below. `HANSET_DEPLOY_CMD` can point to an
+  absolute executable path using the same marker convention.
+- Route manual releases through the external
+  `/workspace/fitness-hub/ops/deploy_locked.sh` launcher. It takes the same
+  exclusive, nonblocking `$HANSET_DATA_DIR/publish/deploy.lock` and passes
+  its open descriptor to the release command. `HANSET_DEPLOY_LAUNCHER`
+  overrides the path checked during readiness.
+
+The external deploy script must use `HANSET_SITE_ROOT` as the checkout and
+`HANSET_RELEASE_PYTHON` as the Python executable when supplied. The managed
+checkout is a private snapshot of the tracked files. Call
+`scripts/release_contract.py` from that checkout with the selected Python:
+
+1. Run `check-lock` before any release work. Keep the descriptor in
+   `HANSET_PUBLISH_LOCK_FD` open in the child, with its path in
+   `HANSET_PUBLISH_LOCK_FILE`.
+2. Run the external script's pytest gate under an allowlisted environment
+   with provider credentials, all `HANSET_PUBLISH_*` variables and
+   `HANSET_RELEASE_DATE` removed.
+3. Rebuild with `--release` into `site/dist` and run the existing leak
+   check. Preserve `HANSET_RELEASE_DATE` for the final build so the calendar
+   and fonts match the staged artifact.
+4. For a managed release, run `started "$DIST"` immediately before the
+   existing upload. It verifies the exact artifact against
+   `HANSET_PUBLISH_EXPECTED` and records that upload may now start. Only
+   after a successful upload run `confirmed`. These two actions also use
+   `HANSET_PUBLISH_RELEASE_ID`, `HANSET_PUBLISH_UPLOAD_STARTED`, and
+   `HANSET_PUBLISH_RECEIPT`. A failed contract command must abort the release.
+
+The external command starts with a clean environment and temporary home.
+Its own operations credential configuration supplies upload access. Keep
+credentials out of command arguments, receipts and logs. The external scripts
+and marker are maintained by operations outside this repository.
+
+#### State and recovery
+
+- `scripts/auto_publish.sh --drain` processes pending requests together.
+  `--request <request_id>` processes one request. `--status` reports
+  readiness, baseline and pending status. Collection can succeed even when
+  publication fails.
+- Before apply, the publisher takes SQLite backups under collector locks and
+  verifies each copy. `$HANSET_DATA_DIR/backups/` retains the newest 14
+  verified sets. The publisher reads databases without migrating data.
+- Read KST gate outcomes in `$HANSET_DATA_DIR/publish/publish.log`.
+  The Outbox stores request receipts and the change ledger. The live release
+  baseline points to the confirmed artifact manifest and input hash.
+  Unchanged applied data skips build, tests and deployment.
+- `scripts/auto_publish.sh --recover` finishes an interruption with a
+  durable confirmation or records a failure before upload. With only an
+  upload-started marker, use `--reconcile-live "$LIVE_ARTIFACT_DIR"` after
+  obtaining an exact retained copy of the served artifact from operations.
+  The comparison must uniquely identify the candidate or previous artifact.
+- A confirmed release with interrupted checkout write-back blocks further
+  publication until `scripts/auto_publish.sh --reconcile-checkout` completes.
+  It applies changes only when the files match the recorded before or
+  after hashes. Review and resolve conflicting human edits before retrying.
 
 ### Daily collector metrics
 

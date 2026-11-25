@@ -448,3 +448,25 @@ class ReleaseLeakTests(unittest.TestCase):
 
 
 if __name__ == '__main__': unittest.main()
+
+
+def test_declined_domain_allowed_only_in_html_anchor_host(tmp_path, monkeypatch):
+    monkeypatch.setattr(B, 'RUNPORT_HOST', 'runport.example.test')
+    target = 'https://www.runport.example.test/visit'
+    document = tmp_path / 'fixture.html'
+    document.write_text(f'<a href="{target}">Official page</a>')
+    assert B.leak_check(tmp_path) == []
+    assert B.source_caption('Official page', target) == 'Official page'
+    for body in (
+        'RUNPORT', '<img alt="RUNPORT">', '<p title="RUNPORT">Safe</p>',
+        '<meta content="RUNPORT">', f'<p data-source="{target}">Safe</p>',
+        f'<a href="{target}">Official page · runport.example.test</a>',
+        '<a href="https://www.runport.example.test/RUNPORT">Safe</a>',
+        '<a href="https://runport.example.test.example.test/">Safe</a>',
+        '<a title="RUNPORT" href="https://www.runport.example.test/">Safe</a>',
+        f'<a href="{target}" href="https://example.test/runport">Safe</a>',
+    ):
+        document.write_text(body)
+        assert ('fixture.html', 'wording.forbidden') in B.leak_check(tmp_path)
+    document.write_text('<p>Home address: fixture location</p>')
+    assert ('fixture.html', 'privacy.personal') in B.leak_check(tmp_path)

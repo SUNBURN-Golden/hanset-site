@@ -363,8 +363,9 @@ python3 -m hanset_active collect status
 
 ## Operations publication handoff
 
-Operations first verifies the v1 contract against the actual consumer in a
-non-publishing check. After confirmation, operations owns
+Operations runs `scripts/auto_publish.sh --check-readiness --deployed-artifact "$CONFIRMED_RELEASE_DIR"`
+with the preserved last uploaded artifact. The check uses temporary stores
+and writes
 `/workspace/hanset-data/publication/v1/readiness.json` with integer
 `schema_version` equal to 1, a nonempty `consumer_version`,
 `non_publishing_check` equal to `passed`, and a timezone-aware
@@ -378,14 +379,19 @@ generation digest. Each manifest identifies the artifact hashes and sizes.
 After a durable collection checkpoint, the collector exposes
 `requests/<request_id>.json` with `schema_version`, `request_id`, KST
 `slot`, `generation_digest`, and sorted unique `change_ids`. Job, slot,
-and generation determine the request ID. Replay reuses that ID. A completed
-wide run stamps after a verified no-change outcome or durable request
-exposure. A saved checkpoint can finish an interrupted exposure for its
-original slot.
+and generation determine the request ID. The wide request retains its v1
+shape. An opted-in 04:15 run includes `"job": "daily_collect"`. Replay reuses
+the original ID. The supervisor writes a completion signal under
+`stamps/<job>.publication.json` after verifying no change or exposing the
+request. The normal cron wrapper drains the Outbox when the signal carries its
+run token and a request ID. The watchdog can recover a checkpoint. Any requests
+it exposes can be drained by the next completed batch or by operations.
 
 Operations verifies the generation and rechecks current official-source
 confirmation, source URL, checked date, site venue mapping, and review holds.
-Independent-source agreement qualifies internal facts only. A durable
+Public projection covers regular hours, regular day-pass or drop-in prices,
+and official closure notices. Independent-source agreement qualifies
+internal facts only under AGENTS.md rule 7. A durable
 operations ledger keyed by stable `change_id` keeps overlapping requests
 attached to their existing dispositions or in-flight releases. Release
 retries use new deployment attempt IDs under operations control. Site
