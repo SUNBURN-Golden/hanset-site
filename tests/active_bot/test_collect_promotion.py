@@ -458,3 +458,23 @@ def test_guarded_final_domain_official_qualification_and_rebinding(setup, monkey
     assert held['fact_candidates'][0]['review_state'] == 'evidence_hold'
     original = next(item for item in held['claims'] if item['claim_id'] == claim['claim_id'])
     assert original['seen_at'] == claim['seen_at']
+
+
+def test_rules_only_claim_requires_model_confirmation(setup):
+    from hanset_active.collect.normalize import normalize_value
+    from hanset_active.collect.promotion import _eligibility
+    from hanset_active.collect.store import read_claims
+
+    settings, _ = setup
+    add(settings, A)
+    db = connect(settings.data_dir)
+    try:
+        claim, = read_claims(db)
+    finally:
+        db.close()
+    loaded = load_policy(policy(settings, approval(A)))
+    claim['normalization'] = normalize_value(claim['field'], claim['value'])
+    _, reasons = _eligibility({**claim, 'model_confirmed': False}, loaded)
+    assert 'model_confirmation_required' in reasons
+    _, confirmed = _eligibility({**claim, 'model_confirmed': True}, loaded)
+    assert 'model_confirmation_required' not in confirmed

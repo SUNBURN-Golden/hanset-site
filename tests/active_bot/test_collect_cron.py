@@ -104,3 +104,59 @@ def test_overlapping_wrapper_exits_cleanly(tmp_path):
     assert 'already_running' in _log(ig)
     assert SENTINEL not in _log(ig)
     assert first.wait(timeout=10) == 0
+
+
+def test_wrapper_chains_only_matching_completed_web_signals(tmp_path):
+    import shutil
+
+    scripts = tmp_path / 'checkout/scripts'
+    scripts.mkdir(parents=True)
+    shutil.copy2(SCRIPT, scripts / SCRIPT.name)
+    publisher = scripts / 'auto_publish.sh'
+    publisher.write_text('#!/bin/bash\nprintf "%s\\n" "$*" >>"$HANSET_DATA_DIR/published"\nexit 1\n')
+    publisher.chmod(0o700)
+    data = tmp_path / 'data'
+    ig = data / 'ig'
+    env = _env(tmp_path, ig)
+    env.update(HANSET_DATA_DIR=str(data), PYTHONPATH=str(REPO), HANSET_AUTO_PUBLISH='1')
+    bin_path = tmp_path / 'bin'
+    bin_path.mkdir()
+    stub = bin_path / 'python3'
+    stub.write_text(f'#!{sys.executable}\n' + '''
+import json, os, sys
+from pathlib import Path
+
+if sys.argv[1] == '-':
+    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+if sys.argv[2] != 'hanset_active.collect.scheduled':
+    sys.exit(0)
+job = sys.argv[3]
+root = Path(os.environ['HANSET_DATA_DIR']) / 'stamps'
+root.mkdir(parents=True, exist_ok=True)
+outcome = os.environ.get('TEST_OUTCOME')
+token = os.environ.get('HANSET_RUN_TOKEN')
+if outcome in ('completed', 'failed', 'no_change'):
+    (root / (job + '.publication.json')).write_text(json.dumps(
+        dict(schema_version=1, job=job, run_token=token,
+             request_id=None if outcome == 'no_change' else '1' * 64)))
+sys.exit(outcome == 'failed')
+''')
+    stub.chmod(0o700)
+    for mode, outcome, enabled, catchup, expected in (
+        ('wide', 'completed', '1', '', 1),
+        ('wide', 'already_running', '1', '', 1),
+        ('wide', 'slot_complete', '1', '', 1),
+        ('wide', 'publication_readiness_required', '1', '', 1),
+        ('wide', 'no_change', '1', '', 1),
+        ('wide', 'failed', '1', '', 1),
+        ('web', 'completed', '0', '', 1),
+        ('web', 'completed', '1', 'fixture-slot', 1),
+        ('ingest', 'completed', '1', '', 1),
+        ('web', 'completed', '1', '', 2),
+    ):
+        result = subprocess.run([scripts / SCRIPT.name, mode], env={
+            **env, 'TEST_OUTCOME': outcome, 'HANSET_AUTO_PUBLISH': enabled, 'HANSET_CATCHUP_SLOT': catchup,
+        }, check=False)
+        assert result.returncode == int(outcome == 'failed')
+        assert (data / 'published').read_text().splitlines() == ['--drain'] * expected
+    assert 'publication_failed' in _log(ig)

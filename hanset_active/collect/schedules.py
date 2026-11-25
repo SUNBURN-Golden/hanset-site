@@ -40,18 +40,21 @@ JOBS = {
     'twin': Job(tuple(range(24)), 50, 'run_twin_cron.sh', timeout=('20m',)),
 }
 MARKER = b'# hanset-collx'
+DAILY_PUBLISH = b'HANSET_AUTO_PUBLISH=1 '
 
 
-def owned_entries():
+def owned_entries(*, daily_publish=False):
     env = (f'HANSET_DATA_DIR={DATA} HANSET_ACTIVE_DIR={DATA}/active '
            f'HANSET_IG_DIR={DATA}/ig HANSET_TWIN_DIR={DATA}/twin')
     entries = {}
     for name, job in JOBS.items():
-        if job.tagged:
-            publish = ' HANSET_AUTO_PUBLISH=1' if name == 'wide_collect' else ''
+        if job.tagged or (name == 'daily_collect' and daily_publish):
+            publish = ' HANSET_AUTO_PUBLISH=1' if name in ('wide_collect', 'daily_collect') else ''
             command = ' '.join((f'{CHECKOUT}/scripts/{job.script}', *job.args))
-            step = job.hours[1] - job.hours[0]
-            schedule = f'{job.minute} {job.hours[0]}-{job.hours[-1]}/{step} * * *'
+            hours = str(job.hours[0])
+            if len(job.hours) > 1:
+                hours += f'-{job.hours[-1]}/{job.hours[1] - job.hours[0]}'
+            schedule = f'{job.minute} {hours} * * *'
             entries[name] = f'{schedule} {env}{publish} {command}'.encode()
     entries['watchdog'] = f'*/{WATCHDOG_MINUTES} * * * * {env} {CHECKOUT}/scripts/collect_watchdog.sh'.encode()
     return {name: line + b' ' + MARKER + b'\n' for name, line in entries.items()}

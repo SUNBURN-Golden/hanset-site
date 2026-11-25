@@ -112,9 +112,15 @@ covers the `collect` subcommands. [Operations runbook](docs/active-bot/RUNBOOK.m
 
 After merge, operations can preview the KST cron additions with
 `scripts/install_collect_crons.sh --dry-run` and apply them with
-`scripts/install_collect_crons.sh` once the publication handoff is confirmed.
+`scripts/install_collect_crons.sh` once the publisher has written readiness.
+The one-time command is
+`scripts/auto_publish.sh --check-readiness --deployed-artifact "$CONFIRMED_RELEASE_DIR"`.
+Provide the preserved last uploaded artifact and complete the external
+release contract setup first. [Publication setup and recovery](docs/active-bot/RUNBOOK.md#managed-site-publication)
+
 Use `--uninstall --dry-run` to preview removal and `--uninstall` to remove
-the managed entries. The existing 04:15 collection, active, twin and Linux
+the managed entries. The existing 04:15 collection keeps its current behavior
+unless operations supplies `--daily-publish`. The active, twin and Linux
 crawler entries stay in the crontab. Read the latest appended metrics line
 with `tail -n 1 /workspace/hanset-data/metrics/collect-daily.jsonl`.
 [Scheduler and metrics runbook](docs/active-bot/RUNBOOK.md#cron)

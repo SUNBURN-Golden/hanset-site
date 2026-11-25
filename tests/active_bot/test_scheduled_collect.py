@@ -664,3 +664,35 @@ def test_guarded_active_persists_only_validated_evidence_and_twin_holds_missing(
                 assert twin.execute("SELECT 1 FROM review_queue WHERE kind='active_validation'").fetchone()
         finally:
             fetcher.close()
+
+
+@pytest.mark.parametrize('enabled', [False, True])
+def test_daily_checkpoint_and_signal_only_on_opt_in(job, monkeypatch, enabled):
+    monkeypatch.setenv('HANSET_AUTO_PUBLISH', '1' if enabled else '0')
+    monkeypatch.setenv('HANSET_RUN_TOKEN', 'fixture-token')
+    job.clock.start = at('20T04:16')
+    job.write_stamp('active', 'ok', at('20T03:36'))
+    slot = at('20T04:15')
+    export = export_fixture(job.settings, [sha(b'fixture-change')])
+    result = {'state': 'ok', 'success': True, 'changes': {'reason': 'ok', 'export': export}}
+    monkeypatch.setattr(scheduled, 'run_web', lambda *args, **kwargs: result)
+    monkeypatch.setattr(scheduled, 'public_result', lambda result: result)
+
+    def start(name, started, _fds):
+        return Wait(lambda: 0 if job.collect(name, started, None) else 1)
+
+    monkeypatch.setattr(job, 'start_payload', start)
+    assert not job.outbox.ready()
+    assert job.run_job('daily_collect') == (0, 'complete')
+    signal = job.stamps / 'daily_collect.publication.json'
+    assert signal.exists() == enabled
+    assert not job.daily_checkpoint.exists()
+    if enabled:
+        row = json.loads(signal.read_text())
+        assert row['run_token'] == 'fixture-token' and row['slot'] == slot.isoformat()
+        request = json.loads((job.outbox.requests / (row['request_id'] + '.json')).read_text())
+        assert request['job'] == 'daily_collect'
+        assert job.run_job('daily_collect') == (0, 'slot_complete')
+        assert json.loads(signal.read_text()) == row
+    else:
+        assert not job.outbox.requests.exists()

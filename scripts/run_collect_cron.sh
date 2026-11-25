@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Web collection, or a desktop Instagram batch already sitting in the inbox.
 # This wrapper never starts a browser, reads a session file, or prints credentials.
-# It does not deploy the site. Instagram browsing stays on the approved desktop.
+# Instagram browsing stays on the approved desktop.
 set -u
 set -o pipefail
 set +x
@@ -72,7 +72,34 @@ case "$mode" in
     wide) command=(python3 -m hanset_active.collect.scheduled wide_collect) ;;
     ingest) command=(timeout --signal=TERM --kill-after=10s 25m python3 -m hanset_active collect ingest) ;;
 esac
+unset HANSET_RUN_TOKEN
+if [[ "$mode" != ingest && "${HANSET_AUTO_PUBLISH:-}" == 1 && -z "${HANSET_CATCHUP_SLOT:-}" ]]; then
+    read -r HANSET_RUN_TOKEN </proc/sys/kernel/random/uuid || exit 1
+    export HANSET_RUN_TOKEN
+fi
 "${command[@]}" >>"$log" 2>&1
 result=$?
 printf '%s %s_exit=%s\n' "$(TZ=Asia/Seoul date -Iseconds)" "$mode" "$result" >>"$log"
+if [[ "$result" == 0 && -n "${HANSET_RUN_TOKEN:-}" ]]; then
+    job=${command[3]}
+    if python3 - "$data_dir" "$job" "$HANSET_RUN_TOKEN" <<'PYTHON'
+import re
+import sys
+from pathlib import Path
+from hanset_active.collect.private_io import read_json
+
+root, job, token = sys.argv[1:]
+try:
+    row = read_json(Path(root) / "stamps" / (job + ".publication.json"))
+    matched = (row["schema_version"] == 1 and row["job"] == job and row["run_token"] == token
+               and re.fullmatch(r"[0-9a-f]{64}", row["request_id"] or ""))
+except (OSError, ValueError, KeyError, TypeError):
+    matched = False
+sys.exit(0 if matched else 1)
+PYTHON
+    then
+        "$checkout/scripts/auto_publish.sh" --drain >>"$log" 2>&1 ||
+            printf '%s publication_failed\n' "$(TZ=Asia/Seoul date -Iseconds)" >>"$log"
+    fi
+fi
 exit "$result"

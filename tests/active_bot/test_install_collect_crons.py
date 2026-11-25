@@ -104,3 +104,20 @@ def test_absent_read_failure_readiness_and_timezone(crontab):
     assert invoke('--uninstall', '--dry-run').returncode == 0 and not writes.exists()
     assert invoke().returncode == 0 and len(state.read_bytes().splitlines()) == 3
     assert cron_install.timezone_conflict(state.read_bytes(), 'UTC') == 'seed_discovery'
+
+
+def test_daily_publish_opt_in_is_reversible_without_duplicate_job(crontab):
+    root, state, _, invoke = crontab
+    ready(root)
+    daily = b'15 04 * * *  /workspace/hanset-site/scripts/run_collect_cron.sh web\r\n'
+    state.write_bytes(daily)
+    assert invoke().returncode == 0
+    assert state.read_bytes().startswith(daily)
+    preview = invoke('--daily-publish', '--dry-run')
+    assert preview.returncode == 0 and b'HANSET_AUTO_PUBLISH=1' in preview.stdout
+    assert invoke('--daily-publish').returncode == 0
+    lines = state.read_bytes().splitlines()
+    assert sum(line.startswith(b'15 04 ') for line in lines) == 1
+    assert b'HANSET_AUTO_PUBLISH=1 ' in lines[0]
+    assert invoke('--uninstall').returncode == 0
+    assert state.read_bytes() == daily

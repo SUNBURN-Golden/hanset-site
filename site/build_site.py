@@ -9,7 +9,7 @@ Nothing is deployed, nothing is sent. No trackers, no external requests.
   .venv/bin/python build_site.py                 # preview build (noindex)
   .venv/bin/python build_site.py --release       # indexable + canonical/sitemap for hanset.soulbound.co.kr
 """
-import argparse, csv, datetime as dt, html, json, re, shutil, sys
+import argparse, csv, datetime as dt, html, json, os, re, shutil, sys
 from hashlib import md5
 from html.parser import HTMLParser
 from pathlib import Path
@@ -42,7 +42,7 @@ FORBIDDEN = [r"\b442\b", r"KWANG", r"크왕", r"우승", r"로스쿨", r"법무"
              r"moduisauna", r"crossfitlee", r"LUWEI", r"한세트", r"땀살롱", r"PRIVATE-DM",
              # no ad/sponsor solicitation, no excluded venue, no AI-editor wording, no health overclaims (EN + KO)
              r"(?i)sponsor", r"(?i)advertis", r"(?i)partnership", r"(?i)media[ -]?kit", r"(?i)collaborat", r"(?i)\bAI editor",
-             r"(?i)runport", r"런포트", r"버핏", r"스폰서", r"협찬", r"제휴", r"미디어킷", r"노출료", r"광고문의", r"가상의 AI",
+             r"스폰서", r"협찬", r"제휴", r"미디어킷", r"노출료", r"광고문의", r"가상의 AI",
              r"(?i)\bdetox", r"(?i)\bheal(s|ing|ed)?\b", r"(?i)\bcures?\b", r"(?i)fat[- ]burn", r"(?i)\bMZ sauna"]
 
 E = html.escape
@@ -51,6 +51,20 @@ def read_csv(name):
         return list(csv.DictReader(f))
 def won(s): return "₩{:,}".format(int(s)) if s and s.strip().isdigit() else None
 def host(u): return urlparse(u).netloc.replace("www.", "")
+
+RUNPORT_HOST = "runport.kr"
+
+def runport_citation(url):
+    if not valid_public_url(url):
+        return False
+    hostname = urlparse(url).hostname.rstrip(".")
+    return hostname == RUNPORT_HOST or hostname.endswith("." + RUNPORT_HOST)
+
+def source_caption(label, url):
+    return label if runport_citation(url) else f"{label} · {host(url)}"
+
+def source_host_label(url):
+    return "Official page" if runport_citation(url) else host(url)
 def ymd(s): return dt.date.fromisoformat(s)
 def dot(d): return d.strftime("%Y.%m.%d") if d else "date not confirmed"
 def is_outdated(checked_on, today):
@@ -64,7 +78,7 @@ def closure_provenance(c, today):
     checked = parse_evidence_date(raw)
     checked_text = dot(checked) if checked else f'{raw} (date not confirmed)'.strip()
     return (f'Checked {E(checked_text)} · <a href="{E(c["url"])}" rel="noopener noreferrer">'
-            f'{E(c["source"])} · {E(host(c["url"]))}</a> {freshness(checked, today)}')
+            f'{E(source_caption(c["source"], c["url"]))}</a> {freshness(checked, today)}')
 def wd(d): return WD[d.weekday()]
 def span(a, b, ref_year):
     def f(d):
@@ -789,7 +803,7 @@ def sunday_status_row(v):
 def sunday_provenance(evidence, today):
     return (f'<small class="fact-source">Checked {dot(evidence.checked_on)} · '
             f'<a href="{E(evidence.source_url)}" rel="noopener noreferrer">'
-            f'Official page · {E(host(evidence.source_url))}</a> {freshness(evidence.checked_on, today)}</small>')
+            f'{E(source_caption("Official page", evidence.source_url))}</a> {freshness(evidence.checked_on, today)}</small>')
 
 
 def parse_evidence_date(value):
@@ -1124,7 +1138,7 @@ def fact_provenance(v, value, today, *, link_claims=False, publication=None):
                 checked_text = inline_text
         url = publication.source_url
         return (f'<small class="fact-source">Checked {E(checked_text)} · '
-                f'<a href="{E(url)}" rel="noopener noreferrer">{E(publication.source_label)} · {E(host(url))}</a> '
+                f'<a href="{E(url)}" rel="noopener noreferrer">{E(source_caption(publication.source_label, url))}</a> '
                 f'{freshness(publication.checked_on, today)}</small>')
     if not value or value.startswith(UNKNOWN) or value.lower() in ("pending", "not confirmed", "not yet announced"):
         return ""
@@ -1139,9 +1153,9 @@ def fact_provenance(v, value, today, *, link_claims=False, publication=None):
     status = evidence_status(v, value)
     label = {"fact": "Official source", "source_claim": "Source claim", "unverified": "Unconfirmed"}[status]
     checked_text, checked = fact_check_date(v, value)
-    source = (f'<a href="{E(v["source"])}" rel="noopener noreferrer">{label} · {E(host(v["source"]))}</a>'
+    source = (f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(source_caption(label, v["source"]))}</a>'
               if status == "fact" or (link_claims and status == "source_claim" and v["source"])
-              else f'{label} · {E(host(v["source"]))}')
+              else f'{E(source_caption(label, v["source"]))}')
     return (f'<small class="fact-source">Checked {E(checked_text)} · '
             f'{source} {freshness(checked, today)}</small>')
 
@@ -1493,7 +1507,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
         if v["booking"] and v["booking"] != v["website"]:
             links.append(f'<a class="btn btn-d" href="{E(v["booking"])}" rel="noopener noreferrer">Book</a>')
         links.append(f'<a class="btn btn-d" href="{E(map_url(v))}" rel="noopener noreferrer">Open in map</a>')
-        srcs = [f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a>'] + [f'<a href="{E(u)}" rel="noopener noreferrer">{E(l)}</a>' for l, u in v["extra_sources"]]
+        srcs = [f'<a href="{E(v["source"])}" rel="noopener noreferrer">{E(source_host_label(v["source"]))}</a>'] + [f'<a href="{E(u)}" rel="noopener noreferrer">{E(l)}</a>' for l, u in v["extra_sources"]]
         tips = venue_notes_html(v, "Tip", "Tips · Heads-up", v["tips"], today)
         unv = venue_notes_html(v, "Unconfirmed", "Unconfirmed", v["unverified"], today, unconfirmed=True)
         stale = (f'<div class="note">{OUTDATED} · Last checked over {STALE_DAYS} days ago. Confirm with the venue before you go.</div>' if is_outdated(v["last_verified"], today) else "")
@@ -1524,7 +1538,7 @@ def build(site, venues, events, today, vevents=(), creators=()):
 <div class="btnrow detail-actions">{"".join(links)}</div>
 <section class="detail-glance" aria-labelledby="glance-heading"><h2 id="glance-heading">At a glance</h2>
 <div class="glance-grid"><div><h3>Price</h3>{price_html(v, today)}</div>{"".join(f'<div><h3>{E(label)}</h3>{fact_lines(values, v, today)}</div>' for label, values in fact_groups(v))}</div>
-<p class="meta">Checked {dot(v["last_verified"])} {freshness(v["last_verified"], today)} · Reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(host(v["source"]))}</a></p></section>
+<p class="meta">Checked {dot(v["last_verified"])} {freshness(v["last_verified"], today)} · Reference <a href="{E(v["source"])}" rel="noopener noreferrer">{E(source_host_label(v["source"]))}</a></p></section>
 <h2>Source notes</h2><table class="facts"><tbody>{source_rows}{extra_addr}{sunrow}{closed_row(v, today)}{offrows}</tbody></table>
 {tips}{unv}{fchk(v, today)}{aer_blk}{arch_blk}
 <div class="verify"><p><strong>Last checked {dot(v["last_verified"])}</strong> {freshness(v["last_verified"], today)}</p><p>Source: {" · ".join(srcs)}</p>
@@ -1630,7 +1644,8 @@ ILLUSTRATIONS = [
     ("sauna", "sauna-guide", "How to sauna", "Hand-drawn sauna plan and order: lockers, shower, dry or wet sauna, optional cold plunge, rest and water. Skip it if pregnant, unwell, after drinking or with heart issues."),
 ]
 
-def ics(events, today):
+def ics(events, today, *, stamp=None):
+    stamp = stamp or dt.datetime.now(dt.timezone.utc)
     def esc(s): return s.replace("\r\n", "\n").replace("\r", "\n").replace("\\", "\\\\").replace(",", "\\,").replace(";", "\\;").replace("\n", "\\n")
     def fold(line):
         parts, part, size = [], "", 0
@@ -1645,7 +1660,7 @@ def ics(events, today):
     lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//HANSET//events//EN", "CALSCALE:GREGORIAN", "X-WR-CALNAME:HANSET Events"]
     for e in [x for x in events if x["end"] >= today]:
         status = f' · {OUTDATED}' if is_outdated(e["last_verified"], today) else ""
-        lines += ["BEGIN:VEVENT", f"UID:{e['slug']}@hanset", f"DTSTAMP:{dt.datetime.now(dt.timezone.utc):%Y%m%dT%H%M%SZ}",
+        lines += ["BEGIN:VEVENT", f"UID:{e['slug']}@hanset", f"DTSTAMP:{stamp:%Y%m%dT%H%M%SZ}",
                   f"DTSTART;VALUE=DATE:{e['start']:%Y%m%d}", f"DTEND;VALUE=DATE:{(e['end'] + dt.timedelta(days=1)):%Y%m%d}",
                   f"SUMMARY:{esc(e['title'])}", f"LOCATION:{esc(e['venue'] + ', ' + e['city'])}", f"URL:{e['url']}",
                   "DESCRIPTION:" + esc("Dates from the official page. Check fees and registration on the official page. "
@@ -1670,7 +1685,7 @@ def font_subsetting_available():
     print(f"WARN: {missing} is unavailable; skipping font subsetting (using system fonts for body text).")
     return False
 
-def subset_fonts(dist):
+def subset_fonts(dist, *, deterministic=False):
     from fontTools import subset
     from fontTools.ttLib import TTFont
 
@@ -1687,7 +1702,7 @@ def subset_fonts(dist):
     out = dist / "assets/fonts"; out.mkdir(parents=True, exist_ok=True)
     for weight, style in PRETENDARD_WEIGHTS.items():
         opts = subset.Options(); opts.flavor = "woff2"; opts.layout_features = ["*"]; opts.name_IDs = ["*"]; opts.notdef_outline = True
-        with TTFont(ROOT / f"static/fonts/Pretendard-{style}.otf") as font:
+        with TTFont(ROOT / f"static/fonts/Pretendard-{style}.otf", recalcTimestamp=not deterministic) as font:
             subsetter = subset.Subsetter(opts)
             subsetter.populate(text=chars)
             subsetter.subset(font)
@@ -1697,7 +1712,9 @@ def subset_fonts(dist):
 
 # Leak rules are deliberately a vocabulary, not a semantic claim detector. Keep
 # diagnostics separate from inspected values: only (relative path, rule) escapes.
-LEAK_SUFFIXES = {'.html', '.svg', '.css', '.js', '.json', '.xml', '.ics'}
+LEAK_SUFFIXES = {'.html', '.svg', '.css', '.js', '.json', '.xml', '.ics', '.txt', '.csv', '.md'}
+FONT_LICENSES = {'assets/fonts/Pretendard-OFL-LICENSE.txt', 'assets/fonts/Gaegu/OFL.txt',
+                 'assets/fonts/Excalifont/OFL.txt'}
 LEAK_EMAIL = re.compile(r"[\w.!#$%&'*+/=?^`{|}~\-]+@[\w\-]+(?:\.[\w\-]+)+", re.I)
 # Korean mobile, regional, internet and service numbers; overseas numbers need
 # an explicit +country/00country prefix. No generic long-number heuristic.
@@ -1719,6 +1736,13 @@ LEAK_HEALTH = re.compile(
     r'weight[\W_]*loss|los(?:e|ing)[\W_]*weight|'
     r'(?:boost\w*|enhanc\w*|improv\w*|increas\w*|strengthen\w*)[\W_]*(?:the[\W_]+)?immun\w*|'
     r'immun\w*[\W_]*(?:boost\w*|enhanc\w*|improv\w*|increas\w*)', re.I)
+LEAK_DECLINED = re.compile(r'runport|런포트|버핏|butfit[\W_]*clubhouse', re.I)
+LEAK_PRIVATE = re.compile(
+    r'\b\d{6}[- ]?[1-8]\d{6}\b|주민등록번호|여권번호|운전면허번호|'
+    r'(?:자택|개인)[\W_]*(?:주소|연락처)|생년월일\s*[:=]|'
+    r'\b(?:home address|personal contact|passport number|social security number|date of birth)\s*[:=]|'
+    r'\b(?:full name|legal name|athlete|competitor|owner|representative)\s*[:=]|'
+    r'(?:성명|운영자|담당자)\s*[:=]|\b(?:birthDate|homeAddress|nationalId)\b|\bPerson\s*["\']?\s*[,}]', re.I)
 LEAK_TRACKER = re.compile(r'google-analytics|googletagmanager|facebook\.net|doubleclick|hotjar|clarity\.ms|kakao\.com/js', re.I)
 # The legacy numeric owner reference belongs in prose, never SVG coordinates or
 # numeric code tokens. All other historical terms are retained on raw/decoded text.
@@ -1841,17 +1865,23 @@ class _LeakScanner:
         self.rules = set()
         self.seen = set()
 
-    def words(self, text, prose=True):
+    def words(self, text, prose=True, *, scan_declined=True):
         if len(text) < 4096:
-            if (text, prose) in self.seen: return
-            self.seen.add((text, prose))
+            if (text, prose, scan_declined) in self.seen: return
+            self.seen.add((text, prose, scan_declined))
         decoded = html.unescape(text) if '&' in text else text
         values = {text, decoded}
         if '%' in decoded: values.add(unquote(decoded))
         for value in values:
-            if LEAK_ADVERTISING.search(value): self.rules.add('wording.advertising')
+            if self.path not in FONT_LICENSES and LEAK_ADVERTISING.search(value): self.rules.add('wording.advertising')
             if LEAK_HEALTH.search(value): self.rules.add('wording.health')
-            if LEAK_LEGACY.search(value): self.rules.add('wording.forbidden')
+            if scan_declined and LEAK_DECLINED.search(value): self.rules.add('wording.forbidden')
+            if LEAK_PRIVATE.search(value): self.rules.add('privacy.personal')
+            if self.path in FONT_LICENSES:
+                forbidden = any(not LEAK_ADVERTISING.search(match.group()) for match in LEAK_LEGACY.finditer(value))
+            else:
+                forbidden = LEAK_LEGACY.search(value)
+            if forbidden: self.rules.add('wording.forbidden')
             if LEAK_TRACKER.search(value): self.rules.add('resource.tracker')
             if '@' in value and any(m.group().casefold() != 'hanset@soulbound.co.kr' for m in LEAK_EMAIL.finditer(value)):
                 self.rules.add('contact.email')
@@ -2024,7 +2054,7 @@ class _LeakScanner:
         walk(obj)
 
     def markup(self, text):
-        self.words(text, prose=False)
+        self.words(text, prose=False, scan_declined=False)
         entities = dict(re.findall(r'<!ENTITY\s+([\w-]+)\s+["\']([^"\']*)["\']\s*>', text, re.I))
         # Expand only bounded, internal string entities. No XML parser, DTD
         # retrieval or network entity resolution is involved.
@@ -2084,10 +2114,16 @@ class _LeakMarkup(HTMLParser):
     def handle_starttag(self, tag, attrs):
         tag = tag.rsplit(':', 1)[-1]
         s = self.scanner
-        attrs = dict(attrs)
-        for key, value in attrs.items():
+        anchor = tag == 'a' and s.path.endswith('.html')
+        s.words(tag)
+        for key, value in attrs:
+            s.words(key)
             if value is None: continue
-            s.words(value, prose=key not in self.GEOMETRY and key not in {'style'} and not key.startswith('on'))
+            inspected = value
+            if anchor and key == 'href' and runport_citation(value):
+                parsed = urlparse(value)
+                inspected = parsed._replace(netloc=LEAK_DECLINED.sub('', parsed.netloc)).geturl()
+            s.words(inspected, prose=key not in self.GEOMETRY and key not in {'style'} and not key.startswith('on'))
             if key == 'style': s.css(value)
             if key.startswith('on'): s.javascript(value)
             if key in {'src', 'poster', 'background', 'codebase', 'manifest'} or (key == 'data' and tag == 'object'):
@@ -2096,6 +2132,7 @@ class _LeakMarkup(HTMLParser):
             if key == 'ping':
                 for url in value.split(): s.url(url)
             if key == 'srcdoc': s.markup(value)
+        attrs = dict(attrs)
         if tag in {'image', 'use', 'feimage', 'base', 'script'}:
             for key in ('href', 'xlink:href'):
                 if key in attrs: s.url(attrs[key])
@@ -2121,6 +2158,7 @@ class _LeakMarkup(HTMLParser):
         self.handle_endtag(tag)
 
     def handle_endtag(self, tag):
+        self.scanner.words(tag)
         tag = tag.rsplit(':', 1)[-1]
         if tag in {'script', 'style'}: self.flush()
 
@@ -2134,6 +2172,9 @@ class _LeakMarkup(HTMLParser):
     def handle_pi(self, text):
         self.scanner.words(text)
 
+    def handle_decl(self, text):
+        self.scanner.words(text)
+
     def unknown_decl(self, text):
         self.scanner.words(text)
 
@@ -2142,7 +2183,9 @@ def leak_check(dist):
     """Inspect emitted text without network access; return safe, stable findings."""
     bad = set()
     for p in sorted(dist.rglob('*')):
-        if not p.is_file() or p.suffix.lower() not in LEAK_SUFFIXES: continue
+        if not p.is_file() or (p.suffix.lower() not in LEAK_SUFFIXES
+                               and p.name not in {'_headers', '_redirects'}):
+            continue
         rel = p.relative_to(dist).as_posix()
         scanner = _LeakScanner(rel)
         try:
@@ -2154,7 +2197,8 @@ def leak_check(dist):
         elif suffix == '.css': scanner.css(text)
         elif suffix == '.js': scanner.javascript(text)
         elif suffix == '.json': scanner.json(text)
-        else: scanner.calendar(text)
+        elif suffix == '.ics': scanner.calendar(text)
+        else: scanner.words(text)
         bad.update((rel, rule) for rule in scanner.rules)
     return sorted(bad)
 
@@ -2252,7 +2296,7 @@ def long_text_check(dist):
             if len(txt) > LONG_P_LIMIT: bad.append((rel, len(txt), txt[:60]))
     return bad
 
-def main():
+def main(*, release_date=None):
     # Intercept the old option and its argparse abbreviations before any value can be echoed.
     if any(arg.split("=", 1)[0] in ("--ads", "--ad", "--a") for arg in sys.argv[1:]):
         sys.exit("ERROR: --ads has been removed. Advertising is disabled.")
@@ -2262,7 +2306,13 @@ def main():
     ap.add_argument("--out", default=str(DIST))
     ap.add_argument("--verified-examples", action="store_true", help="preview only: render fake data from data/verified/examples")
     a = ap.parse_args()
-    today = ymd(a.today) if a.today else dt.datetime.now(ZoneInfo("Asia/Seoul")).date()
+    managed = a.release and release_date is not None
+    if managed:
+        today = dt.date.fromisoformat(release_date)
+        if release_date != today.isoformat() or (a.today and a.today != release_date):
+            sys.exit("ERROR: invalid managed release date")
+    else:
+        today = ymd(a.today) if a.today else dt.datetime.now(ZoneInfo("Asia/Seoul")).date()
     dist = Path(a.out)
     venues, events, skipped, ev_skipped = load(today)
     if a.verified_examples and a.release: sys.exit("ERROR: --verified-examples is preview-only; never with --release")
@@ -2292,7 +2342,8 @@ def main():
     shutil.copy(ROOT / "static/favicon.svg", dist / "favicon.svg")
     for _f in (ROOT / "static/root").glob("*"):  # 루트 정적 파일(구글 서치콘솔 소유확인 등; 지우지 말 것)
         if _f.is_file(): shutil.copy(_f, dist / _f.name)
-    (dist / "events.ics").write_text(ics(events, today), encoding="utf-8")
+    stamp = dt.datetime.combine(today, dt.time(), dt.timezone.utc) if managed else None
+    (dist / "events.ics").write_text(ics(events, today, stamp=stamp), encoding="utf-8")
     urls = [p for p in site.pages if p != "/404.html" and p not in site.noindex]
     if a.release:
         (dist / "robots.txt").write_text(f"User-agent: *\nAllow: /\nSitemap: {SITE_URL}/sitemap.xml\n")
@@ -2303,7 +2354,7 @@ def main():
         "  Content-Security-Policy: default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; font-src 'self'; connect-src 'none'; base-uri 'none'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'\n"
         "/assets/*\n  Cache-Control: public, max-age=86400\n/*.html\n  Cache-Control: public, max-age=0, must-revalidate\n")
     if pretendard:
-        subset_fonts(dist)
+        subset_fonts(dist, deterministic=managed)
     bad = leak_check(dist)
     if bad:
         for path, rule in bad: print(f"LEAK-CHECK FAIL: {path} [{rule}]")
@@ -2331,4 +2382,4 @@ def main():
     print("leak check OK (contacts, wording, resources, legacy terms and trackers)")
 
 if __name__ == "__main__":
-    main()
+    main(release_date=os.environ.get("HANSET_RELEASE_DATE"))
