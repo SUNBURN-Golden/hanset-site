@@ -17,7 +17,7 @@ from hanset_active.collect import runtime, scheduled
 from hanset_active.collect.change_feeds import ARTIFACTS, COMMON, canonical_bytes, sha
 from hanset_active.collect.changes import DETECTOR_VERSION
 from hanset_active.collect.config import CollectSettings
-from hanset_active.collect.daily_metrics import KEYS
+from hanset_active.collect.daily_metrics import KEYS, LEGACY_INVENTORY, LEGACY_KEYS
 from hanset_active.collect.private_io import Busy, json_bytes, lock, replace
 from hanset_active.collect.plan import assemble_targets
 from hanset_active.collect.schedules import JOBS
@@ -91,6 +91,47 @@ def checkpoint(job, slot, request=None):
 
 def fake_launch(job):
     return lambda name, slot: Wait(lambda: job.run_job(name, catchup=slot)[0])
+
+
+def test_seed_cron_races_watchdog_with_one_effective_payload(job, monkeypatch):
+    job.clock.start = at('20T11:36')
+    connect(job.metrics.active_path).close()
+    for name in ('active', 'daily_collect', 'twin'):
+        job.write_stamp(name, 'ok', job.clock.now())
+    due, entered, release = Event(), Event(), Event()
+    calls, catchups = [], []
+    slot = at('20T11:15')
+
+    def discover(*args, **kwargs):
+        calls.append('discover')
+        entered.set()
+        assert release.wait(5)
+        return {'state': 'ok', 'sources': {name: {'status': 'ok'} for name in scheduled.seeds.SOURCES}}
+
+    def launch(name, due_slot):
+        assert (name, due_slot) == ('seed_discovery', slot)
+        due.set()
+        assert entered.wait(5)
+        result = job.run_job(name, catchup=due_slot)
+        catchups.append(result)
+        return Wait(lambda: result[0])
+
+    monkeypatch.setattr(scheduled.seeds, 'discover', discover)
+    monkeypatch.setattr(job, 'start_payload', lambda name, slot, fds:
+                        Wait(lambda: int(not job.payload(name, slot, fds))))
+    with ThreadPoolExecutor(2) as workers:
+        watchdog = workers.submit(job.watchdog, launch)
+        assert due.wait(5)
+        ordinary = workers.submit(job.run_job, 'seed_discovery')
+        try:
+            watchdog.result(timeout=5)
+            assert catchups == [(scheduled.DEFERRED, 'already_running')]
+        finally:
+            release.set()
+        assert ordinary.result(timeout=5) == (0, 'complete')
+    assert calls == ['discover']
+    assert scheduled.stamp(job.stamps / 'seed_discovery.attempt') == slot
+    assert job.run_job('seed_discovery', catchup=slot) == (0, 'slot_complete')
 
 
 def test_watchdog_latest_strict_grace_and_rollover(job, monkeypatch):
@@ -381,7 +422,7 @@ def test_transfer_complete_only_after_stream_finishes(job, monkeypatch):
             'SELECT status,transfer_complete FROM request_log ORDER BY request_id')] == [(200, 0), (200, 1)]
 
 
-def test_web_reads_live_targets_and_drains_due_retries(job, monkeypatch):
+def test_web_reads_live_targets_and_drains_due_retries(job, monkeypatch, capsys):
     enable_qwen(monkeypatch)
     ready(job, monkeypatch)
     calls = []
@@ -401,14 +442,26 @@ def test_web_reads_live_targets_and_drains_due_retries(job, monkeypatch):
     path = job.settings.data_dir / 'web_targets.json'
     path.parent.mkdir()
     job.clock.start = at('20T04:15')
-    _targets(path, A, name='Seed Spa A', official_urls=[A, B, C])
+    _targets(path, A, name='Seed Spa A', venue_id='sample', venue_key='sample', official_urls=[A, B, C])
+    replace(path.parent / 'promotion_policy.json', json_bytes({'schema_version': 1, 'approvals': [approval(A)]}))
+    connect(job.metrics.active_path).close()
+    job.write_stamp('wide_collect', 'ok', at('20T03:20'))
+    job.write_stamp('active', 'ok', at('20T03:36'))
+    monkeypatch.setattr(job, 'start_payload', lambda name, slot, fds:
+                        Wait(lambda: int(not job.payload(name, slot, fds))))
+    assert job.run_job('daily_collect') == (1, 'payload_incomplete')
+    result = json.loads(capsys.readouterr().out)
+    assert result['state'] == 'partial' and result['reason'] == 'transport_retry_pending'
+    assert result['promotion'] == {'reason': 'ok', 'changed_candidates': 1}
+    assert calls == [A, B, C]
+    with closing(claim_connect(path.parent)) as db:
+        assert db.execute('SELECT qualification_basis FROM fact_candidates').fetchone()[0] == 'official'
+        assert db.execute('SELECT count(*) FROM fact_candidate_claims').fetchone()[0] == 1
     with closing(connect(job.metrics.active_path)) as active:
         guard = scheduled.RunLock(active, job.settings.active_dir, 'test', clock=job.clock)
         with guard:
-            assert not job.collect('daily_collect', at('20T04:15'), guard)
-            assert calls == [A, B, C]
             job.clock.start = at('20T05:15')
-            _targets(path, A, name='Seed Spa A', official_urls=[A, B, C, D])
+            _targets(path, A, name='Seed Spa A', venue_id='sample', venue_key='sample', official_urls=[A, B, C, D])
             assert job.collect('wide_collect', at('20T05:15'), guard)
             assert calls == [A, B, C, B, D]
     with closing(claim_connect(path.parent)) as db:
@@ -546,6 +599,11 @@ def test_metrics_cutoff_rollover_and_partial_append(job, monkeypatch):
     receipt('late', 'deployed', '20T23:17', '20T23:30', 'deployment-c')
     with closing(connect(job.metrics.active_path)) as writer, closing(claim_connect(path.parent)) as claims:
         with writer:
+            writer.execute("INSERT INTO run_checkpoints(checkpoint_id,cursor) VALUES ('seed_freeze','current')")
+            for freeze in ('current', 'prior'):
+                writer.execute('INSERT INTO seed_domains(seed_domain_id,seed_id,domain) VALUES (?,?,?)',
+                               (freeze, freeze, 'sample.test'))
+                writer.execute('INSERT INTO seed_venues(seed_venue_id,seed_id) VALUES (?,?)', (freeze, freeze))
             for cid, first in (('old', at('19T12:00')), ('new', at('20T09:00'))):
                 writer.execute("""INSERT INTO seed_candidates
                     (id,name,category,address,sido,sigungu,source_kind,source_url,first_seen,last_seen,status,
@@ -555,6 +613,12 @@ def test_metrics_cutoff_rollover_and_partial_append(job, monkeypatch):
                                   VALUES (?, 'example.test',?,200,'body',5,?)""",
                                [(A, at('20T20:00').isoformat(), 1), (B, at('20T20:00').isoformat(), 0),
                                 (C, at('20T23:30').isoformat(), 1)])
+            writer.executemany('INSERT INTO request_log(ts,kind,adapter) VALUES (?,?,?)', [
+                (at('20T22:00').isoformat(), 'api', 'seeds:tavily'),
+                (at('20T22:00').isoformat(), 'api', None),
+                (at('20T22:00').isoformat(), 'body', 'seeds:tavily'),
+                (at('20T23:30').isoformat(), 'api', 'seeds:tavily'),
+            ])
         from hanset_active.network_store import open_audit
         with closing(open_audit(job.settings.active_dir)) as fallback, fallback:
             fallback.executemany('''INSERT INTO request_log(url,domain,ts,status,kind,bytes,transfer_complete)
@@ -569,6 +633,12 @@ def test_metrics_cutoff_rollover_and_partial_append(job, monkeypatch):
                    **({'source_type': 'own_site', 'requested_url': A, 'final_url': A,
                        'authorization': source_authorization(target, A, A, testing=True),
                        'domains': target['domains'], 'testing': True} if url == A else {}))
+        from hanset_active.collect.service import run_promote
+        assert run_promote(job.settings, policy_path=policy, clock=job.clock)['changed_candidates'] == 1
+        empty = path.parent / 'empty-policy.json'
+        replace(empty, json_bytes({'schema_version': 1, 'approvals': []}))
+        assert run_promote(job.settings, policy_path=empty, clock=job.clock)['changed_candidates'] == 1
+        assert claims.execute('SELECT review_state FROM fact_candidates').fetchone()[0] == 'evidence_hold'
         with closing(runtime.connect(job.settings.active_dir)) as models:
             attempt = runtime.dispatched(models, 'deepseek', 'sample', 'probe', job.clock, 1, 1)
             runtime.finished(models, attempt, 'model_timeout')
@@ -592,7 +662,8 @@ def test_metrics_cutoff_rollover_and_partial_append(job, monkeypatch):
         assert report == {'date': '2026-11-20', 'seeds_total': 2, 'seeds_new': 1, 'targets': 1,
                           'pages_fetched': 2, 'claims_new': 3, 'facts_total': 1, 'unverified_total': 2,
                           'deploys': 1, 'deploy_failures': 1, 'provider_calls': {'deepseek': 1, 'qwen': 1},
-                          'tavily_used': 3}
+                          'tavily_used': 3, 'seed_domains_total': 1, 'seed_venues_total': 1,
+                          'fact_candidates_total': 1, 'seed_tavily_calls': 1}
         line = json_bytes(report)
         replace(job.metrics.journal, json_bytes({'offset': 0, 'line': line.decode(),
                                                  'prefix_sha256': hashlib.sha256(b'').hexdigest()}))
@@ -623,6 +694,27 @@ def test_metrics_carries_sleep_days_and_a_nonzero_unobserved_bucket_can_retry(jo
     assert [line['date'] for line in lines] == ['2026-11-20', '2026-11-22']
     assert lines[1]['tavily_used'] == lines[1]['seeds_total'] == 0
     assert 'metrics_tavily_cutoff_unknown 2026-11-21' in capsys.readouterr().err
+
+
+def test_metrics_recovers_legacy_observations_and_pending_lines(job):
+    day = at('20T23:29').date()
+    replace(job.metrics.initialized, json_bytes({'date': day.isoformat()}))
+    observed = {**dict.fromkeys(LEGACY_INVENTORY, 0), 'observed_at': at('20T23:29').isoformat()}
+    replace(job.metrics._path(day), json_bytes(observed))
+    legacy = job.metrics._report(day, day)
+    assert legacy.keys() == LEGACY_KEYS
+    assert not job.metrics._valid_line({**legacy, 'seed_tavily_calls': 1})
+    line = json_bytes(legacy)
+    replace(job.metrics.journal, json_bytes({'offset': 0, 'line': line.decode(),
+                                             'prefix_sha256': hashlib.sha256(b'').hexdigest()}))
+    replace(job.metrics.output, line[:37])
+    job.clock.start = at('21T00:05')
+    job.metrics.run()
+    assert not job.metrics.journal.exists() and job.metrics.output.read_bytes() == line
+    job.clock.start = at('21T23:30')
+    job.metrics.run()
+    old, new = job.metrics.output.read_bytes().splitlines(keepends=True)
+    assert old == line and json.loads(new).keys() == KEYS
 
 
 def test_guarded_active_persists_only_validated_evidence_and_twin_holds_missing(job, monkeypatch):
@@ -696,3 +788,47 @@ def test_daily_checkpoint_and_signal_only_on_opt_in(job, monkeypatch, enabled):
         assert json.loads(signal.read_text()) == row
     else:
         assert not job.outbox.requests.exists()
+
+
+def test_failed_promotion_rolls_back_and_preserves_scheduled_handoff(job, monkeypatch, capsys):
+    from hanset_active.collect import service, store
+
+    ready(job, monkeypatch)
+    enable_qwen(monkeypatch)
+    job.clock.start = at('20T05:16')
+    job.write_stamp('daily_collect', 'ok', at('20T04:16'))
+    job.write_stamp('active', 'ok', at('20T04:36'))
+    connect(job.metrics.active_path).close()
+    path = job.settings.data_dir / 'web_targets.json'
+    path.parent.mkdir()
+    _targets(path, A, venue_id='sample', venue_key='sample')
+    replace(path.parent / 'promotion_policy.json', json_bytes({'schema_version': 1, 'approvals': [approval(A)]}))
+    monkeypatch.setattr(requests.Session, 'get', lambda *_args, **_kwargs: response(body=_page()))
+    real_web = scheduled.run_web
+    monkeypatch.setattr(scheduled, 'run_web', lambda *args, **kwargs: real_web(
+        *args, **kwargs, qwen_session=WebModel(lambda items, _: _hours_answer(items))))
+    export = export_fixture(job.settings, [sha(b'fixture-change')])
+    monkeypatch.setattr(service, '_change_cycle', lambda *args, **kwargs: {'reason': 'ok', 'export': export})
+    persist = store.persist_candidates
+
+    def fail(db, candidates, *, at):
+        with pytest.raises(Busy), lock(job.settings.data_dir / 'daemon.lock'):
+            pytest.fail('scheduled promotion lost its inherited lock')
+        assert persist(db, candidates, at=at) == 1
+        raise RuntimeError('fixture private failure')
+
+    monkeypatch.setattr(store, 'persist_candidates', fail)
+    monkeypatch.setattr(job, 'start_payload', lambda name, slot, fds:
+                        Wait(lambda: int(not job.payload(name, slot, fds))))
+    assert job.run_job('wide_collect') == (0, 'complete')
+    output = capsys.readouterr().out
+    assert 'fixture private failure' not in output
+    result = json.loads(output)
+    assert result['success'] and result['collected']
+    assert result['promotion'] == {'reason': 'promotion_write_failed'}
+    signal = json.loads((job.stamps / 'wide_collect.publication.json').read_text())
+    assert (job.outbox.requests / (signal['request_id'] + '.json')).is_file()
+    with closing(claim_connect(job.settings.data_dir)) as db:
+        assert db.execute('SELECT count(*) FROM claims').fetchone()[0] == 1
+        assert db.execute('SELECT count(*) FROM fact_candidates').fetchone()[0] == 0
+        assert db.execute('SELECT count(*) FROM fact_candidate_claims').fetchone()[0] == 0

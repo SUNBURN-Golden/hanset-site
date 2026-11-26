@@ -26,10 +26,11 @@ _TOPICS = ('사우나 찜질방', '부티크 사우나 · 호텔 사우나', '�
 
 
 class TavilyRun:
-    def __init__(self, max_calls=None, heartbeat=None):
+    def __init__(self, max_calls=None, heartbeat=None, on_dispatch=None):
         self.max_calls = max_calls
         self.calls = 0
         self.heartbeat = heartbeat
+        self.on_dispatch = on_dispatch
         self.reason = ''
 
     def search_allowed(self):
@@ -38,6 +39,8 @@ class TavilyRun:
     def search_dispatch(self):
         if self.heartbeat is not None:
             self.heartbeat()
+        if self.on_dispatch is not None:
+            self.on_dispatch()
         self.calls += 1
 
     def stop_on(self, reason):
@@ -47,7 +50,17 @@ class TavilyRun:
 
 def _tavily(web, max_calls, transport):
     store, db, clock = web.store, web.db, web.clock
-    run = TavilyRun(max_calls, heartbeat=web.heartbeat)
+    request_id = None
+
+    def record_dispatch():
+        nonlocal request_id
+        with db:
+            cursor = db.execute("""INSERT INTO request_log(url,domain,ts,kind,adapter)
+                VALUES (?,?,?,'api','seeds:tavily')""",
+                (Tavily.endpoint, registrable_domain(Tavily.endpoint), kst_now(clock).isoformat()))
+        request_id = cursor.lastrowid
+
+    run = TavilyRun(max_calls, heartbeat=web.heartbeat, on_dispatch=record_dispatch)
     provider = Tavily(web.getter('tavily'), db, clock=clock, context=run,
                       transport=transport, public_source=True, host_dir=web.fetcher.settings.data_dir)
     counts = Counter()
@@ -78,13 +91,11 @@ def _tavily(web, max_calls, transport):
             query = ' '.join(part for part in (row['name'], row['sido'], row['sigungu'], '홈페이지') if part)
         else:
             query = queries[offset]
-        before = run.calls
+        request_id = None
         hits = provider.search(query)
-        if run.calls > before:
+        if request_id is not None:
             with db:
-                db.execute("INSERT INTO request_log(url,domain,ts,kind,outcome,adapter) VALUES (?,?,?,'api',?,'seeds:tavily')",
-                           (provider.endpoint, registrable_domain(provider.endpoint), kst_now(clock).isoformat(),
-                            provider.reason))
+                db.execute('UPDATE request_log SET outcome=? WHERE request_id=?', (provider.reason, request_id))
         if provider.reason not in ('ok', 'tavily_invalid_query'):
             run.stop_on(provider.reason)
             break

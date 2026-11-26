@@ -572,10 +572,13 @@ It runs offline:
 HANSET_IG_DIR=/workspace/hanset-data/ig python3 -m hanset_active collect report
 ```
 
-The explicit `collect promote --policy /outside-checkout/policy.json` workflow
-records an internal fact when exact approved official-domain evidence qualifies
-or when two approved independent sources agree. Unqualified source claims
-show `미확인`. Site publication still requires official-source confirmation.
+Manual and scheduled web collection reassess committed claims under the
+collector lock, including after a partial run or when all web work has already
+completed. The default policy is `HANSET_IG_DIR/promotion_policy.json`, with an
+optional override through `HANSET_COLLECT_PROMOTION_POLICY`. Approved official
+evidence or agreement between two approved independent sources can qualify an
+internal fact candidate. Unqualified source claims show `미확인`. Site
+publication still requires official-source confirmation.
 Event dates await the operator-managed event and edition registry.
 [Source claim promotion](SOURCE_CLAIM_PROMOTION.md) · [Event registry issue](https://github.com/SUNBURN-Golden/hanset-site/issues/129)
 

@@ -7,12 +7,26 @@ from hanset_active.db import deterministic_id
 from hanset_active.util.timeutil import KST
 
 from .normalize import AVAILABILITY_FIELDS, LEGACY_VERSION, VERSION, normalize_value, stable_json
+from .plan import identity
 from .promotion_policy import approval_for, independence
 from .safety import evidence_rejection
 from .store import validated_authorization
+from .targets import source_authorization
 
 _PROVENANCE = {'web': ('web_verbatim', 'page_span', 1),
                'instagram': ('operator_summary', 'summary_span', 0)}
+
+
+def revalidate_bindings(claims, authorization, *, testing=False):
+    """Apply the current target authorization to assessment copies of claims."""
+    targets = {identity(row): row for row in authorization}
+    for claim in claims:
+        binding = claim['source_authorization']
+        if binding:
+            target = targets.get(identity(claim))
+            if target is None or source_authorization(
+                    target, claim['source_url'], claim['final_url'], testing=testing) != binding:
+                claim['binding_current'] = 0
 
 
 def timestamp(value):

@@ -15,16 +15,17 @@ from . import CollectError
 from .handoff import Outbox, kst_timestamp
 from .plan import assemble_targets, identity
 from .private_io import Busy, json_bytes, lock, read, read_json, replace, sync_directory
-from .promotion import assess
-from .promotion_policy import load_policy
+from .promotion import assess, revalidate_bindings
+from .promotion_policy import configured_policy, load_policy
 from .store import read_claims
-from .targets import source_authorization
 
 CLOSE = time(23, 30)
 PROVIDERS = ('deepseek', 'qwen')
-AGGREGATES = {'seeds_total', 'targets', 'facts_total', 'unverified_total'}
-COUNTS = AGGREGATES | {'seeds_new', 'pages_fetched', 'claims_new', 'deploys', 'deploy_failures', 'tavily_used'}
-KEYS = COUNTS | {'date', 'provider_calls'}
+LEGACY_INVENTORY = {'seeds_total', 'targets', 'facts_total', 'unverified_total', 'tavily_used'}
+INVENTORY = LEGACY_INVENTORY | {'seed_domains_total', 'seed_venues_total', 'fact_candidates_total'}
+EVENTS = {'date', 'provider_calls', 'seeds_new', 'pages_fetched', 'claims_new', 'deploys', 'deploy_failures'}
+LEGACY_KEYS = LEGACY_INVENTORY | EVENTS
+KEYS = INVENTORY | EVENTS | {'seed_tavily_calls'}
 SOURCE_ERRORS = (OSError, ValueError, TypeError, KeyError, AttributeError, sqlite3.Error, CollectError, BudgetUnavailable)
 
 
@@ -59,12 +60,23 @@ def has_table(db, table):
         'SELECT 1 FROM sqlite_master WHERE type=? AND name=?', ('table', table)).fetchone() is not None
 
 
+def request_log_has(db, column):
+    return has_table(db, 'request_log') and any(
+        row['name'] == column for row in db.execute('PRAGMA table_info(request_log)'))
+
+
 def fetched_pages(db, bounds):
-    if has_table(db, 'request_log') and any(
-            row['name'] == 'transfer_complete' for row in db.execute('PRAGMA table_info(request_log)')):
+    if request_log_has(db, 'transfer_complete'):
         return db.execute('''SELECT count(*) FROM request_log WHERE ts>=? AND ts<?
             AND kind='body' AND status BETWEEN 200 AND 299 AND bytes>0 AND transfer_complete=1''', bounds).fetchone()[0]
     return 0
+
+
+def frozen_seed_total(db, table):
+    if not has_table(db, table) or not has_table(db, 'run_checkpoints'):
+        return 0
+    return db.execute(f'''SELECT count(*) FROM {table} WHERE seed_id=(
+        SELECT cursor FROM run_checkpoints WHERE checkpoint_id='seed_freeze')''').fetchone()[0]
 
 
 def counts_valid(row, keys):
@@ -162,24 +174,18 @@ class DailyMetrics:
         assembled = assemble_targets(self.settings, **options)
         if assembled['targets_status'] == 'invalid' or assembled['db_status'] == 'unreadable':
             raise ValueError('authorization_unreadable')
-        targets = {identity(row): row for row in assembled['authorization']}
-        policy_path = os.environ.get('HANSET_COLLECT_PROMOTION_POLICY')
-        if not policy_path:
-            path = self.settings.data_dir / 'promotion_policy.json'
-            policy_path = path if path.exists() or path.is_symlink() else None
-        policy = load_policy(policy_path, today=day)
+        authorization = assembled['authorization']
+        policy = configured_policy(self.settings, today=day) or load_policy()
         with ledger(self.active_path) as active:
             seeds = (active.execute('SELECT count(DISTINCT id) FROM seed_candidates').fetchone()[0]
                      if has_table(active, 'seed_candidates') else 0)
+            seed_domains = frozen_seed_total(active, 'seed_domains')
+            seed_venues = frozen_seed_total(active, 'seed_venues')
         with ledger(self.claim_path) as claims:
             observed = read_claims(claims)
-        for item in observed:
-            if item['source_authorization']:
-                target = targets.get(identity(item))
-                if not target or source_authorization(
-                        target, item['source_url'], item['final_url'],
-                        testing=self.testing) != item['source_authorization']:
-                    item['binding_current'] = 0
+            candidates = (claims.execute('SELECT count(*) FROM fact_candidates').fetchone()[0]
+                          if has_table(claims, 'fact_candidates') else 0)
+        revalidate_bindings(observed, authorization, testing=self.testing)
         facts = assess(observed, [], policy, now=now)['facts']
         supporting = {cid for row in facts for cid in row['supporting_claim_ids']}
         unverified = {item['claim_id'] for item in observed if item['status'] == 'source_claim'} - supporting
@@ -187,8 +193,11 @@ class DailyMetrics:
         taken_at = kst_now(self.clock)
         if taken_at.date() == day and taken_at < cutoff(day):
             replace(self._path(day), json_bytes({
-                'observed_at': taken_at.isoformat(), 'seeds_total': seeds, 'targets': len(targets),
+                'observed_at': taken_at.isoformat(), 'seeds_total': seeds,
+                'targets': len({identity(row) for row in authorization}),
                 'facts_total': len(facts), 'unverified_total': len(unverified), 'tavily_used': tavily,
+                'seed_domains_total': seed_domains, 'seed_venues_total': seed_venues,
+                'fact_candidates_total': candidates,
             }))
 
     def _observation(self, day, first):
@@ -197,8 +206,9 @@ class DailyMetrics:
             try:
                 row = read_json(self._path(observed_day))
                 taken_at = kst_timestamp(row['observed_at'])
+                keys = row.keys() - {'observed_at'}
                 if (taken_at.date() != observed_day or taken_at >= cutoff(observed_day)
-                        or not counts_valid(row, AGGREGATES | {'tavily_used'})):
+                        or keys not in (LEGACY_INVENTORY, INVENTORY) or not counts_valid(row, keys)):
                     raise ValueError('observation_invalid')
             except FileNotFoundError:
                 continue
@@ -208,7 +218,7 @@ class DailyMetrics:
                 raise
             if offset and self._tavily(day):
                 raise TavilyCutoffUnknown
-            return {**{k: row[k] for k in AGGREGATES}, 'tavily_used': 0 if offset else row['tavily_used']}
+            return {**{key: row[key] for key in keys}, 'tavily_used': 0 if offset else row['tavily_used']}
         raise ValueError('observation_missing')
 
     def _report(self, day, first):
@@ -221,6 +231,10 @@ class DailyMetrics:
                 seeds_new = active.execute('''SELECT count(DISTINCT id) FROM seed_candidates
                      WHERE first_seen>=? AND first_seen<?''', bounds).fetchone()[0]
             pages = fetched_pages(active, bounds)
+            if observed.keys() == INVENTORY:
+                observed['seed_tavily_calls'] = (active.execute("""SELECT count(*) FROM request_log
+                    WHERE ts>=? AND ts<? AND kind='api' AND adapter='seeds:tavily'""", bounds).fetchone()[0]
+                    if request_log_has(active, 'adapter') else 0)
         # Each Fetcher has one audit destination. Policy timing in the fallback
         # ledger has its own tables and contributes no duplicate request rows.
         with ledger(self.settings.active_dir / AUDIT_FILE) as fallback:
@@ -243,12 +257,12 @@ class DailyMetrics:
 
     @staticmethod
     def _valid_line(row):
-        return (isinstance(row, dict) and row.keys() == KEYS
+        return (isinstance(row, dict) and row.keys() in (LEGACY_KEYS, KEYS)
                 and date.fromisoformat(row['date']).isoformat() == row['date']
                 and isinstance(row['provider_calls'], dict)
                 and set(row['provider_calls']) == set(PROVIDERS)
                 and counts_valid(row['provider_calls'], PROVIDERS)
-                and counts_valid(row, COUNTS))
+                and counts_valid(row, row.keys() - {'date', 'provider_calls'}))
 
     def _recover_append(self):
         try:

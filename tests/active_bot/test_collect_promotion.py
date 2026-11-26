@@ -1,4 +1,5 @@
 """Synthetic external databases only. No sources, models or site output."""
+from contextlib import closing
 import json
 import os
 import sqlite3
@@ -12,8 +13,9 @@ import pytest
 from hanset_active.collect import CollectError
 from hanset_active.collect.config import CollectSettings
 from hanset_active.collect.promotion_policy import load_policy
-from hanset_active.collect.service import run_promote, run_report
+from hanset_active.collect.service import run_promote, run_report, run_web
 from hanset_active.collect.store import connect, digest, record
+from hanset_active.db import connect as active_connect
 from hanset_active.util.timeutil import FakeClock
 from tests.active_bot.test_collect_provenance import OLD_SCHEMA
 
@@ -25,7 +27,7 @@ HOURS = {'hours': '09:00-17:00', 'scope': 'weekday'}
 
 @pytest.fixture
 def setup(tmp_path, monkeypatch):
-    for name in ('DEEPSEEK_API_KEY', 'TAVILY_API_KEY', 'HANSET_DEEPSEEK_MODEL'):
+    for name in ('DEEPSEEK_API_KEY', 'TAVILY_API_KEY', 'HANSET_DEEPSEEK_MODEL', 'HANSET_COLLECT_PROMOTION_POLICY'):
         monkeypatch.delenv(name, raising=False)
     settings = CollectSettings(data_dir=tmp_path / 'ig', active_dir=tmp_path / 'active', twin_dir=tmp_path / 'twin')
     clock = FakeClock(datetime.fromisoformat('2026-11-10T12:00:00+09:00'))
@@ -164,6 +166,11 @@ def test_duplicate_or_unapproved_sources_cannot_vote_twice(setup, variant):
     result = run_promote(settings, policy_path=policy(settings, *rows), clock=clock)
     assert result['state'] == 'ok' and result['fact_candidates'] == []
     assert len(result['claims']) == 2
+    active_connect(settings.active_dir / 'active.sqlite3').close()
+    (settings.data_dir / 'promotion_policy.json').write_bytes(policy(settings, *rows).read_bytes())
+    result = run_web(settings, clock=clock, testing=True)
+    assert result['state'] == 'no_targets' and result['promotion'] == {'reason': 'ok', 'changed_candidates': 0}
+    assert persisted(settings)['fact_candidates'] == []
 
 
 def test_conflicts_keep_revisions_and_rank_observed_instants_and_ties(setup):
@@ -227,8 +234,10 @@ def test_legacy_readonly_migration_and_nulls_untouched(setup):
     assert db.execute('SELECT sql FROM sqlite_master ORDER BY name').fetchall() == schema
     db.close()
     add(settings, B)
-    agreement = run_promote(settings, policy_path=path, clock=clock)
-    assert agreement['fact_candidates'] == [] and agreement['conflicts'] == []
+    active_connect(settings.active_dir / 'active.sqlite3').close()
+    (settings.data_dir / 'promotion_policy.json').write_bytes(path.read_bytes())
+    agreement = run_web(settings, clock=clock, testing=True)
+    assert agreement['promotion'] == {'reason': 'ok', 'changed_candidates': 0}
     add(settings, C, value={**HOURS, 'hours': '10:00-18:00'})
     promoted = run_promote(settings, policy_path=path, clock=clock)
     assert promoted['fact_candidates'] == [] and promoted['conflicts'][0]['state'] == '확인 필요'
@@ -413,7 +422,6 @@ def test_cli_dry_run_and_report_without_credentials_or_network(setup):
 
 @pytest.mark.parametrize('same_content', (True, False))
 def test_guarded_final_domain_official_qualification_and_rebinding(setup, monkeypatch, same_content):
-    from hanset_active.collect.service import run_web
     from hanset_active.fetcher import FetchResult
     from tests.active_bot.test_collect_deepseek import enable_qwen
     from tests.active_bot.test_collect_web import WebModel, _hours_answer
@@ -458,6 +466,87 @@ def test_guarded_final_domain_official_qualification_and_rebinding(setup, monkey
     assert held['fact_candidates'][0]['review_state'] == 'evidence_hold'
     original = next(item for item in held['claims'] if item['claim_id'] == claim['claim_id'])
     assert original['seen_at'] == claim['seen_at']
+
+
+def test_already_complete_web_recovers_agreement_and_newer_conflict(setup, monkeypatch):
+    from hanset_active.fetcher import FetchResult
+    from tests.active_bot.test_collect_web import WebModel, _hours_answer, _page, _targets, enable_qwen
+
+    settings, clock = setup
+    active_connect(settings.active_dir / 'active.sqlite3').close()
+    add(settings, A)
+    add(settings, B)
+    enable_qwen(monkeypatch)
+    _targets(settings.data_dir / 'web_targets.json', C, venue_id='another', venue_key='another')
+    body = _page().encode()
+    monkeypatch.setattr('hanset_active.collect.service.Fetcher.fetch', lambda self, url, **kwargs:
+                        FetchResult(url, 'ok', status=200, content=body, content_type='text/html'))
+    answer = WebModel(lambda items, _: _hours_answer(items))
+
+    def web():
+        return run_web(settings, clock=clock, qwen_session=answer, testing=True)
+
+    assert web()['promotion'] == {'reason': 'promotion_policy_absent'}
+    default = settings.data_dir / 'promotion_policy.json'
+    default.write_text('fixture-private-invalid-policy')
+    assert web()['promotion'] == {'reason': 'promotion_policy_invalid'}
+    assert persisted(settings)['fact_candidates'] == []
+    path = policy(settings, approval(A), approval(B))
+    monkeypatch.setenv('HANSET_COLLECT_PROMOTION_POLICY', str(path))
+    recovered = web()
+    assert recovered['state'] == 'already_complete'
+    assert recovered['promotion'] == {'reason': 'ok', 'changed_candidates': 1}
+    snapshot = persisted(settings)
+    assert len(snapshot['fact_candidate_claims']) == 2
+    assert web()['promotion'] == {'reason': 'ok', 'changed_candidates': 0}
+    assert persisted(settings) == snapshot and len(answer.calls) == 1
+
+    later = add(settings, B, value={**HOURS, 'hours': '10:00-18:00'}, seen='2026-11-10T10:00:00+09:00')
+    assert web()['promotion'] == {'reason': 'ok', 'changed_candidates': 1}
+    report = run_report(settings, policy_path=path, clock=clock)
+    conflict, = report['conflicts']
+    assert conflict['state'] == '확인 필요' and conflict['newest_claim_ids'] == [later]
+    assert {value['hours'] for value in conflict['values']} == {'09:00-17:00', '10:00-18:00'}
+    assert report['facts'] == [] and persisted(settings)['fact_candidates'][0][9] == 'needs_confirmation'
+    policy(settings)
+    assert web()['promotion'] == {'reason': 'ok', 'changed_candidates': 1}
+    assert persisted(settings)['fact_candidates'][0][9] == 'evidence_hold'
+
+
+def test_web_checks_current_official_binding_without_relabeling_or_using_adhoc_targets(setup, monkeypatch):
+    from hanset_active.collect.plan import assemble_targets
+    from hanset_active.collect.targets import source_authorization
+    from hanset_active.fetcher import FetchResult
+    from tests.active_bot.test_collect_web import _targets
+
+    settings, clock = setup
+    active_connect(settings.active_dir / 'active.sqlite3').close()
+    settings.data_dir.mkdir()
+    default = settings.data_dir / 'web_targets.json'
+    _targets(default, A, venue_id='sample', venue_key='sample')
+    target, = assemble_targets(settings, now=clock.now(), testing=True)['authorization']
+    with closing(connect(settings.data_dir)) as db:
+        record(db, kind='web', url=A, text_hash=digest(A), disposition='applied', venue_id='sample',
+               venue_key='sample', seen_at=SEEN, claims=[{'field': 'hours', 'value': HOURS,
+                                                         'quote': 'Sample evidence', 'rule_id': 'sample.v1'}],
+               source_type='own_site', requested_url=A, final_url=A, domains=target['domains'],
+               authorization=source_authorization(target, A, testing=True), testing=True)
+    (default.parent / 'promotion_policy.json').write_bytes(policy(settings, approval(A)).read_bytes())
+    monkeypatch.setattr('hanset_active.collect.service.Fetcher.fetch', lambda self, url, **kwargs:
+                        FetchResult(url, 'forbidden', status=403))
+    assert run_web(settings, clock=clock, testing=True)['promotion'] == {'reason': 'ok', 'changed_candidates': 1}
+    before = persisted(settings)
+    adhoc = default.with_name('adhoc.json')
+    adhoc.write_text('{"schema_version": 1, "targets": []}')
+    assert run_web(settings, targets_path=adhoc, clock=clock, testing=True)['promotion'] == {
+        'reason': 'promotion_adhoc_targets'}
+    assert persisted(settings) == before
+    default.write_bytes(adhoc.read_bytes())
+    assert run_web(settings, clock=clock, testing=True)['promotion'] == {'reason': 'ok', 'changed_candidates': 1}
+    after = persisted(settings)
+    assert after['fact_candidates'][0][9] == 'evidence_hold'
+    assert after['claims'] == before['claims'] and after['receipts'] == before['receipts']
+    assert after['fact_candidate_claims'] == before['fact_candidate_claims']
 
 
 def test_rules_only_claim_requires_model_confirmation(setup):

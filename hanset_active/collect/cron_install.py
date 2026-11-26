@@ -157,6 +157,21 @@ def proposed(table, uninstall, *, daily_publish=False):
     return b''.join(lines)
 
 
+def seed_only_table(table):
+    entry = owned_entries()['seed_discovery']
+    lines = []
+    for line in lf_lines(table):
+        command = owned_command(line)
+        if command is not None and job_name(command) == 'seed_discovery':
+            if entry:
+                lines.append(entry)
+                entry = b''
+        else:
+            lines.append(line)
+    separator = b'\n' if entry and table and not table.endswith(b'\n') else b''
+    return b''.join(lines) + separator + entry
+
+
 def lf_lines(table):
     *lines, last = table.split(b'\n')
     return [line + b'\n' for line in lines] + ([last] if last else [])
@@ -185,7 +200,7 @@ def scheduler_default():
     return os.environ.get('HANSET_CRON_TIMEZONE')
 
 
-def timezone_conflict(table, default):
+def timezone_conflict(table, default, *, seed_only=False):
     zone = default
     for line in lf_lines(table):
         if ZONE_LINE.match(line):
@@ -193,6 +208,10 @@ def timezone_conflict(table, default):
             zone = next((value.decode('ascii', 'replace') for value in match.groups() if value is not None), '') if match else None
         command = owned_command(line)
         if default not in SEOUL or zone not in SEOUL:
+            if seed_only:
+                if command is not None and job_name(command) == 'seed_discovery':
+                    return 'seed_discovery'
+                continue
             if command is not None:
                 return job_name(command) or 'managed_job'
             if line.rstrip(b'\r\n').endswith(DAILY_TAG) and daily_entry(line, True) == line:
@@ -221,7 +240,10 @@ def main(argv=None, *, data_root=DATA):
     parser.add_argument('--dry-run', action='store_true')
     parser.add_argument('--uninstall', action='store_true')
     parser.add_argument('--daily-publish', action='store_true')
+    parser.add_argument('--seed-only', action='store_true', help='install only the managed seed discovery entry')
     args = parser.parse_args(argv)
+    if args.seed_only and (args.uninstall or args.daily_publish):
+        parser.error('--seed-only cannot be combined with --uninstall or --daily-publish')
     env = {**os.environ, 'LC_ALL': 'C'}
     try:
         current = subprocess.run(['crontab', '-l'], capture_output=True, env=env, check=False)
@@ -232,20 +254,22 @@ def main(argv=None, *, data_root=DATA):
         if (current.returncode != 1 or current.stdout or
                 not re.fullmatch(rb'(?:crontab: )?no crontab for [^\r\n]+\n?', current.stderr)):
             return diagnostic('crontab_read_failed')
-    desired = proposed(current.stdout, args.uninstall, daily_publish=args.daily_publish)
+    desired = (seed_only_table(current.stdout) if args.seed_only else
+               proposed(current.stdout, args.uninstall, daily_publish=args.daily_publish))
     if args.dry_run:
         show_diff(current.stdout, desired)
     if not args.uninstall:
-        conflict = timezone_conflict(desired, scheduler_default())
-        try:
-            ready = Outbox(outside(Path(data_root))).ready()
-        except (OSError, CollectError):
-            ready = False
+        conflict = timezone_conflict(desired, scheduler_default(), seed_only=args.seed_only)
         if conflict:
             diagnostic('scheduler_timezone_unverified_or_conflicting ' + conflict)
-        if not ready:
-            diagnostic('publication_readiness_required')
-        if conflict or not ready:
+        if not args.seed_only:
+            try:
+                ready = Outbox(outside(Path(data_root))).ready()
+            except (OSError, CollectError):
+                ready = False
+            if not ready:
+                return diagnostic('publication_readiness_required')
+        if conflict:
             return 1
     if not args.dry_run and desired != current.stdout:
         try:

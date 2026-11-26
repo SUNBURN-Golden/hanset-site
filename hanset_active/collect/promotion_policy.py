@@ -1,6 +1,7 @@
 """Bounded, local operator approvals; no DNS, fetches or inferred official trust."""
 import hashlib
 import json
+import os
 import re
 from datetime import date
 from pathlib import Path
@@ -103,8 +104,23 @@ def load_policy(path=None, *, today=None):
             approvals.append({**row, 'source_url': url})
         approvals.sort(key=stable_json)
         return {'approvals': approvals, 'fingerprint': hashlib.sha256(stable_json(approvals).encode()).hexdigest()}
-    except (OSError, UnicodeError, ValueError, TypeError, KeyError, CollectError):
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError, RecursionError, CollectError):
         raise CollectError('promotion_policy_invalid') from None
+
+
+def configured_policy(settings, *, today):
+    """Return None for a missing default and distinguish it from an empty policy."""
+    override = os.environ.get('HANSET_COLLECT_PROMOTION_POLICY')
+    if override:
+        return load_policy(override, today=today)
+    path = settings.data_dir / 'promotion_policy.json'
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise CollectError('promotion_policy_invalid') from None
+    return load_policy(path, today=today)
 
 
 def approval_for(claim, policy):

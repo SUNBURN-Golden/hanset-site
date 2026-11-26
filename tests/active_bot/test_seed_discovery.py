@@ -2,6 +2,7 @@
 from collections import Counter
 from contextlib import closing
 from dataclasses import replace
+from datetime import datetime
 import json
 import multiprocessing
 from pathlib import Path
@@ -297,6 +298,62 @@ def test_tavily_resolves_public_sources_and_respects_quota(state, monkeypatch):
     assert db.execute("SELECT count(*) FROM request_log WHERE outcome='tavily_provider_quota'").fetchone()[0] == 1
     assert budget.availability(clock=clock).snapshot.used == 3
     assert invoke(state, ['tavily'], max_calls=0, tavily_transport=quota)['sources']['tavily']['calls'] == 0
+
+
+def test_scheduled_seed_entry_persists_only_in_scope_results(state, tmp_path, monkeypatch):
+    from hanset_active.collect.config import CollectSettings
+    from hanset_active.collect.scheduled import Scheduled, stamp
+    from hanset_active.collect.schedules import JOBS
+
+    settings, clock, db = state
+    clock.start = datetime.fromisoformat('2026-11-20T11:16:00+09:00')
+    collector = CollectSettings(tmp_path / 'ig', settings.data_dir, tmp_path / 'twin')
+    monkeypatch.setenv('HANSET_IG_DIR', str(collector.data_dir))
+    monkeypatch.setenv('TAVILY_API_KEY', 'fixture-tavily-marker')
+    monkeypatch.setattr(seeds, '_REGIONS', ('서울',))
+    monkeypatch.setattr(seeds, '_TOPICS', ('사우나',))
+    outside = 'https://other-spa.test/sauna'
+    blocked = 'https://blocked-spa.test/sauna'
+    calls = transport(monkeypatch, {_OWN: page('Seed Spa A', _ADDRESS),
+                                    outside: page('Other Spa', 'Paris'), blocked: response(403)})
+
+    def post(_session, url, **kwargs):
+        assert url == tavily.ENDPOINT and kwargs['headers']['User-Agent'] == USER_AGENT
+        return Response({'results': [{'url': result} for result in (_OWN, outside, blocked)]})
+
+    monkeypatch.setattr(requests.Session, 'post', post)
+    scheduled = Scheduled(tmp_path, collector, clock, testing=True)
+
+    def start(name, slot, fds):
+        assert stamp(scheduled.stamps / 'seed_discovery.attempt') == slot
+        return SimpleNamespace(wait=lambda: int(not scheduled.payload(name, slot, fds)))
+
+    monkeypatch.setattr(scheduled, 'start_payload', start)
+    assert not scheduled.outbox.ready()
+    assert scheduled.run_job('seed_discovery') == (0, 'complete')
+    assert stamp(scheduled.stamps / 'seed_discovery.attempt') == JOBS['seed_discovery'].latest(clock.now())
+    assert [len(rows) for _, rows in candidate_state(db)][:2] == [1, 1]
+    assert all(calls.count(url) == 1 for url in (_OWN, outside, blocked))
+    clock.sleep(7200)
+    assert scheduled.run_job('seed_discovery') == (0, 'complete')
+    assert [len(rows) for _, rows in candidate_state(db)][:2] == [1, 1]
+    assert calls.count(blocked) == 1
+
+
+def test_seed_api_is_durably_counted_at_dispatch_before_cutoff(state, monkeypatch):
+    _, clock, db = state
+    clock.start = datetime.fromisoformat('2026-11-20T23:29:59+09:00')
+    monkeypatch.setenv('TAVILY_API_KEY', 'fixture-tavily-marker')
+
+    def post(url, **kwargs):
+        row = db.execute("SELECT ts,outcome FROM request_log WHERE adapter='seeds:tavily'").fetchone()
+        assert tuple(row) == ('2026-11-20T23:29:59+09:00', None)
+        clock.sleep(2)
+        return Response({'results': []})
+
+    invoke(state, ['tavily'], max_calls=1, tavily_transport=post)
+    row = db.execute("SELECT ts,outcome FROM request_log WHERE adapter='seeds:tavily'").fetchone()
+    assert tuple(row) == ('2026-11-20T23:29:59+09:00', 'ok')
 
 
 def test_public_search_policy_keeps_naver_and_runport(state, monkeypatch):
