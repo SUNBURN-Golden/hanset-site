@@ -53,6 +53,17 @@ Run limits can lower consumption; persisted daily caps remain enforced.
 Run these from the production checkout after merge. Use the operations
 account that owns the collector crontab.
 
+If the seed schedule is missing, register it once with the seed-only installer.
+It works before publication readiness and reconciles only the tagged seed job
+at :15 in odd-numbered KST hours. The preview checks the timezone of that entry.
+
+```sh
+scripts/install_collect_crons.sh --seed-only --dry-run
+scripts/install_collect_crons.sh --seed-only
+```
+
+Use the full installer after the release consumer passes its readiness check.
+
 ```sh
 scripts/install_collect_crons.sh --dry-run
 scripts/install_collect_crons.sh
@@ -75,8 +86,8 @@ Operations confirms the actual release consumer with a non-publishing
 contract check before enabling the wide schedule. The versioned readiness
 file and the request and receipt formats are in the
 [publication handoff runbook](COLLECTOR.md#operations-publication-handoff).
-Without readiness, the installer leaves the crontab intact and the watchdog
-skips wide collection. The 04:15 entry keeps its default behavior. Operations
+Without readiness, the full installer leaves the crontab intact and the
+watchdog skips wide collection. The 04:15 entry keeps its default behavior. Operations
 can enable publication there with `--daily-publish` on both the dry run and
 install.
 
@@ -199,21 +210,35 @@ and marker are maintained by operations outside this repository.
 tail -n 1 /workspace/hanset-data/metrics/collect-daily.jsonl
 ```
 
-Each line represents one KST date. The report closes at 23:30. Counts for
-inventory, enabled targets, qualified facts, unverified claims and Tavily
-usage reflect the latest available observation before cutoff. The watchdog
-and scheduled jobs save these aggregates while the box is awake. New
-seeds and claims, completed page transfers, provider dispatches and terminal
-deployment attempts are counted from their timestamped ledgers. Deployments
-count only when both completion and durable receipt recording precede
-cutoff. Pending requests have no effect on metrics finalization.
+Each line represents one KST date and closes at 23:30. The watchdog and
+scheduled jobs save inventory and shared Tavily usage observations while the
+box is awake. The report uses the latest pre-cutoff observation and counts
+events from midnight up to, but excluding, the cutoff.
+
+| Counter | Meaning |
+| --- | --- |
+| `seeds_new` | Distinct continuous-discovery candidate IDs first seen in the reporting window |
+| `seeds_total` | All persisted continuous-discovery candidate IDs across all statuses |
+| `seed_domains_total`, `seed_venues_total` | Domain and venue rows belonging to the current `seed_freeze` cursor |
+| `seed_tavily_calls` | Seed-tagged Tavily API dispatches in the window |
+| `tavily_used` | Shared Tavily usage across consumers at the saved observation |
+| `fact_candidates_total` | Persisted fact candidates, including holds and conflicts |
+| `facts_total` | Internal facts that currently qualify under reviewed policy and current authorization |
+| `unverified_total` | Current source claims outside those facts’ supporting evidence |
+| `targets` | Distinct enabled venue identities |
+| `pages_fetched` | Completed, successful, nonempty body transfers |
+| `claims_new` | Distinct claims counted by receipt creation time |
+| `provider_calls` | Model dispatches by provider |
+| `deploys`, `deploy_failures` | Distinct successful or failed attempts completed and durably recorded before cutoff |
 
 On wake, metrics closes earlier dates from saved aggregates before sampling
 today. A full date asleep carries forward inventory totals and counts its
 own timestamped events. A missing Tavily bucket is zero. A nonzero bucket
 without a pre-cutoff observation leaves that date retryable. Unreadable
 state can delay an affected date while later dates close independently.
-A recovered older date may appear last in the file. Each emitted line stays
+A recovered older date may appear last in the file. Historical observations
+without the extended inventory still close using the original fields, and
+pending appends of either format recover in place. Each emitted line stays
 byte-identical on subsequent runs. Dates before metrics initialization are
 outside the report.
 

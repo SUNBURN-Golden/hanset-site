@@ -48,6 +48,10 @@ RETRYABLE = frozenset({
     'model_insufficient_balance',
 })
 PAGE_SAMPLE = 200
+PROMOTION_DIAGNOSTICS = (
+    'promotion_policy_absent', 'promotion_policy_invalid', 'promotion_adhoc_targets',
+    'promotion_authorization_unavailable', 'promotion_write_failed',
+)
 
 
 def _base(state_name, reason, *, success, collected, mode, pages=None, rejections=None):
@@ -100,6 +104,13 @@ def public_result(result):
         out['provider'] = dict(providers)
     if result.get('deepseek_skipped') == 'insufficient_balance':
         out['deepseek_skipped'] = 'insufficient_balance'
+    promotion = result.get('promotion')
+    if isinstance(promotion, dict):
+        reason, changed = promotion.get('reason'), promotion.get('changed_candidates')
+        if reason in PROMOTION_DIAGNOSTICS:
+            out['promotion'] = {'reason': reason}
+        elif reason == 'ok' and type(changed) is int and changed >= 0:
+            out['promotion'] = {'reason': 'ok', 'changed_candidates': changed}
     heal = result.get('proxy_heal')
     if (isinstance(heal, dict) and
             set(heal) == {'attempted', 'heal_exit', 'retries', 'recovered'} and
@@ -200,13 +211,13 @@ def _default_search(host_dir):
 
 
 def run_web(settings, *, targets_path=None, clock=None, session=None, qwen_session=None, search=None, testing=False,
-            planner=None, planner_session=None, admission=None):
+            planner=None, planner_session=None, admission=None, collector_lock_held=False):
     clock = clock or Clock()
     mode = 'web'
     try:
         _prepare_dir(settings.data_dir)
         with ExitStack() as stack:
-            if admission is None:
+            if not collector_lock_held:
                 stack.enter_context(ProcessLock(settings.data_dir / 'daemon.lock'))
             # Materialize authorization before opening a writable active DB.
             assembled = assemble_targets(settings, now=kst_now(clock), testing=testing,
@@ -236,6 +247,7 @@ def run_web(settings, *, targets_path=None, clock=None, session=None, qwen_sessi
             result['changes'] = changes
             if recovery.get('reason') not in ('ok', 'no_events'):
                 result['changes']['recovery_reason'] = recovery['reason']
+            result['promotion'] = _promote_after_web(settings, clock, targets_path=targets_path, testing=testing)
             # Persist only fixed side diagnostics, never exception strings.
             status = settings.data_dir / 'status.json'
             if status.exists():
@@ -707,10 +719,48 @@ def _review_error(reason):
             'fact_candidates': [], 'facts': [], 'rights': 'internal_review_only', 'auto_publish_to_site': False}
 
 
-def _assess_review(db, policy, clock):
-    from .promotion import assess
+def _assess_review(db, policy, clock, *, authorization=None, testing=False):
+    from .promotion import assess, revalidate_bindings
     from .store import read_claims, stored_candidates
-    return assess(read_claims(db), stored_candidates(db), policy, now=kst_now(clock))
+    claims = read_claims(db)
+    if authorization is not None:
+        revalidate_bindings(claims, authorization, testing=testing)
+    return assess(claims, stored_candidates(db), policy, now=kst_now(clock))
+
+
+def _persist_review(settings, policy, clock, *, authorization=None, testing=False):
+    """Caller holds daemon.lock. Claims were committed independently."""
+    from .store import persist_candidates
+    with closing(claim_connect(settings.data_dir)) as db, db:
+        db.execute('BEGIN IMMEDIATE')
+        report = _assess_review(db, policy, clock, authorization=authorization, testing=testing)
+        changed = persist_candidates(db, report['fact_candidates'], at=kst_now(clock).isoformat())
+    return report, changed
+
+
+def _promote_after_web(settings, clock, *, targets_path, testing):
+    from .promotion_policy import configured_policy
+
+    # An ad hoc target file cannot authorize or retire candidates for other scopes.
+    if targets_path is not None:
+        return {'reason': 'promotion_adhoc_targets'}
+    try:
+        policy = configured_policy(settings, today=kst_now(clock).date())
+    except CollectError:
+        return {'reason': 'promotion_policy_invalid'}
+    if policy is None:
+        return {'reason': 'promotion_policy_absent'}
+    try:
+        authorization = None
+        if policy['approvals']:
+            authorization = _change_targets(settings, testing=testing, clock=clock)
+            if authorization is None:
+                return {'reason': 'promotion_authorization_unavailable'}
+        _, changed = _persist_review(settings, policy, clock, authorization=authorization, testing=testing)
+        return {'reason': 'ok', 'changed_candidates': changed}
+    except Exception:
+        # This side failure must preserve web results, handoff and committed claims.
+        return {'reason': 'promotion_write_failed'}
 
 
 def run_report(settings, *, policy_path=None, clock=None):
@@ -743,7 +793,6 @@ def run_report(settings, *, policy_path=None, clock=None):
 def run_promote(settings, *, policy_path, dry_run=False, clock=None):
     """Explicit local review gate. Never touches active/twin state or sources."""
     from .promotion_policy import load_policy
-    from .store import persist_candidates
     clock = clock or Clock()
     if dry_run:
         return {**run_report(settings, policy_path=policy_path, clock=clock), 'dry_run': True}
@@ -751,17 +800,7 @@ def run_promote(settings, *, policy_path, dry_run=False, clock=None):
         policy = load_policy(policy_path, today=kst_now(clock).date())
         _prepare_dir(settings.data_dir)
         with ProcessLock(settings.data_dir / 'daemon.lock'):
-            db = claim_connect(settings.data_dir)
-            try:
-                db.execute('BEGIN IMMEDIATE')
-                report = _assess_review(db, policy, clock)
-                changed = persist_candidates(db, report['fact_candidates'], at=kst_now(clock).isoformat())
-                db.commit()
-            except Exception:
-                db.rollback()
-                raise
-            finally:
-                db.close()
+            report, changed = _persist_review(settings, policy, clock)
         return _review_result({**report, 'state': 'ok', 'dry_run': False,
                                'changed_candidates': changed, 'at': kst_now(clock).isoformat()})
     except CollectorBusy:

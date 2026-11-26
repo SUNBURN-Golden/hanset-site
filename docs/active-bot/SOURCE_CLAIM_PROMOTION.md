@@ -176,19 +176,32 @@ A supplied invalid policy returns only a safe error. The output preserves
 `claims` and `conflicts`, and adds `facts`, `fact_candidates`, normalized evidence,
 independence rationales, diagnostic counts and policy/assessment fingerprints.
 The assessment fingerprint excludes time-dependent freshness labels. Reports
-can include newly qualifying proposed candidates before any write; only an
-explicit non-dry promotion persists them. In read-only assessment, created/changed
-timestamps describe the previously persisted row. Promotion returns the saved
-timestamps. Offline review also ignores unrelated model-selection configuration.
+can include newly qualifying proposed candidates before any write. In
+read-only assessment, created/changed timestamps describe the previously
+persisted row. Promotion returns the saved timestamps. Offline review also
+ignores unrelated model-selection configuration.
 
-Explicit promotion holds the existing collector `daemon.lock`, initializes
-additive schema if necessary, and assesses/persists candidates and links in one
-SQLite write transaction. Failure rolls back candidate changes. An identical
+Default manual and scheduled web runs reassess all current claims at completion,
+including partial and already-complete runs. This recovers claims committed by
+an earlier interrupted run. The assessment checks stored official bindings
+against current default target authorization. Ad hoc `--targets` runs skip
+automatic assessment and can use explicit offline review.
+
+Automatic assessment and daily metrics read `HANSET_COLLECT_PROMOTION_POLICY`
+when set, otherwise they use `HANSET_IG_DIR/promotion_policy.json`. Web status
+reports `promotion_policy_absent`, `promotion_policy_invalid`, or
+`promotion_authorization_unavailable` when assessment is deferred. A valid
+policy with an empty approvals list moves existing candidates to evidence hold.
+
+Both write paths hold the existing collector `daemon.lock` and assess and
+persist candidates and links in one SQLite write transaction. A failed write
+reports `promotion_write_failed` in web status and rolls back candidate changes.
+Committed claims and the publication handoff proceed independently. An identical
 rerun leaves IDs, counts and change timestamps unchanged. New corroboration
-appends links; revocation retains candidates on hold. No status/checkpoint,
-active or twin store is written. Migration alone generates no candidate and
-does not rewrite claim evidence or infer legacy official authority. The trigger still rejects new NULL
-provenance inserts while existing NULL rows remain untouched.
+appends links. Revocation retains candidates on hold. Migration alone generates
+no candidate and does not rewrite claim evidence or infer legacy official
+authority. The trigger still rejects new NULL provenance inserts while existing
+NULL rows remain untouched.
 
 Daemon validation uses synthetic temporary databases only:
 

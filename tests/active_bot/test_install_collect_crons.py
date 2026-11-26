@@ -38,8 +38,9 @@ def crontab(tmp_path):
                FAKE_CRONTAB=str(state), FAKE_WRITES=str(writes))
 
     def invoke(*args, **extra):
-        script = ('import sys; from hanset_active.collect.cron_install import main; '
-                  'sys.exit(main(sys.argv[2:], data_root=sys.argv[1]))')
+        script = ('import os, sys; from hanset_active.collect import cron_install; '
+                  'cron_install.scheduler_default = lambda: os.environ.get("HANSET_CRON_TIMEZONE"); '
+                  'sys.exit(cron_install.main(sys.argv[2:], data_root=sys.argv[1]))')
         return subprocess.run([sys.executable, '-c', script, str(root), *args],
                               env={**env, **extra}, capture_output=True, timeout=10)
 
@@ -121,3 +122,34 @@ def test_daily_publish_opt_in_is_reversible_without_duplicate_job(crontab):
     assert b'HANSET_AUTO_PUBLISH=1 ' in lines[0]
     assert invoke('--uninstall').returncode == 0
     assert state.read_bytes() == daily
+
+
+def test_seed_only_installs_and_reconciles_without_publication_readiness(crontab):
+    root, state, writes, invoke = crontab
+    entry = owned_entries()['seed_discovery']
+    preview = invoke('--seed-only', '--dry-run')
+    assert preview.returncode == 0 and preview.stderr == b''
+    assert b'+' + entry in preview.stdout
+    assert not state.exists() and not writes.exists()
+    assert invoke('--seed-only').returncode == 0 and state.read_bytes() == entry
+
+    early = b'CRON_TZ=UTC\r\n' + owned_entries()['watchdog'] + b'CRON_TZ="Asia/Seoul"\r\n'
+    tail = owned_entries()['wide_collect'] + b'COMMENT=fixture-private-value\r\n@weekly /existing/job\n'
+    stale = b'15 3 * * * /workspace/hanset-site/scripts/run_seed_discovery_cron.sh # hanset-collx\r\n'
+    state.write_bytes(early + stale + tail + stale)
+    preview = invoke('--seed-only', '--dry-run')
+    assert preview.returncode == 0 and b'fixture-private-value' not in preview.stdout + preview.stderr
+    assert state.read_bytes() == early + stale + tail + stale
+    assert invoke('--seed-only').returncode == 0
+    assert state.read_bytes() == early + entry + tail
+    assert invoke('--seed-only').returncode == 0 and writes.read_bytes() == b'++'
+    assert not (root / 'publication').exists()
+
+
+def test_seed_only_checks_timezone_at_effective_entry(crontab):
+    _, state, writes, invoke = crontab
+    original = b'CRON_TZ=Asia/Seoul\r\n@weekly /existing/job\nCRON_TZ=UTC\n'
+    state.write_bytes(original)
+    result = invoke('--seed-only')
+    assert result.returncode != 0 and result.stderr == b'scheduler_timezone_unverified_or_conflicting seed_discovery\n'
+    assert state.read_bytes() == original and not writes.exists()

@@ -255,9 +255,9 @@ class Scheduled:
             kwargs = {'filename': paths[-1].name, 'lease_key': 'seed_discovery'} if name == 'seed_discovery' else {}
             guard = RunLock(lease_db, settings.active_dir, uuid4().hex, clock=clock, **kwargs)
             with guard.inherited_lease():
-                return self.collect(name, slot, guard)
+                return self.collect(name, slot, guard, collector_lock_held=name in ('daily_collect', 'wide_collect'))
 
-    def collect(self, name, slot, guard):
+    def collect(self, name, slot, guard, *, collector_lock_held=False):
         settings, clock = self.settings, self.clock
         active = Settings(data_dir=settings.active_dir, testing=self.testing)
         if name == 'seed_discovery':
@@ -282,7 +282,7 @@ class Scheduled:
             return result.get('checkpoint_complete') is True
 
         result = run_web(with_settings(settings, model=configured_model()), clock=clock,
-                         admission=guard, testing=self.testing)
+                         admission=guard, testing=self.testing, collector_lock_held=collector_lock_held)
         print(json.dumps(public_result(result), ensure_ascii=False))
         complete = result.get('success') is True or result.get('state') == 'no_targets'
         if complete and (name == 'wide_collect' or self.publishes_daily(name)):
