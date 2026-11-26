@@ -260,19 +260,20 @@ def main():
                         assert ' '.join(data['excerpt'].split()) == case['excerpt'], case['name']
                         assert data['locator'] == case['locator'], case['name']
                         assert data['title'] == case['title'], case['name']
-                    ack = worker.accept(res, data)
+                    worker.accept(res, data)
                     if case:
                         saved = json.loads(store.db.execute('SELECT data FROM observations WHERE reservation_id=?', (res['id'],)).fetchone()[0])
                         assert saved['evidence_locator'][0]['locator'] == case['locator'], case['name']
                         assert ' '.join(saved['evidence_locator'][0]['quote'].split()) == case['excerpt'], case['name']
                         assert [f['value'] for f in saved['extracted_facts']] == (['30000'] if case['name'] == 'valid-main' else []), case['name']
                     assert 'never-store' not in json.dumps(data)
-                    return ack
-                except Rejected:
+                except Rejected as exc:
+                    reason = str(exc)
                     if success:
                         reasons = [r[0] for r in store.db.execute('SELECT reason FROM audit')]
-                        raise AssertionError('unexpected browser failure; safe reason codes: ' + repr(reasons))
+                        raise AssertionError(f'unexpected browser failure ({reason}); audit reasons: {reasons!r}') from None
                     worker.revoke(res)
+                    return reason
                 finally:
                     gate.cancel()
 
@@ -288,7 +289,12 @@ def main():
                         for target_url, resource in rejected]
                 before_rejections = {key: counts[key] for key in keys}
                 before_audit = store.db.execute("SELECT count(*) FROM audit WHERE operation='browser_request' AND reason='non_public_destination'").fetchone()[0]
-                run(url, success=success)
+                reason = run(url, success=success)
+                assert reason not in (
+                    'browser_dependency_missing', 'browser_process_failed',
+                    'browser_extraction_failed_isolation', 'browser_extraction_failed_driver',
+                    'browser_extraction_failed_launch', 'browser_extraction_failed_context',
+                ), f'browser failed before DNS fixture checks ({reason})'
                 for key, before in before_dns.items():
                     assert counts[key] > before, ('DNS fixture not answered', key)
                 for key, before in before_rejections.items():

@@ -4,6 +4,7 @@ Run separately: python3 -m unittest discover -s tests/integration -p 'test_*.py'
 """
 import os
 from pathlib import Path
+import pwd
 import subprocess
 import sys
 import unittest
@@ -24,9 +25,16 @@ class RealBrowserNetwork(unittest.TestCase):
 
     def _run(self):
         root = Path(__file__).resolve().parents[2]
+        env = {**os.environ, 'PYTHONPATH': str(root)}
+        if 'PLAYWRIGHT_BROWSERS_PATH' not in env:
+            cache = Path.home() / '.cache' / 'ms-playwright'
+            if not cache.is_dir():
+                # The gate uses a temporary HOME. Look up the account before UID mapping.
+                cache = Path(pwd.getpwuid(os.getuid()).pw_dir) / '.cache' / 'ms-playwright'
+            env['PLAYWRIGHT_BROWSERS_PATH'] = str(cache)
         return subprocess.run([
             'unshare', '--user', '--map-root-user', '--net', '--mount', '--pid', '--fork',
             '--kill-child=KILL', '--mount-proc', sys.executable,
             str(Path(__file__).with_name('browser_network_case.py'))],
             cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=360,
-            env={**os.environ, 'PYTHONPATH': str(root)})
+            env=env)
