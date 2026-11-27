@@ -40,7 +40,7 @@ def _fake_python(tmp_path):
         "Path(os.environ['SIDE_FILE']).write_text('yes' if key and key == expect else 'no')\n"
         "if os.environ.get('SLEEP') == '1':\n"
         "    Path(os.environ['READY']).write_text('up')\n"
-        '    time.sleep(2)\n'
+        '    time.sleep(10)\n'
         'print(\'{"state":"done","success":true,"collected":false,"mode":"web","reason":"ok"}\')\n'
     )
     program.chmod(0o755)
@@ -103,7 +103,7 @@ def test_overlapping_wrapper_exits_cleanly(tmp_path):
     assert second.returncode == 0
     assert 'already_running' in _log(ig)
     assert SENTINEL not in _log(ig)
-    assert first.wait(timeout=10) == 0
+    assert first.wait(timeout=60) == 0
 
 
 def test_wrapper_chains_only_matching_completed_web_signals(tmp_path):

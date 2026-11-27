@@ -46,6 +46,8 @@ if [[ "$mode" == ingest ]]; then
     fi
 fi
 
+proxy_env_file_set=${HANSET_COLLX_PROXY_ENV_FILE+x}
+proxy_env_file=${HANSET_COLLX_PROXY_ENV_FILE-}
 env_file="$ig_dir/deepseek.env"
 if [[ -e "$env_file" ]]; then
     if [[ -L "$env_file" ]]; then
@@ -64,6 +66,11 @@ if [[ -e "$env_file" ]]; then
         exit 1
     }
     set +a
+fi
+if [[ -n "$proxy_env_file_set" ]]; then
+    export HANSET_COLLX_PROXY_ENV_FILE="$proxy_env_file"
+else
+    unset HANSET_COLLX_PROXY_ENV_FILE
 fi
 
 printf '%s %s_start\n' "$(TZ=Asia/Seoul date -Iseconds)" "$mode" >>"$log"

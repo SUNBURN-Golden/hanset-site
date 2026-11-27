@@ -91,6 +91,42 @@ watchdog skips wide collection. The 04:15 entry keeps its default behavior. Oper
 can enable publication there with `--daily-publish` on both the dry run and
 install.
 
+### Proxy settings for scheduled collection
+
+The full installer copies literal `HANSET_WEB_PROXY` and `HANSET_WEB_PROXY_*`
+assignments from the first operator-owned 04:15 web collection into the
+managed wide and watchdog jobs. With `--daily-publish` enabled, an existing
+managed daily job can supply the settings when there is no operator entry.
+Publication opt-in and reversal apply to every eligible operator daily entry.
+Keep inline proxy values literal. The installer rejects shell expansions and
+commands that use cron stdin when they supply proxy settings. The dry-run
+preview redacts the copied settings and file path.
+
+For credential-bearing settings, including sensitive heal command arguments,
+move all proxy settings off the 04:15 command before running the installer.
+Cronie logs command text. Create a regular JSON file outside the checkout,
+owned by the cron user with mode `0600`, and set the literal absolute path
+in `HANSET_COLLX_PROXY_ENV_FILE` on the 04:15 command. The JSON object maps
+`HANSET_WEB_PROXY` and `HANSET_WEB_PROXY_*` names to string values. For example,
+the crontab can carry the file reference alone. The installer rejects a
+file reference combined with any inline proxy assignment, including an
+empty assignment or one supplied through `env`.
+
+```cron
+15 4 * * * HANSET_COLLX_PROXY_ENV_FILE=/private/ops/collect-proxy.json /workspace/hanset-site/scripts/run_collect_cron.sh web
+```
+
+Run the full installer to propagate the file reference. The watchdog validates
+the file at startup and forwards its path to daily and wide catch-up wrappers.
+Both scheduled and catch-up wrappers preserve the path while loading
+`deepseek.env`. The supervisor then reads the current file, replaces all
+inherited proxy settings with its contents, and removes the path from the
+payload environment. Rotate values in the file for the next launch. Symlinks,
+unsafe permissions, and invalid files stop dispatch with `proxy_env_file_invalid`.
+Network failures follow the proxy preflight and direct fallback policy.
+
+### Scheduler behavior
+
 The supervisor writes the scheduled KST slot to
 `/workspace/hanset-data/stamps/<job>.attempt` immediately before launching
 each ordinary or catch-up payload. It records successful completion time

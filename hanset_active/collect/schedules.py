@@ -43,9 +43,21 @@ MARKER = b'# hanset-collx'
 DAILY_PUBLISH = b'HANSET_AUTO_PUBLISH=1 '
 
 
-def owned_entries(*, daily_publish=False):
+@dataclass(frozen=True)
+class ProxyAssignments:
+    shell: tuple[bytes, ...] = ()
+    env: tuple[bytes, ...] = ()
+    env_command: bytes = b'env'
+
+    def prefix(self):
+        words = self.shell + ((self.env_command, *self.env) if self.env else ())
+        return b''.join(word + b' ' for word in words)
+
+
+def owned_entries(*, daily_publish=False, proxy=ProxyAssignments()):
     env = (f'HANSET_DATA_DIR={DATA} HANSET_ACTIVE_DIR={DATA}/active '
            f'HANSET_IG_DIR={DATA}/ig HANSET_TWIN_DIR={DATA}/twin')
+    proxy_prefix = proxy.prefix()
     entries = {}
     for name, job in JOBS.items():
         if job.tagged or (name == 'daily_collect' and daily_publish):
@@ -55,6 +67,8 @@ def owned_entries(*, daily_publish=False):
             if len(job.hours) > 1:
                 hours += f'-{job.hours[-1]}/{job.hours[1] - job.hours[0]}'
             schedule = f'{job.minute} {hours} * * *'
-            entries[name] = f'{schedule} {env}{publish} {command}'.encode()
-    entries['watchdog'] = f'*/{WATCHDOG_MINUTES} * * * * {env} {CHECKOUT}/scripts/collect_watchdog.sh'.encode()
+            prefix = proxy_prefix if name in ('wide_collect', 'daily_collect') else b''
+            entries[name] = f'{schedule} {env}{publish} '.encode() + prefix + command.encode()
+    entries['watchdog'] = (f'*/{WATCHDOG_MINUTES} * * * * {env} '.encode() + proxy_prefix
+                           + f'{CHECKOUT}/scripts/collect_watchdog.sh'.encode())
     return {name: line + b' ' + MARKER + b'\n' for name, line in entries.items()}

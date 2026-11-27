@@ -5,6 +5,7 @@ from contextlib import ExitStack, closing
 from dataclasses import replace as with_settings
 from datetime import timedelta
 import fcntl
+from functools import partial
 import json
 import os
 from pathlib import Path
@@ -24,11 +25,13 @@ from ..util.timeutil import Clock, kst_now
 from ..web_proxy import resolve_run
 from hanset_twin.daemon import run_once
 from hanset_twin.store import connect as twin_connect, open_active_readonly
+from . import CollectError
 from .config import CollectSettings, DEFAULT_MODEL, configured_model, outside
 from .daily_metrics import DailyMetrics, SOURCE_ERRORS
 from .handoff import Outbox, kst_timestamp
 from .plan import assemble_targets
 from .private_io import Busy, json_bytes, lock, read, read_json, replace, sync_directory
+from .proxy_env import SELECTOR, apply_proxy_env, read_proxy_env
 from .schedules import DATA, GRACE, JOBS, SHARED_JOBS
 from .service import public_result, run_web
 
@@ -350,11 +353,13 @@ class Scheduled:
         print(f'{name} {status}', file=sys.stderr)
 
 
-def launch(name, slot):
+def launch(name, slot, *, proxy_env_file=None):
     job = JOBS[name]
     env = {**os.environ, 'HANSET_CATCHUP_SLOT': slot.isoformat()}
     if name == 'wide_collect':
         env['HANSET_AUTO_PUBLISH'] = '1'
+    if proxy_env_file is not None and name in ('daily_collect', 'wide_collect'):
+        env[SELECTOR] = proxy_env_file
     return subprocess.Popen([str(REPO_ROOT / 'scripts' / job.script), *job.args], env=env)
 
 
@@ -364,6 +369,17 @@ def main(argv=None):
     parser.add_argument('options', nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
     os.environ.pop('HANSET_ACTIVE_DEBUG', None)
+    proxy_env_file = os.environ.get(SELECTOR)
+    if proxy_env_file is not None and not args.options and args.job in ('daily_collect', 'wide_collect', 'watchdog'):
+        try:
+            proxy_settings = read_proxy_env(proxy_env_file)
+            if args.job == 'watchdog':
+                del os.environ[SELECTOR]
+            else:
+                apply_proxy_env(proxy_settings)
+        except (OSError, ValueError, RuntimeError, CollectError):
+            print('proxy_env_file_invalid', file=sys.stderr)
+            return 1
     try:
         root = outside(Path(os.environ.get('HANSET_DATA_DIR', DATA)))
         paths = {key: Path(os.environ.get(env, root / child)) for key, env, child in (
@@ -380,7 +396,7 @@ def main(argv=None):
         if args.options:
             parser.error('unexpected_options')
         if args.job == 'watchdog':
-            scheduled.watchdog(launch)
+            scheduled.watchdog(partial(launch, proxy_env_file=proxy_env_file))
             return 0
         raw = os.environ.get('HANSET_CATCHUP_SLOT')
         result, status = scheduled.run_job(args.job, catchup=kst_timestamp(raw) if raw else None)

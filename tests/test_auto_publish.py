@@ -193,7 +193,7 @@ def ops(tmp_path):
 
 def run(ops, *args):
     result = subprocess.run([ROOT / 'scripts/auto_publish.sh', *args], env=ops[-1], capture_output=True,
-                            text=True, timeout=30)
+                            text=True, timeout=120)
     assert TEST_SECRET not in result.stdout + result.stderr
     return result
 

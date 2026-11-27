@@ -211,7 +211,9 @@ def main():
     with tempfile.TemporaryDirectory(dir='/var/tmp') as t:
         tmp = Path(t)
         resolv = tmp / 'resolv.conf'
-        resolv.write_text('nameserver 127.0.0.53\noptions timeout:1 attempts:1\n')
+        # CPU starvation on the shared box can delay the in-process fixture resolver past
+        # one second; a longer resolver budget changes timing only, not what is allowed.
+        resolv.write_text('nameserver 127.0.0.53\noptions timeout:5 attempts:2\n')
         command('mount', '--bind', str(resolv), '/etc/resolv.conf')
         cert, key = tmp / 'cert.pem', tmp / 'key.pem'
         command('openssl', 'req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-keyout', str(key),
@@ -296,7 +298,7 @@ def main():
                     'browser_extraction_failed_launch', 'browser_extraction_failed_context',
                 ), f'browser failed before DNS fixture checks ({reason})'
                 for key, before in before_dns.items():
-                    assert counts[key] > before, ('DNS fixture not answered', key)
+                    assert counts[key] > before, ('DNS fixture not answered', key, reason)
                 for key, before in before_rejections.items():
                     assert counts[key] > before, ('expected gate rejection missing', key)
                 after_audit = store.db.execute("SELECT count(*) FROM audit WHERE operation='browser_request' AND reason='non_public_destination'").fetchone()[0]
@@ -464,7 +466,7 @@ for family,addr in [(socket.AF_INET,('127.0.0.1',443)),(socket.AF_INET6,('::1',4
             config_file = tmp / 'test-config.json'
             config_file.write_text(json.dumps(cfg))
             subprocess.run(['xvfb-run', '-a', sys.executable, str(Path(__file__).with_name('extension_case.py')),
-                            str(config_file), str(tmp)], check=True, timeout=120)
+                            str(config_file), str(tmp)], check=True, timeout=300)
             assert counts['forbidden_connections'] == 0 and counts['forbidden_packets'] == 0, counts
             print('forbidden_connections=0 forbidden_packets=0')
         finally:

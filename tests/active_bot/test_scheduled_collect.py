@@ -1,7 +1,7 @@
 """Scheduler, publication and accounting tests using private temporary state."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, closing
-from datetime import datetime
+from datetime import datetime, timedelta
 import hashlib
 import json
 import os
@@ -20,7 +20,8 @@ from hanset_active.collect.config import CollectSettings
 from hanset_active.collect.daily_metrics import KEYS, LEGACY_INVENTORY, LEGACY_KEYS
 from hanset_active.collect.private_io import Busy, json_bytes, lock, replace
 from hanset_active.collect.plan import assemble_targets
-from hanset_active.collect.schedules import JOBS
+from hanset_active.collect.proxy_env import SELECTOR
+from hanset_active.collect.schedules import GRACE, JOBS
 from hanset_active.collect.targets import source_authorization
 from hanset_active.collect.store import connect as claim_connect, digest, record
 from hanset_active.config import REPO_ROOT, Settings
@@ -91,6 +92,140 @@ def checkpoint(job, slot, request=None):
 
 def fake_launch(job):
     return lambda name, slot: Wait(lambda: job.run_job(name, catchup=slot)[0])
+
+
+@pytest.fixture
+def proxy_launch(job, monkeypatch):
+    for key, path in (('HANSET_DATA_DIR', job.root), ('HANSET_IG_DIR', job.settings.data_dir),
+                      ('HANSET_ACTIVE_DIR', job.settings.active_dir), ('HANSET_TWIN_DIR', job.settings.twin_dir)):
+        monkeypatch.setenv(key, str(path))
+    for key in list(os.environ):
+        if key.startswith('HANSET_WEB_PROXY'):
+            monkeypatch.delenv(key)
+    monkeypatch.setenv('HANSET_WEB_PROXY', 'fixture-original')
+    monkeypatch.setenv('HANSET_WEB_PROXY_HEAL_CMD', '')
+    monkeypatch.setenv('HANSET_AUTO_PUBLISH', '0')
+    path = job.root / 'fixture private settings.json'
+    monkeypatch.setenv(SELECTOR, str(path))
+    return path
+
+
+def test_file_proxy_reaches_scheduled_payload_and_watchdog_catchup(job, proxy_launch, monkeypatch):
+    options = {'HANSET_WEB_PROXY': 'fixture-file-proxy', 'HANSET_WEB_PROXY_HEAL_CMD': 'fixture private helper'}
+    replace(proxy_launch, json_bytes(options))
+    ig = job.settings.data_dir
+    conflicting = job.root / 'fixture wrong selector.json'
+    env_file = ("HANSET_WEB_PROXY=fixture-conflicting-proxy\n"
+                "HANSET_WEB_PROXY_HEAL_CMD='fixture conflicting helper'\n"
+                "HANSET_WEB_PROXY_EXIT_IP=fixture-extra-setting\n"
+                f"{SELECTOR}='{conflicting}'\n")
+    replace(ig / 'deepseek.env', env_file.encode())
+    probe = job.root / 'payloads.jsonl'
+    launcher = job.root / 'bin/python3'
+    launcher.parent.mkdir()
+    launcher.write_text(f'#!{sys.executable}\n' + '''
+import json
+import os
+from pathlib import Path
+import sys
+
+if sys.argv[1:3] != ['-m', 'hanset_active.collect.scheduled'] or sys.argv[4:5] != ['--payload']:
+    os.execv(sys.executable, [sys.executable, *sys.argv[1:]])
+name, slot = sys.argv[3], sys.argv[5]
+row = dict(job=name, catchup=os.environ.get('HANSET_CATCHUP_SLOT'), proxy={
+    key: value for key, value in os.environ.items()
+    if key.startswith('HANSET_WEB_PROXY') or key == 'HANSET_COLLX_PROXY_ENV_FILE'
+})
+with Path(os.environ['TEST_PAYLOAD_PROBE']).open('a') as probe:
+    print(json.dumps(row), file=probe)
+if name == 'wide_collect':
+    from hanset_active.collect.private_io import json_bytes, replace
+
+    stamp = Path(os.environ['HANSET_DATA_DIR']) / 'stamps/wide_collect.completion.json'
+    replace(stamp, json_bytes(dict(slot=slot, completed_at=slot, request=None)))
+''')
+    launcher.chmod(0o700)
+    env = dict(os.environ, PATH=str(launcher.parent) + os.pathsep + os.environ['PATH'], TEST_PAYLOAD_PROBE=str(probe))
+
+    def run(script):
+        return subprocess.run([REPO_ROOT / 'scripts' / script], env=env, capture_output=True, text=True, timeout=60)
+
+    now = kst_now()
+    for name in JOBS.keys() - {'daily_collect'}:
+        job.write_stamp(name, 'ok', now + timedelta(minutes=5))
+    ordinary = run('run_collect_cron.sh')
+    assert ordinary.returncode == 0
+    assert [json.loads(line) for line in probe.read_text().splitlines()] == [
+        {'job': 'daily_collect', 'catchup': None, 'proxy': options},
+    ]
+
+    updated = {**options, 'HANSET_WEB_PROXY': 'fixture-rotated-file-proxy'}
+    replace(proxy_launch, json_bytes(updated))
+    ready(job, monkeypatch)
+    now = kst_now()
+    daily = JOBS['daily_collect'].latest(now)
+    # Use wide if the wall clock is near the daily slot and its grace period.
+    target = 'daily_collect' if GRACE < now - daily < timedelta(hours=23, minutes=59) else 'wide_collect'
+    for extension in ('ok', 'attempt'):
+        (job.stamps / f'{target}.{extension}').unlink(missing_ok=True)
+    for name in JOBS.keys() - {target}:
+        job.write_stamp(name, 'ok', now + timedelta(minutes=5))
+    watchdog = run('collect_watchdog.sh')
+    assert watchdog.returncode == 0
+    ordinary_payload, catchup_payload = [json.loads(line) for line in probe.read_text().splitlines()]
+    assert ordinary_payload == {'job': 'daily_collect', 'catchup': None, 'proxy': options}
+    assert catchup_payload == {'job': target, 'catchup': JOBS[target].latest(now).isoformat(), 'proxy': updated}
+
+    logs = '\n'.join(path.read_text() for path in (ig / 'logs').glob('collect-*.log'))
+    output = logs + ordinary.stdout + ordinary.stderr + watchdog.stdout + watchdog.stderr
+    assert 'web_exit=0' in logs and 'proxy_env_file_invalid' not in output
+    for private in (SELECTOR, str(proxy_launch), str(conflicting), *options.values(), *updated.values(),
+                    'fixture-conflicting-proxy', 'fixture conflicting helper', 'fixture-extra-setting'):
+        assert private not in output
+
+
+@pytest.mark.parametrize('problem', ['missing', 'empty-path', 'relative', 'checkout', 'symlink', 'parent-symlink', 'directory',
+                                    'fifo', 'permissions', 'owner', 'invalid-json', 'invalid-key', 'invalid-value', 'nul'])
+def test_invalid_file_proxy_stops_before_dispatch(job, proxy_launch, problem, monkeypatch, capsys):
+    safe = {'HANSET_WEB_PROXY': 'fixture-file-proxy'}
+    if problem != 'missing':
+        replace(proxy_launch, json_bytes(safe))
+    if problem in ('empty-path', 'relative'):
+        monkeypatch.setenv(SELECTOR, '' if problem == 'empty-path' else 'fixture-private-path')
+    elif problem == 'checkout':
+        monkeypatch.setenv(SELECTOR, str(REPO_ROOT / 'README.md'))
+    elif problem == 'symlink':
+        link = job.root / 'link'
+        link.symlink_to(proxy_launch)
+        monkeypatch.setenv(SELECTOR, str(link))
+    elif problem == 'parent-symlink':
+        link = job.root / 'link'
+        link.symlink_to(job.root, target_is_directory=True)
+        monkeypatch.setenv(SELECTOR, str(link / proxy_launch.name))
+    elif problem == 'directory':
+        monkeypatch.setenv(SELECTOR, str(job.root))
+    elif problem == 'fifo':
+        proxy_launch.unlink()
+        os.mkfifo(proxy_launch, 0o600)
+    elif problem == 'permissions':
+        proxy_launch.chmod(0o644)
+    elif problem == 'owner':
+        uid = os.geteuid()
+        monkeypatch.setattr(scheduled.os, 'geteuid', lambda: uid + 1)
+    elif problem == 'invalid-json':
+        replace(proxy_launch, b'fixture-invalid-json')
+    elif problem == 'invalid-key':
+        replace(proxy_launch, json_bytes({**safe, 'OTHER': 'fixture-invalid-key'}))
+    elif problem == 'invalid-value':
+        replace(proxy_launch, json_bytes({**safe, 'HANSET_WEB_PROXY_HEAL_CMD': ['fixture-invalid-value']}))
+    elif problem == 'nul':
+        replace(proxy_launch, json_bytes({**safe, 'HANSET_WEB_PROXY_HEAL_CMD': '\0fixture-invalid-value'}))
+
+    monkeypatch.setattr(scheduled, 'Scheduled', lambda *_: pytest.fail('configuration reached dispatch'))
+    for name in ('daily_collect', 'wide_collect', 'watchdog'):
+        assert scheduled.main([name]) == 1
+        assert capsys.readouterr() == ('', 'proxy_env_file_invalid\n')
+        assert os.environ['HANSET_WEB_PROXY'] == 'fixture-original'
 
 
 def test_seed_cron_races_watchdog_with_one_effective_payload(job, monkeypatch):

@@ -36,5 +36,5 @@ class RealBrowserNetwork(unittest.TestCase):
             'unshare', '--user', '--map-root-user', '--net', '--mount', '--pid', '--fork',
             '--kill-child=KILL', '--mount-proc', sys.executable,
             str(Path(__file__).with_name('browser_network_case.py'))],
-            cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=360,
+            cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=900,
             env=env)

@@ -1,17 +1,19 @@
 """Install only the explicitly owned collector entries in the user's crontab."""
 import argparse
+from dataclasses import dataclass
 import difflib
 import os
 from pathlib import Path
 import re
-import shlex
 import subprocess
 import sys
 
 from . import CollectError
 from .config import outside
+from .cron_command import Command, cron_decode
 from .handoff import Outbox
-from .schedules import CHECKOUT, DAILY_PUBLISH, DATA, JOBS, MARKER, owned_entries
+from .proxy_env import PROXY_NAME, SELECTOR
+from .schedules import CHECKOUT, DAILY_PUBLISH, DATA, JOBS, MARKER, ProxyAssignments, owned_entries
 
 ASSIGNMENT = re.compile(rb"""^[ \t]*CRON_TZ\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s]+))\s*$""")
 ZONE_LINE = re.compile(rb'^[ \t]*CRON_TZ\s*=')
@@ -53,23 +55,24 @@ def owned_command(line):
         return None
     fields = line.split(None, 1)
     if fields[0] in MACROS:
-        command = fields[1] if len(fields) == 2 else b''
+        if len(fields) != 2:
+            return None
     else:
         fields = line.split(None, 5)
         if len(fields) != 6 or not all(valid_field(field, *spec)
                                        for field, spec in zip(fields, FIELDS)):
             return None
-        command = fields[5]
+    raw = fields[-1]
+    command, offsets, has_stdin = cron_decode(raw)
+    if has_stdin:
+        return None
 
-    # Cron consumes unescaped percent signs before the shell parses its command.
-    # The marker must start a shell comment, outside quotes and after a separator.
-    quote, escaped, boundary = None, False, True
+    # Ownership depends on the shell comment, even for unclassifiable jobs.
     marker_at = len(command) - len(MARKER)
+    quote, escaped, boundary = None, False, True
     for index, char in enumerate(command):
         if escaped:
             escaped, boundary = False, False
-        elif char == ord('%'):
-            return None
         elif char == ord('\\') and quote != ord("'"):
             escaped = True
         elif quote is not None:
@@ -78,7 +81,7 @@ def owned_command(line):
         elif char in (ord("'"), ord('"'), ord('`')):
             quote, boundary = char, False
         elif char == ord('#') and boundary:
-            return command[:index].rstrip() if index == marker_at and index > 0 else None
+            return raw[:offsets[index]] if index == marker_at and index > 0 else None
         else:
             boundary = char in b' \t;|&()<>'
     return None
@@ -88,69 +91,184 @@ def owned(line):
     return owned_command(line) is not None
 
 
-def job_name(command):
-    try:
-        words = shlex.split(os.fsdecode(command), comments=True)
-    except ValueError:
+SHELLS = (b'bash', b'/bin/bash', b'/usr/bin/bash', b'sh', b'/bin/sh')
+SCRIPTS = {name: f'{CHECKOUT}/scripts/{JOBS[name].script}'.encode()
+           for name in ('seed_discovery', 'wide_collect', 'daily_collect')}
+SCRIPTS['watchdog'] = f'{CHECKOUT}/scripts/collect_watchdog.sh'.encode()
+
+
+def take_assignments(words, *, env=False):
+    count = 0
+    while count < len(words) and words[count].assignment_name(env=env) is not None:
+        count += 1
+    return words[:count], words[count:]
+
+
+@dataclass(frozen=True)
+class Invocation:
+    shell: list
+    env_command: bytes
+    env: list
+    words: list
+    unsupported: bool
+
+    @property
+    def name(self):
+        return job_name(self.words)
+
+    @property
+    def is_daily(self):
+        end = next((i for i, word in enumerate(self.words) if word.operator), len(self.words))
+        return job_name(self.words[:end]) == 'daily_collect'
+
+
+def invocation(raw):
+    command = Command.parse(raw)
+    shell, words = take_assignments(command.words)
+    env, env_command = [], b'env'
+    unsupported = not command.complete or command.has_stdin
+    if words and words[0].value in (b'env', b'/usr/bin/env') and not words[0].expands:
+        env_command = words[0].raw
+        words = words[1:]
+        # Locate the executable for diagnostics even when env options make
+        # copying its assignments unsafe.
+        while words and not words[0].expands:
+            option = words[0].value
+            if option == b'--':
+                env_command += b' ' + words[0].raw
+                words = words[1:]
+                break
+            if option in (b'-', b'-i', b'--ignore-environment') or option.startswith((b'--unset=', b'--chdir=')):
+                words = words[1:]
+            elif option in (b'-u', b'--unset', b'-C', b'--chdir'):
+                words = words[2:]
+            else:
+                break
+            unsupported = True
+        env, words = take_assignments(words, env=True)
+    if words and words[0].value in SHELLS and not words[0].expands:
+        words = words[1:]
+        if words and words[0].value == b'--' and not words[0].expands:
+            words = words[1:]
+    return Invocation(shell, env_command, env, words, unsupported)
+
+
+def job_name(words):
+    if not words or words[0].expands:
         return None
-    if words and words[0] in ('env', '/usr/bin/env'):
-        words.pop(0)
-    while words and re.fullmatch(r'[A-Za-z_][A-Za-z_0-9]*=.*', words[0]):
-        words.pop(0)
-    if words and words[0] in ('bash', '/bin/bash', '/usr/bin/bash', 'sh', '/bin/sh'):
-        words.pop(0)
-    if not words:
+    script, *args = (word.value for word in words)
+    if script == SCRIPTS['daily_collect']:
+        if args[:1] == [b'wide']:
+            return 'wide_collect'
+        if args in ([], [b'web']):
+            return 'daily_collect'
         return None
-    for name, script in (
-        ('seed_discovery', JOBS['seed_discovery'].script),
-        ('wide_collect', JOBS['wide_collect'].script),
-        ('daily_collect', JOBS['daily_collect'].script),
-        ('watchdog', 'collect_watchdog.sh'),
-    ):
-        if words[0] != f'{CHECKOUT}/scripts/{script}':
-            continue
-        if name == 'wide_collect' and words[1:2] != ['wide']:
-            continue
-        if name == 'daily_collect' and words[1:] not in ([], ['web']):
-            continue
-        return name
+    for name in ('seed_discovery', 'watchdog'):
+        if script == SCRIPTS[name]:
+            return name
     return None
 
 
-DAILY_LINE = re.compile(rb'^([ 	]*15[ 	]+0?4[ 	]+\*[ 	]+\*[ 	]+\*[ 	]+)([^\r\n]+)(\r?\n)?$')
+DAILY_LINE = re.compile(rb'^([ \t]*15[ \t]+0?4[ \t]+\*[ \t]+\*[ \t]+\*[ \t]+)([^\r\n]+)(\r?\n)?$')
 DAILY_TAG = b' # hanset-collx-daily'
+SELECTOR_NAME = SELECTOR.encode()
 
 
-def daily_entry(line, enabled):
+def is_proxy(name):
+    return name == SELECTOR_NAME or (name is not None and PROXY_NAME.fullmatch(name.decode('ascii')) is not None)
+
+
+class UnsupportedDailyProxy(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class DailyEntry:
+    prefix: bytes
+    raw: bytes
+    ending: bytes
+    invocation: Invocation
+    managed: bool
+    decorated: bool
+
+    @property
+    def can_decorate(self):
+        return not self.invocation.unsupported and self.invocation.name == 'daily_collect'
+
+    def proxy_assignments(self):
+        shell = proxy_words(self.invocation.shell)
+        env = proxy_words(self.invocation.env, env=True)
+        names = [name for name, _ in shell + env]
+        if names and (not self.can_decorate or (SELECTOR_NAME in names and len(names) != 1)):
+            raise UnsupportedDailyProxy
+        return ProxyAssignments(tuple(word for _, word in shell), tuple(word for _, word in env),
+                                self.invocation.env_command)
+
+    def render(self, enabled):
+        command = self.raw
+        if enabled and self.can_decorate:
+            command = DAILY_PUBLISH + command + DAILY_TAG
+        return self.prefix + command + self.ending
+
+
+def proxy_words(words, *, env=False):
+    assignments = []
+    for word in words:
+        name = word.assignment_name(env=env)
+        if not is_proxy(name):
+            continue
+        if (word.expands or (env and word.env_pattern)
+                or (name == SELECTOR_NAME and not word.value.partition(b'=')[2].startswith(b'/'))):
+            raise UnsupportedDailyProxy
+        assignments.append((name, word.raw))
+    return assignments
+
+
+def daily_entry(line):
     match = DAILY_LINE.fullmatch(line)
     if not match:
         return None
-    prefix, command, ending = match.groups()
-    if command.startswith(DAILY_PUBLISH) and command.endswith(DAILY_TAG):
-        command = command[len(DAILY_PUBLISH):-len(DAILY_TAG)]
-    if job_name(command) != 'daily_collect':
+    prefix, raw, ending = match.groups()
+    managed = owned_command(line) is not None
+    decorated = not managed and raw.startswith(DAILY_PUBLISH) and raw.endswith(DAILY_TAG)
+    if decorated:
+        raw = raw[len(DAILY_PUBLISH):-len(DAILY_TAG)]
+    parsed = invocation(raw)
+    if not parsed.is_daily:
         return None
-    if enabled:
-        command = DAILY_PUBLISH + command + DAILY_TAG
-    return prefix + command + (ending or b'')
+    return DailyEntry(prefix, raw, ending or b'', parsed, managed, decorated)
 
 
 def proposed(table, uninstall, *, daily_publish=False):
     enabled = daily_publish and not uninstall
-    entries = {} if uninstall else owned_entries(daily_publish=enabled)
+    # Pick the source before any managed jobs are replaced. An operator's
+    # daily entry wins even when a managed entry comes earlier in the table.
+    original = lf_lines(table)
+    daily = {index: entry for index, line in enumerate(original)
+             if (entry := daily_entry(line)) is not None}
+    operator_daily = next((entry for entry in daily.values() if not entry.managed), None)
+    source = operator_daily
+    if source is None and enabled:
+        source = next(iter(daily.values()), None)
+    entries = {}
+    if not uninstall:
+        assignments = source.proxy_assignments() if source is not None else ProxyAssignments()
+        entries = owned_entries(daily_publish=enabled and operator_daily is None, proxy=assignments)
+
     lines = []
-    # Split on LF only so unrelated lines (including CRLF) retain their bytes.
-    for line in lf_lines(table):
-        command = owned_command(line)
-        if command is not None:
-            replacement = entries.pop(job_name(command), None)
+    for index, line in enumerate(original):
+        entry = daily.get(index)
+        if entry is not None and not entry.managed:
+            lines.append(entry.render(enabled))
+        elif (command := owned_command(line)) is not None:
+            name = invocation(command).name
+            if name == 'daily_collect' and source is not None and entry is not source:
+                continue
+            replacement = entries.pop(name, None)
             if replacement is not None:
                 lines.append(replacement)
         else:
-            daily = daily_entry(line, enabled)
-            if daily is not None:
-                entries.pop('daily_collect', None)
-            lines.append(daily if daily is not None else line)
+            lines.append(line)
     if entries and lines and not lines[-1].endswith(b'\n'):
         lines.append(b'\n')
     lines.extend(entries.values())
@@ -162,7 +280,7 @@ def seed_only_table(table):
     lines = []
     for line in lf_lines(table):
         command = owned_command(line)
-        if command is not None and job_name(command) == 'seed_discovery':
+        if command is not None and invocation(command).name == 'seed_discovery':
             if entry:
                 lines.append(entry)
                 entry = b''
@@ -209,12 +327,12 @@ def timezone_conflict(table, default, *, seed_only=False):
         command = owned_command(line)
         if default not in SEOUL or zone not in SEOUL:
             if seed_only:
-                if command is not None and job_name(command) == 'seed_discovery':
+                if command is not None and invocation(command).name == 'seed_discovery':
                     return 'seed_discovery'
                 continue
             if command is not None:
-                return job_name(command) or 'managed_job'
-            if line.rstrip(b'\r\n').endswith(DAILY_TAG) and daily_entry(line, True) == line:
+                return invocation(command).name or 'managed_job'
+            if (entry := daily_entry(line)) is not None and entry.decorated:
                 return 'daily_collect'
     return None
 
@@ -223,13 +341,22 @@ def show_diff(old, new):
     # Zero context prevents adjacent unowned environment assignments leaking.
     changes = difflib.diff_bytes(difflib.unified_diff, lf_lines(old), lf_lines(new),
                                  fromfile=b'crontab', tofile=b'crontab (updated)', n=0)
+    stock = owned_entries(daily_publish=True).values()
     for line in changes:
         if line.startswith(b'-') and line != b'--- crontab\n':
             line = b'-[redacted]' + (b' ' + MARKER if owned(line[1:]) else b'') + b'\n'
         elif line.startswith(b'+') and line != b'+++ crontab (updated)\n':
-            if line[1:] not in owned_entries(daily_publish=True).values():
-                if line[1:].rstrip(b'\r\n').endswith(DAILY_TAG) and daily_entry(line[1:], True) == line[1:]:
-                    line = b'+[04:15 daily collection with HANSET_AUTO_PUBLISH=1]\n'
+            addition = line[1:]
+            if addition not in stock:
+                entry = daily_entry(addition)
+                command = owned_command(addition)
+                if entry is not None and entry.decorated:
+                    line = b'+[daily_collect with HANSET_AUTO_PUBLISH=1]\n'
+                elif entry is not None:
+                    line = b'+[daily_collect]\n'
+                elif command is not None:
+                    name = invocation(command).name or 'managed_job'
+                    line = f'+[{name}]\n'.encode()
                 else:
                     line = b'+[line ending]\n'
         sys.stdout.buffer.write(line)
@@ -254,8 +381,11 @@ def main(argv=None, *, data_root=DATA):
         if (current.returncode != 1 or current.stdout or
                 not re.fullmatch(rb'(?:crontab: )?no crontab for [^\r\n]+\n?', current.stderr)):
             return diagnostic('crontab_read_failed')
-    desired = (seed_only_table(current.stdout) if args.seed_only else
-               proposed(current.stdout, args.uninstall, daily_publish=args.daily_publish))
+    try:
+        desired = (seed_only_table(current.stdout) if args.seed_only else
+                   proposed(current.stdout, args.uninstall, daily_publish=args.daily_publish))
+    except UnsupportedDailyProxy:
+        return diagnostic('daily_proxy_settings_unsupported')
     if args.dry_run:
         show_diff(current.stdout, desired)
     if not args.uninstall:
