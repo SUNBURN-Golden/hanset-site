@@ -42,6 +42,26 @@ def inventory():
     return venues, events, site
 
 
+def test_visitor_guides_are_reachable_from_guide(inventory):
+    _, _, site = inventory
+
+    def main_link_targets(page):
+        main = re.search(r'<main\b[^>]*>(.*?)</main>', page, re.S)[1]
+        return {attrs['href'] for tag, attrs in Tags(main).tags if tag == 'a' and 'href' in attrs}
+
+    index = '/guides/'
+    assert index in main_link_targets(site.pages['/guide/'])
+    index_links = main_link_targets(site.pages[index])
+    for path in (
+        '/guides/tattoo-friendly-saunas-korea/',
+        '/guides/hotel-saunas-korea-non-guests/',
+        '/guides/crossfit-hyrox-drop-in-korea/',
+        '/guides/closed-days-korea/',
+    ):
+        assert path in index_links
+        assert index in main_link_targets(site.pages[path]), path
+
+
 def cards(page):
     return [attrs for tag, attrs in Tags(page).tags if tag == 'article' and 'data-slug' in attrs]
 
