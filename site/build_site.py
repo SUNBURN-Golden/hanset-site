@@ -221,7 +221,8 @@ def guides(site, venues, today):
     G = [(s, t, d, bodies[s]) for s, t, d in GUIDES]
     links = "".join(f'<li><a href="/guides/{s}/">{E(t)}</a></li>' for s, t, _, _ in G)
     for s, t, d, b in G:
-        site.add(f"/guides/{s}/", t, d, f'<div class="page">{b}<h2>More guides</h2><ul class="clean">{links}</ul></div>', "visitors")
+        site.add(f"/guides/{s}/", t, d, f'<div class="page">{b}<p><a href="/guides/">All visitor guides</a></p>'
+                 f'<h2>More guides</h2><ul class="clean">{links}</ul></div>', "visitors")
     site.add("/guides/", "Guides for visitors to Korea", "Verified guides for international visitors: saunas, tattoos, hotel saunas, CrossFit and HYROX drop-ins in Korea.",
              f'<div class="page"><h1>Visiting Korea? Start here.</h1><p class="lead">Short guides. Official facts only.</p><ul class="clean">{links}</ul></div>', "visitors")
 
