@@ -31,6 +31,8 @@ from crawler.report import report
 from crawler.legacy import report as legacy_report
 
 NOW = dt.datetime(2026, 10, 23, 3, tzinfo=dt.timezone.utc).timestamp()
+REVIEW_DAY_90 = dt.datetime.fromisoformat('2026-04-01T23:59:00+09:00').timestamp()
+REVIEW_DAY_91 = dt.datetime.fromisoformat('2026-04-02T00:00:00+09:00').timestamp()
 SOURCE_ORIGIN = 'https://source.test'
 EXTENSION = 'chrome-extension://approved'
 OTHER_EXTENSION = 'chrome-extension://other'
@@ -597,6 +599,77 @@ class Pipeline(unittest.TestCase):
         self.assertNotIn('Discovery index', json.dumps(self.record(res['record_id'])))
         self.assertEqual(self.w.status(res)['state'], 'drained')
         self.assertIsNotNone(self.w.status(res)['ack'])
+
+    def mock_news_sitemap(self, wall_time):
+        origin = 'https://news.test'
+        seed = origin + '/feed.xml'
+        final_url = origin + '/sitemap.xml'
+        reviewed = dict(origin=origin, public=True, robots_reviewed_at='2026-01-01', adapter='sitemap')
+        self.cfg['policies'].extend([
+            dict(reviewed, paths=['/feed.xml']),
+            dict(reviewed, paths=['/sitemap.xml'], url_include=[r'/events/(seoul|busan)$']),
+        ])
+        entries = ''.join(f'<url><loc>{origin}/events/{city}</loc></url>'
+                          for city in ('seoul', 'london', 'busan'))
+        response = {'url': final_url, 'redirects': [{'url': seed, 'status': 302}],
+                    'body': f'<urlset>{entries}</urlset>'.encode()}
+        self.enterContext(patch('hanset_active.crawl_policy._NEWS_DOMAINS', {'news.test'}))
+        self.enterContext(patch('crawler.config.time.time', return_value=wall_time))
+        fetch = self.enterContext(patch.object(NetworkGate, 'fetch', return_value=response))
+        return seed, final_url, fetch
+
+    def test_sitemap_uses_worker_clock_and_final_url_scope(self):
+        from crawler.fetcher import collect
+
+        self.now = REVIEW_DAY_90
+        seed, final_url, fetch = self.mock_news_sitemap(wall_time=REVIEW_DAY_91)
+        res = self.start(seed, channel='auto_discovery')
+        ack = collect(self.w, res)
+
+        fetch.assert_called_once_with(seed)
+        self.assertEqual(self.record(ack['record_id'])['final_url'], final_url)
+        expected = ['https://news.test/events/seoul', 'https://news.test/events/busan']
+        children = [row[0] for row in self.store.db.execute('SELECT url FROM records WHERE id!=?',
+                                                          (res['record_id'],))]
+        self.assertCountEqual(children, expected)
+        checkpoints = {url: json.loads(data)['urls'] for url, data in
+                       self.store.db.execute('SELECT seed,data FROM checkpoints')}
+        self.assertEqual(checkpoints, {final_url: expected})
+
+    def test_sitemap_reservation_rejects_stale_worker_clock_before_fetch(self):
+        self.now = REVIEW_DAY_91
+        seed, _, fetch = self.mock_news_sitemap(wall_time=REVIEW_DAY_90)
+
+        with self.assertRaisesRegex(Rejected, '^robots_review_stale$'):
+            self.w.reserve(uid(), seed, uid(), 'auto_discovery')
+
+        fetch.assert_not_called()
+        self.assertEqual(self.store.db.execute('SELECT count(*) FROM records').fetchone()[0], 0)
+        self.assertIsNone(self.store.db.execute('SELECT 1 FROM checkpoints').fetchone())
+
+    def test_sitemap_discovery_rejects_review_expiring_after_fetch(self):
+        from crawler.config import policy_for
+        from crawler.fetcher import collect
+
+        self.now = REVIEW_DAY_90
+        seed, final_url, fetch = self.mock_news_sitemap(wall_time=REVIEW_DAY_91)
+        res = self.start(seed, channel='auto_discovery')
+
+        def approve_then_rollover(cfg, url, *, now):
+            policy = policy_for(cfg, url, now=now)
+            self.now = REVIEW_DAY_91
+            return policy
+
+        with patch('crawler.fetcher.policy_for', side_effect=approve_then_rollover) as approve:
+            with self.assertRaisesRegex(Rejected, '^robots_review_stale$'):
+                collect(self.w, res)
+
+        fetch.assert_called_once_with(seed)
+        approve.assert_called_once_with(self.cfg, final_url, now=REVIEW_DAY_90)
+        self.assertEqual([row[0] for row in self.store.db.execute('SELECT url FROM records')], [seed])
+        self.assertIsNone(self.store.db.execute('SELECT 1 FROM checkpoints').fetchone())
+        status = self.w.status(res)
+        self.assertEqual((status['state'], status['ack']), ('drained', None))
 
     def test_unapproved_scheduled_candidates_are_held_without_repeated_audits(self):
         url = 'https://new-source.test/news'
