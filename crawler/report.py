@@ -1,11 +1,37 @@
-"""Exclusive current stages and non-additive distinct-place counts."""
+"""Read-only current review status and non-additive distinct-place counts."""
 from contextlib import nullcontext
 import datetime as dt
 import json
 import time
 from . import evidence
+from .config import Rejected
 from .schema import STAGES
 from .rate_limiter import KST
+
+
+def _effective_review(record, now, cfg, conflicts):
+    blocker = evidence.current_review_blocker(record, now, cfg, conflicts)
+    if blocker is not None:
+        return STAGES[1], blocker
+    return record['pipeline_stage'], None
+
+
+def show(store, cfg, record_id, now=None):
+    now = time.time() if now is None else now
+    with store.transaction(immediate=False) as db:
+        if db.execute("SELECT 1 FROM sqlite_schema WHERE type='table' AND name='records'").fetchone() is None:
+            raise Rejected('unknown_record')
+        target = db.execute('SELECT data FROM records WHERE id=?', (record_id,)).fetchone()
+        if target is None:
+            raise Rejected('unknown_record')
+        record = json.loads(target[0])
+        peers = db.execute("SELECT data FROM records WHERE id!=? AND json_extract(data, '$.venue_id')=?",
+                           (record_id, record['venue_id']))
+        records = [record]
+        records.extend(json.loads(row[0]) for row in peers)
+        conflicts = evidence.current_conflicts(db, records)
+        stage, blocker = _effective_review(record, now, cfg, conflicts[record['record_id']])
+        return {**record, 'effective_stage': stage, 'review_blocker': blocker}
 
 
 def report(store, cfg, now=None):
@@ -24,9 +50,7 @@ def _report(db, cfg, now):
     venues = {s: set() for s in STAGES}
     all_venues = set()
     for r in rows:
-        stage = r['pipeline_stage']
-        if evidence.current_review_blocker(r, now, cfg, conflicts[r['record_id']]):
-            stage = STAGES[1]
+        stage, _ = _effective_review(r, now, cfg, conflicts[r['record_id']])
         counts[stage] += 1
         if r['venue_id']:
             venues[stage].add(r['venue_id'])

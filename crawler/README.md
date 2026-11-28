@@ -140,6 +140,24 @@ python3 -m crawler --config /outside-repository/approvals.json resolve-conflict 
 python3 -m crawler --config /outside-repository/approvals.json publish-pending RECORD_ID
 ```
 
+`show` returns the saved record with two fields computed at read time.
+`pipeline_stage` is the saved stage, `effective_stage` is the stage used in
+`report` counts, and `review_blocker` is the reason for a current demotion or
+`null` when the current review check applies no demotion. A record saved as
+publish-pending with revoked official approval returns these values.
+
+```json
+{
+  "pipeline_stage": "5_publish_pending",
+  "effective_stage": "2_source_checked",
+  "review_blocker": "official_approval_revoked"
+}
+```
+
+Both reads preserve local history, which retains past demotion reasons.
+`show`, `verify` and `publish-pending` return `unknown_record` with exit status
+2 when the requested record ID is missing.
+
 Conflict decisions retain review history. Selected facts are revalidated on
 public-pending designation; conflicts or staleness return records to review.
 Even `publish-pending` writes only the local DB. Research metadata does not use

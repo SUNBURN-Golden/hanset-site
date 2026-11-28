@@ -10,6 +10,7 @@ from pathlib import Path
 import socket
 import io
 import http.client
+import sqlite3
 import subprocess
 import sys
 import time
@@ -117,6 +118,21 @@ class Pipeline(unittest.TestCase):
               redirect_stdout(io.StringIO()) as output):
             main()
         return json.loads(output.getvalue())
+
+    def assert_review_projection(self, approvals, store, expected):
+        before = tuple(store.db.iterdump())
+        saved = {rid: json.loads(data) for rid, data in store.db.execute('SELECT id,data FROM records')}
+        self.assertEqual(saved.keys(), expected.keys())
+        for _ in range(2):
+            projected = self.review_cli(approvals, store.path, 'report', '--format', 'json')
+            counts = dict.fromkeys(STAGES, 0)
+            for rid, (stage, blocker) in expected.items():
+                shown = self.review_cli(approvals, store.path, 'show', rid)
+                self.assertEqual(shown, {**saved[rid], 'effective_stage': stage, 'review_blocker': blocker})
+                counts[shown['effective_stage']] += 1
+            self.assertEqual(projected['stage_counts'], counts)
+            self.assertEqual(tuple(store.db.iterdump()), before)
+        return projected
 
     def require_offline_review(self):
         for target in ('crawler.fetcher.collect', 'crawler.network_gate.NetworkGate.fetch',
@@ -905,8 +921,10 @@ class Pipeline(unittest.TestCase):
                     self.store.db.backup(db)
                     before = tuple(db.iterdump())
                     history = [tuple(r) for r in db.execute('SELECT * FROM history ORDER BY seq')]
-                    projected = self.review_cli(approvals, case_store.path, 'report', '--format', 'json')
-                    self.assertEqual(tuple(db.iterdump()), before)
+                    projected = self.assert_review_projection(approvals, case_store, {
+                        verified: (STAGES[1] if reason else STAGES[3], reason),
+                        pending: (STAGES[1] if reason else STAGES[4], reason),
+                    })
                     counts = (0, 2, 0, 0, 0) if reason else (0, 0, 0, 1, 1)
                     self.assertEqual(projected['stage_counts'], dict(zip(STAGES, counts)))
                     self.assertEqual(projected['unique_venue_counts_by_stage'],
@@ -944,6 +962,11 @@ class Pipeline(unittest.TestCase):
                     self.assertEqual(tuple(db.iterdump()), after)
 
                     if reason:
+                        for rid in selections:
+                            shown = self.review_cli(approvals, case_store.path, 'show', rid)
+                            self.assertEqual(shown['effective_stage'], STAGES[1])
+                            self.assertIsNone(shown['review_blocker'])
+                        self.assertEqual(tuple(db.iterdump()), after)
                         approvals.write_text(json.dumps(self.cfg))
                         self.assertEqual(self.review_cli(approvals, case_store.path, 'report'), projected)
                         self.assertEqual(self.review_cli(approvals, case_store.path, 'worker', '--once'), worker)
@@ -953,6 +976,37 @@ class Pipeline(unittest.TestCase):
 
         self.assertEqual(tuple(self.store.db.iterdump()), original)
         self.assertEqual({p: hashlib.sha256(p.read_bytes()).digest() for p in protected}, protected_hashes)
+
+    def test_show_and_report_use_selected_fact_utc_freshness(self):
+        self.require_offline_review()
+        self.now = dt.datetime(2026, 10, 23, 18, tzinfo=dt.timezone.utc).timestamp()
+        _, rid = self.accept()
+        evidence_id = self.record(rid)['extracted_facts'][0]['evidence_id']
+        self.w.verify(rid, [evidence_id])
+        self.w.publish_pending(rid)
+        approvals = Path(self.tmp.name) / 'approvals.json'
+        approvals.write_text(json.dumps(self.cfg))
+        today = dt.datetime.fromtimestamp(self.now, dt.timezone.utc).date()
+
+        for age, stage, blocker in ((90, STAGES[4], None), (91, STAGES[1], 'stale_evidence')):
+            with self.subTest(age=age):
+                record = self.record(rid)
+                fact = next(f for f in record['extracted_facts'] if f['evidence_id'] == evidence_id)
+                fact['checked_at'] = (today - dt.timedelta(days=age)).isoformat()
+                self.store.db.execute('UPDATE records SET data=? WHERE id=?', (json.dumps(record), rid))
+                projected = self.assert_review_projection(approvals, self.store, {rid: (stage, blocker)})
+                self.assertEqual(projected['milestone_counts'][STAGES[4]], 1)
+
+    def assert_unknown_record(self, approvals, state, *command):
+        result = subprocess.run(
+            [sys.executable, '-m', 'crawler', '--config', str(approvals), '--state', str(state), *command],
+            cwd=REPO, capture_output=True, text=True, timeout=10,
+        )
+        self.assertEqual(result.returncode, 2)
+        response = json.loads(result.stdout)
+        self.assertEqual(response, {'error': 'unknown_record', 'auto_publish_to_site': False})
+        self.assertIs(response['auto_publish_to_site'], False)
+        self.assertEqual(result.stderr, '')
 
     def test_review_cli_rejects_unknown_record_without_changing_state(self):
         self.now = time.time()
@@ -973,17 +1027,39 @@ class Pipeline(unittest.TestCase):
         )
         for command in commands:
             with self.subTest(command=command[0]):
-                result = subprocess.run(
-                    [sys.executable, '-m', 'crawler', '--config', str(approvals),
-                     '--state', str(self.store.path), *command],
-                    cwd=REPO, capture_output=True, text=True, timeout=10,
-                )
-                self.assertEqual(result.returncode, 2)
-                response = json.loads(result.stdout)
-                self.assertEqual(response, {'error': 'unknown_record', 'auto_publish_to_site': False})
-                self.assertIs(response['auto_publish_to_site'], False)
-                self.assertEqual(result.stderr, '')
+                self.assert_unknown_record(approvals, self.store.path, *command)
                 self.assertEqual(tuple(self.store.db.iterdump()), before)
+
+    def test_show_unknown_record_does_not_initialize_state(self):
+        approvals = Path(self.tmp.name) / 'approvals.json'
+        approvals.write_text(json.dumps(self.cfg))
+        absent = Path(self.tmp.name) / 'absent' / 'state.sqlite3'
+        self.assert_unknown_record(approvals, absent, 'show', 'missing-record')
+        self.assertFalse(absent.exists())
+        self.assertFalse(absent.parent.exists())
+
+        empty = Path(self.tmp.name) / 'empty.sqlite3'
+        with closing(sqlite3.connect(empty)) as db:
+            db.execute('VACUUM')
+            before = tuple(db.iterdump())
+            self.assert_unknown_record(approvals, empty, 'show', 'missing-record')
+            self.assertEqual(tuple(db.iterdump()), before)
+            self.assertEqual(db.execute('SELECT name FROM sqlite_schema').fetchall(), [])
+
+    def test_show_surfaces_corrupt_database_error(self):
+        approvals = Path(self.tmp.name) / 'approvals.json'
+        approvals.write_text(json.dumps(self.cfg))
+        corrupt = Path(self.tmp.name) / 'corrupt.sqlite3'
+        corrupt.write_text('corrupt state')
+        with self.assertRaisesRegex(sqlite3.DatabaseError, 'file is not a database'):
+            self.review_cli(approvals, corrupt, 'show', 'missing-record')
+
+    def test_show_surfaces_inaccessible_path_error(self):
+        approvals = Path(self.tmp.name) / 'approvals.json'
+        approvals.write_text(json.dumps(self.cfg))
+        inaccessible = self.store.path / 'state.sqlite3'
+        with self.assertRaises(NotADirectoryError):
+            self.review_cli(approvals, inaccessible, 'show', 'missing-record')
 
     def test_review_rejects_invalid_current_evidence(self):
         self.require_offline_review()
@@ -1060,6 +1136,10 @@ class Pipeline(unittest.TestCase):
         self.w.publish_pending(first)
         approvals = Path(self.tmp.name) / 'approvals.json'
         approvals.write_text(json.dumps(self.cfg))
+        self.assert_review_projection(approvals, self.store, {
+            first: (STAGES[4], None),
+            second: (STAGES[1], None),
+        })
         for case, reason in [('unresolved', 'review_required'), ('opposing', 'conflict_decision_excludes_fact')]:
             with self.subTest(case=case), closing(Store(Path(self.tmp.name) / f'{case}.sqlite3')) as case_store:
                 db = case_store.db
@@ -1068,9 +1148,10 @@ class Pipeline(unittest.TestCase):
                     db.execute('DELETE FROM conflict_resolutions WHERE id=?', (conflict_id,))
                 else:
                     db.execute('UPDATE conflict_resolutions SET evidence_id=? WHERE id=?', (second_id, conflict_id))
-                before = tuple(db.iterdump())
-                projected = self.review_cli(approvals, case_store.path, 'report')
-                self.assertEqual(tuple(db.iterdump()), before)
+                projected = self.assert_review_projection(approvals, case_store, {
+                    first: (STAGES[1], reason),
+                    second: (STAGES[1], None),
+                })
                 self.assertEqual(projected['stage_counts'], dict(zip(STAGES, (0, 2, 0, 0, 0))))
                 self.assertEqual(projected['conflicts'], 2 if case == 'unresolved' else 0)
                 self.assertEqual(projected['milestone_counts'][STAGES[4]], 1)
@@ -1124,6 +1205,37 @@ class Pipeline(unittest.TestCase):
         self.assertEqual(after['conflicts'], 0)
         self.assertEqual(after['stage_counts'][STAGES[4]], 1)
         self.assertEqual(after['milestone_counts'][STAGES[4]], 1)
+
+    def test_show_reads_records_and_current_decisions_in_one_snapshot(self):
+        from crawler import evidence
+
+        self.require_offline_review()
+        _, first = self.accept()
+        _, second = self.accept(SOURCE_ORIGIN + '/en', '40000')
+        first_id = self.record(first)['extracted_facts'][0]['evidence_id']
+        second_id = self.record(second)['extracted_facts'][0]['evidence_id']
+        conflict_id = self.record(first)['conflicts'][0]['conflict_id']
+        self.w.resolve_conflict(conflict_id, first_id, 'operator_review')
+        self.w.verify(first, [first_id])
+        self.w.publish_pending(first)
+        saved = self.record(first)
+        self.assertEqual(saved['pipeline_stage'], STAGES[4])
+        approvals = Path(self.tmp.name) / 'approvals.json'
+        approvals.write_text(json.dumps(self.cfg))
+        current_conflicts = evidence.current_conflicts
+
+        def change_decision(db, records):
+            self.assertCountEqual([r['record_id'] for r in records], [first, second])
+            with closing(sqlite3.connect(self.store.path, timeout=1)) as writer, writer:
+                writer.execute('UPDATE conflict_resolutions SET evidence_id=? WHERE id=?', (second_id, conflict_id))
+            return current_conflicts(db, records)
+
+        with patch.object(evidence, 'current_conflicts', side_effect=change_decision):
+            before = self.review_cli(approvals, self.store.path, 'show', first)
+        self.assertEqual(before, {**saved, 'effective_stage': STAGES[4], 'review_blocker': None})
+        after = self.review_cli(approvals, self.store.path, 'show', first)
+        self.assertEqual(after, {**saved, 'effective_stage': STAGES[1],
+                                'review_blocker': 'conflict_decision_excludes_fact'})
 
     def test_scoped_historical_changes_are_not_conflicts(self):
         r = self.start()
