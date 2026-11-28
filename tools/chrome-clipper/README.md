@@ -20,13 +20,19 @@ network approval registry. They remain clues; clipping grants no unattended
 access permission. Public membership restrictions are retained as facility facts,
 while member-only conversations remain excluded.
 
-`저장된 자료 재전송` retries already extracted payloads. `중단된 담기 새로 시작`
-is an explicit user action requesting a new reservation. If service-worker exit
-makes extraction status ambiguous, resumption revokes the old attempt and never
-reads the document again automatically. Document ID and URL must still match.
-ACK loss retransmits the same sanitized payload/ID without another body charge.
-Expired uncommitted payloads are discarded. Offline intents are not coupons for
-offline extraction. Optional `alarms` permission enables delivery retries only.
+`저장된 자료 재전송`, browser startup, and optional `alarms` replay saved payloads
+with their original reservations. Replay requires no document read or body charge.
+The queue removes each payload after the collector returns a matching committed
+ACK or confirms that the reservation expired, was revoked, or was superseded.
+Unconfirmed delivery or failed cleanup leaves the payload available for replay.
+If service-worker exit makes extraction status ambiguous, resume can revoke the
+old reservation and keeps its checkpoint without beginning or reading again.
+
+`중단된 담기 새로 시작` first checks the active tab for a saved payload. If one
+exists, the action returns its delivery outcome. Otherwise it starts a new
+reservation only after the collector confirms that every prior reservation for
+the tab has drained and the old checkpoints are removed. The document ID and URL
+must match for the new extraction.
 
 Required permissions are exactly `activeTab`, `scripting`, `storage`. There are no
 required host grants, `webRequest`, `debugger`, or all-sites permissions. Optional
