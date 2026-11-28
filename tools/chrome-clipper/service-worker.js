@@ -4,6 +4,7 @@ const LOCAL_PERMISSION = 'http://127.0.0.1/*';
 const APPROVED_MANIFEST_ORIGINS = chrome.runtime.getManifest().optional_host_permissions
   .filter(p => p.startsWith('https://') && !p.slice(0, -2).includes('*')).map(p => p.slice(0, -2));
 let serial = Promise.resolve(); // optimization only; storage is the source of recovery truth
+let needsLegacyPrune = true;
 let consentPump;
 function startConsentPump() {
   if (consentPump) return;
@@ -35,17 +36,36 @@ async function request(path, data) {
   } catch { throw Error('offline'); }
   let result;
   try { result = await response.json(); } catch { throw Error('offline'); }
-  if (!response.ok) throw Error(result.reason || 'worker_rejected');
+  if (path === '/result') return {status: response.status, body: result};
+  if (!response.ok) throw Error(result?.reason || 'worker_rejected');
   return result;
 }
-async function jobs() { return (await chrome.storage.local.get('jobs')).jobs || {}; }
+async function jobs() {
+  const queue = (await chrome.storage.local.get('jobs')).jobs || {};
+  if (needsLegacyPrune) {
+    const terminalIds = Object.keys(queue).filter(id => ['acked', 'expired'].includes(queue[id].state));
+    if (terminalIds.length) {
+      for (const id of terminalIds) delete queue[id];
+      await chrome.storage.local.set({jobs: queue});
+    }
+    needsLegacyPrune = false;
+  }
+  return queue;
+}
 async function save(job) {
   const queue = await jobs();
   queue[job.clip_id] = job;
   await chrome.storage.local.set({jobs: queue});
   return job;
 }
-const clipper = new HANSETClipper({request, save, extract: async job => {
+async function removeJobs(...clipIds) {
+  const queue = await jobs();
+  const existing = clipIds.filter(id => Object.hasOwn(queue, id));
+  if (!existing.length) return;
+  for (const id of existing) delete queue[id];
+  await chrome.storage.local.set({jobs: queue});
+}
+const clipper = new HANSETClipper({request, save, remove: removeJobs, extract: async job => {
   const target = {tabId: job.tab_id, documentIds: [job.document_id]};
   await chrome.scripting.executeScript({target, files: ['privacy-filter.js', 'extract.js']});
   const [result] = await chrome.scripting.executeScript({target,
@@ -53,13 +73,13 @@ const clipper = new HANSETClipper({request, save, extract: async job => {
   if (!result || result.documentId !== job.document_id || !result.result) throw Error('document_mismatch');
   return result.result;
 }});
-async function currentIntent() {
-  const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+async function currentIntent(tab) {
+  if (!tab) [tab] = await chrome.tabs.query({active: true, currentWindow: true});
   const url = HANSETPrivacy.safeURL(tab.url);
   // Metadata only. No title, text, input value or quote is read before reservation.
   const [meta] = await chrome.scripting.executeScript({target: {tabId: tab.id}, func: () => location.href});
   if (HANSETPrivacy.safeURL(meta.result) !== url) throw Error('document_mismatch');
-  const old = Object.values(await jobs()).find(j => j.tab_id === tab.id && j.document_id === meta.documentId && !['acked', 'expired'].includes(j.state));
+  const old = Object.values(await jobs()).find(j => j.tab_id === tab.id && j.document_id === meta.documentId);
   if (old) return old;
   return save({clip_id: crypto.randomUUID(), tab_id: tab.id, document_id: meta.documentId, url, state: 'intent'});
 }
@@ -75,15 +95,21 @@ async function handle(message) {
     return {state: 'resumed'};
   }
   if (message.action === 'retry') {
-    // Explicit new user action, new reservation; never silently reread after a restart.
     const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
-    for (const job of Object.values(await jobs())) {
-      if (job.tab_id === tab.id && job.state !== 'acked') {
-        if (job.reservation) { try { await request('/revoke', {reservation: job.reservation}); } catch { return {state: 'offline'}; } }
-        job.state = 'expired'; delete job.data; await save(job);
+    const tabJobs = Object.values(await jobs()).filter(job => job.tab_id === tab.id);
+    const ready = tabJobs.find(job => job.state === 'ready');
+    if (ready) return clipper.deliver(ready);
+
+    for (const job of tabJobs) {
+      if (job.reservation) {
+        try {
+          const result = await request('/revoke', {reservation: job.reservation});
+          if (result?.drained !== true) return {state: 'uncertain'};
+        } catch { return {state: 'offline'}; }
       }
     }
-    return clipper.start(await currentIntent());
+    if (tabJobs.length) await removeJobs(...tabJobs.map(job => job.clip_id));
+    return clipper.start(await currentIntent(tab));
   }
   if (message.action === 'approve') {
     const origin = new URL(HANSETPrivacy.safeURL(message.origin + '/')).origin;

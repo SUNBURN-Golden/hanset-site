@@ -130,6 +130,8 @@ class Content(http.server.BaseHTTPRequestHandler):
         if self.path.startswith(('/minimal/', '/guides/minimal/')):
             index = int(self.path.rsplit('/', 1)[1])
             body = SHARED_REGIONS[index]['html']
+        elif self.path == '/guides/manual-one':
+            body = '<title>Public guide</title><main>Independent public guide<input value="never-store"></main>'
         elif self.path.startswith('/dns-navigation/'):
             target = self.path.removeprefix('/dns-navigation/')
             assert target in DNS_FIXTURES

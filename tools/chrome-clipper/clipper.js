@@ -5,18 +5,22 @@
     async save(job) { await this.io.save(job); return job; }
     async deliver(job) {
       if (!job.data) return job;
+      let state;
       try {
-        const ack = await this.io.request('/result', {reservation: job.reservation, data: job.data});
-        job.ack = ack;
-        job.state = 'acked';
-        delete job.data;
-        await this.save(job);
-      } catch (e) {
-        job.reason = e.message === 'offline' ? 'offline' : 'result_rejected';
-        if (e.message !== 'offline') { job.state = 'expired'; delete job.data; }
-        await this.save(job);
+        const {status, body} = await this.io.request('/result', {reservation: job.reservation, data: job.data});
+        if (status === 200 && typeof body?.ack === 'string' && body.ack && body.ack === job.reservation.id
+            && typeof body.record_id === 'string' && body.record_id && body.record_id === job.reservation.record_id) {
+          state = 'acked';
+        } else if (status === 409 && ['lease_expired_or_revoked', 'stale_generation'].includes(body?.reason)) {
+          state = 'expired';
+        } else {
+          return job;
+        }
+        await this.io.remove(job.clip_id);
+      } catch {
+        return job;
       }
-      return job;
+      return {state};
     }
     async start(job) {
       if (job.state !== 'intent') return this.resume(job);

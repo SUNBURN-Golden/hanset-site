@@ -2,7 +2,9 @@
 
 Xvfb/xdotool drive the browser's actual optional-host permission prompt.
 """
+from datetime import datetime
 import http.server
+import io
 import json
 from pathlib import Path
 import socket
@@ -14,6 +16,7 @@ from playwright.sync_api import sync_playwright
 from crawler.config import load, REPO
 from crawler.intake import handler
 from crawler.local_worker import Worker
+from crawler.rate_limiter import KST
 from crawler.store import Store
 
 
@@ -25,19 +28,52 @@ def run(config_path, temp):
     cases = [case for case in json.loads((REPO / 'tests/fixtures/minimal_regions.json').read_text())
              if not case.get('http_only')]
     state = Path(temp) / 'extension.sqlite3'
-    control = {'drop_result': False, 'drop_begin': False, 'stop': False}
+    control = {'drop_result': None, 'drop_begin': False, 'stop': False, 'clock_offset': 0}
+    results = []
     ready = threading.Event()
+    # Keep deliberate lease-expiry jumps away from the collector's midnight cutoff.
+    clock_start = datetime(2026, 1, 1, 12, tzinfo=KST).timestamp()
+    monotonic_start = time.monotonic()
+
+    def clock():
+        return clock_start + (time.monotonic() - monotonic_start) + control['clock_offset']
+
     def server_thread():
         store = Store(state)
-        worker = Worker(store, cfg)
+        worker = Worker(store, cfg, clock=clock)
         base = handler(worker)
         class FaultIntake(base):
+            def disconnect(self):
+                self.connection.shutdown(socket.SHUT_RDWR)
+                self.connection.close()
+
+            def do_POST(self):
+                if self.path != '/result':
+                    return super().do_POST()
+                original = self.rfile
+                raw = original.read(int(self.headers['Content-Length']))
+                self.result_entry = {'request': json.loads(raw), 'response': None}
+                results.append(self.result_entry)
+                if control['drop_result'] == 'before':
+                    control['drop_result'] = None
+                    self.disconnect()
+                    return
+                try:
+                    self.rfile = io.BytesIO(raw)
+                    super().do_POST()
+                finally:
+                    self.rfile = original
+
             def reply(self, status, value):
-                flag = 'drop_result' if self.path == '/result' else 'drop_begin' if self.path == '/begin' else None
-                if flag and control[flag] and status == 200:
-                    control[flag] = False
-                    self.connection.shutdown(socket.SHUT_RDWR)
-                    self.connection.close()
+                if hasattr(self, 'result_entry'):
+                    self.result_entry['response'] = (status, value)
+                    if control['drop_result'] == 'after' and status == 200:
+                        control['drop_result'] = None
+                        self.disconnect()
+                        return
+                if self.path == '/begin' and control['drop_begin'] and status == 200:
+                    control['drop_begin'] = False
+                    self.disconnect()
                     return
                 super().reply(status, value)
         server = http.server.HTTPServer(('127.0.0.1', 8766), FaultIntake)
@@ -53,6 +89,20 @@ def run(config_path, temp):
         try:
             return (store.db.execute('SELECT COALESCE(sum(attempts),0) FROM counters').fetchone()[0],
                     store.db.execute('SELECT count(*) FROM observations').fetchone()[0])
+        finally: store.close()
+
+    def reservations_for(url):
+        store = Store(state, readonly=True)
+        try:
+            return [dict(row) for row in store.db.execute(
+                'SELECT * FROM reservations WHERE url=? ORDER BY generation', (url,))]
+        finally: store.close()
+
+    def observed_reservations(record_id):
+        store = Store(state, readonly=True)
+        try:
+            return [row[0] for row in store.db.execute(
+                'SELECT reservation_id FROM observations WHERE record_id=?', (record_id,))]
         finally: store.close()
 
     with sync_playwright() as p:
@@ -79,21 +129,53 @@ def run(config_path, temp):
         subprocess.run(['xdotool', 'key', 'Tab', 'Return'], check=True)
         popup.wait_for_timeout(700)
         assert worker.evaluate("chrome.permissions.contains({origins:['http://127.0.0.1/*','https://pubmed.ncbi.nlm.nih.gov/*']})")
+
+        def send(action):
+            return popup.evaluate('action => chrome.runtime.sendMessage({action})', action)
+
+        def expect_state(action, state):
+            assert send(action) == {'ok': True, 'state': state}
+
+        def queue():
+            return popup.evaluate("chrome.storage.local.get('jobs').then(o => o.jobs || {})")
+
+        def saved_job(url):
+            return next(job for job in queue().values() if job['url'] == url)
+
+        def watch_dom(page):
+            page.bring_to_front()
+            return popup.evaluate('''async () => {
+                const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+                const [injected] = await chrome.scripting.executeScript({target: {tabId: tab.id}, func: () => {
+                    const querySelector = Document.prototype.querySelector;
+                    globalThis.fixtureDOMReads = 0;
+                    Document.prototype.querySelector = function (selector) {
+                        if (selector === 'main, article') globalThis.fixtureDOMReads++;
+                        return querySelector.call(this, selector);
+                    };
+                }});
+                return {tabId: tab.id, documentIds: [injected.documentId]};
+            }''')
+
+        def dom_reads(target):
+            return popup.evaluate('''async target => {
+                const [read] = await chrome.scripting.executeScript({target, func: () => globalThis.fixtureDOMReads});
+                return read.result;
+            }''', target)
+
+        def advance_past(reservation):
+            control['clock_offset'] += max(0, reservation['expires'] + 1 - clock())
+
         page = context.new_page()
         page.goto(guide_base + 'manual-one')
-        page.bring_to_front()
+        watched = watch_dom(page)
         # Offline: a real scripting API reads URL metadata only, never the region.
-        job = worker.evaluate("handle({action:'clip'})")
+        expect_state('clip', 'intent')
+        job = saved_job(page.url)
         assert job['state'] == 'intent' and 'data' not in job
-        assert all('excerpt' not in json.dumps(j) for j in worker.evaluate('jobs()').values())
+        assert dom_reads(watched) == 0
         thread = threading.Thread(target=server_thread, daemon=True); thread.start()
         assert ready.wait(5)
-        # Commit succeeds, response is lost: the extension retains already sanitized data.
-        control['drop_result'] = True
-        job = worker.evaluate("handle({action:'clip'})")
-        assert job['state'] == 'ready', job
-        assert stats() == (1, 1)
-        assert 'never-store' not in json.dumps(worker.evaluate('jobs()'))
         cdp = context.browser.new_browser_cdp_session()
         def stop_extension_worker():
             targets = cdp.send('Target.getTargets')['targetInfos']
@@ -104,19 +186,100 @@ def run(config_path, temp):
                     return
                 popup.wait_for_timeout(100)
             raise AssertionError('extension service-worker target did not terminate')
+
+        def drop_clip_result(when):
+            control['drop_result'] = when
+            start = len(results)
+            expect_state('clip', 'ready')
+            job = saved_job(page.url)
+            assert job['state'] == 'ready'
+            assert len(results) == start + 1 and control['drop_result'] is None
+            assert results[start]['request'] == {'reservation': job['reservation'], 'data': job['data']}
+            return job, start
+
+        # Committed results replay the same ACK even after the saved lease expires.
+        job, start = drop_clip_result('after')
+        reservation = job['reservation']
+        ack = {'ack': reservation['id'], 'record_id': reservation['record_id']}
+        assert results[start]['response'] == (200, ack)
+        assert 'never-store' not in json.dumps(queue())
+        assert job['data']['excerpt'] == 'Independent public guide'
+        assert stats() == (1, 1)
+        assert observed_reservations(reservation['record_id']) == [reservation['id']]
         stop_extension_worker()
-        popup.evaluate("chrome.runtime.sendMessage({action:'resume'})")
-        assert stats() == (1, 1), 'restart must not reserve or extract again'
-        assert all(j['state'] == 'acked' for j in popup.evaluate("chrome.storage.local.get('jobs').then(o=>o.jobs)").values())
-        # Lost begin response leaves no extracted payload, including after real termination.
-        page.goto(guide_base + 'manual-two'); page.bring_to_front()
+        advance_past(reservation)
+        expect_state('resume', 'resumed')
+        assert results[start + 1:] == [results[start]]
+        assert job['clip_id'] not in queue()
+        assert dom_reads(watched) == 1 and stats() == (1, 1)
+        assert observed_reservations(reservation['record_id']) == [reservation['id']]
+
+        # When the request is lost before acceptance, the expired replay is final.
+        page.goto(guide_base + 'expired')
+        watched = watch_dom(page)
+        before = stats()
+        job, start = drop_clip_result('before')
+        reservation = job['reservation']
+        assert results[start]['response'] is None
+        stop_extension_worker()
+        advance_past(reservation)
+        expect_state('resume', 'resumed')
+        assert results[start + 1:] == [{'request': results[start]['request'],
+                                        'response': (409, {'reason': 'lease_expired_or_revoked'})}]
+        assert job['clip_id'] not in queue()
+        expect_state('resume', 'resumed')
+        assert len(results) == start + 2
+        assert observed_reservations(reservation['record_id']) == []
+        assert dom_reads(watched) == 1 and stats() == (before[0] + 1, before[1])
+
+        # A second tab can clip the same URL once the old reservation has drained.
+        page.goto(guide_base + 'superseded')
+        watched = watch_dom(page)
+        before = stats()
+        job, start = drop_clip_result('before')
+        older = job['reservation']
+        assert results[start]['response'] is None
+        stop_extension_worker()
+        advance_past(older)
+        deadline = time.monotonic() + 5
+        while reservations_for(page.url)[0]['state'] != 'drained' and time.monotonic() < deadline:
+            popup.wait_for_timeout(100)
+        assert reservations_for(page.url)[0]['state'] == 'drained'
+        second = context.new_page()
+        second.goto(page.url)
+        watched_second = watch_dom(second)
+        expect_state('clip', 'acked')
+        previous, newer = reservations_for(second.url)
+        assert previous['id'] == older['id']
+        assert newer['record_id'] == older['record_id'] and newer['generation'] > older['generation']
+        assert newer['clip_id'] not in queue()
+        assert results[start + 1]['request']['reservation']['id'] == newer['id']
+        assert results[start + 1]['response'] == (200, {'ack': newer['id'], 'record_id': older['record_id']})
+        expect_state('resume', 'resumed')
+        assert results[start + 2:] == [{'request': results[start]['request'],
+                                        'response': (409, {'reason': 'stale_generation'})}]
+        assert job['clip_id'] not in queue()
+        assert dom_reads(watched) == dom_reads(watched_second) == 1
+        assert stats() == (before[0] + 2, before[1] + 1)
+        assert observed_reservations(older['record_id']) == [newer['id']]
+        second.close()
+
+        # Lost begin leaves the uncertain checkpoint and no extraction after restart.
+        page.goto(guide_base + 'manual-two')
+        watched = watch_dom(page)
+        before = stats()
+        start = len(results)
         control['drop_begin'] = True
-        job = popup.evaluate("chrome.runtime.sendMessage({action:'clip'})")
-        assert job['state'] == 'uncertain'
-        assert all('data' not in j for j in popup.evaluate("chrome.storage.local.get('jobs').then(o=>o.jobs)").values())
+        expect_state('clip', 'uncertain')
+        job = saved_job(page.url)
+        assert job['state'] == 'uncertain' and 'data' not in job
+        assert dom_reads(watched) == 0
         stop_extension_worker()
-        popup.evaluate("chrome.runtime.sendMessage({action:'resume'})")
-        assert stats() == (2, 1)
+        expect_state('resume', 'resumed')
+        assert queue() == {job['clip_id']: job}
+        assert len(results) == start and dom_reads(watched) == 0
+        assert stats() == (before[0] + 1, before[1])
+        assert observed_reservations(job['reservation']['record_id']) == []
         # Chrome consent can be registered for an origin with only guide access.
         approved = popup.evaluate("origin => chrome.runtime.sendMessage({action:'approve',origin})", source_origin)
         assert approved['ok']
@@ -128,7 +291,7 @@ def run(config_path, temp):
             outcomes = []
             def execute():
                 local = Store(state)
-                try: outcomes.append(Worker(local, cfg).once())
+                try: outcomes.append(Worker(local, cfg, clock=clock).once())
                 finally: local.close()
             thread = threading.Thread(target=execute, daemon=True)
             thread.start()
@@ -138,37 +301,38 @@ def run(config_path, temp):
             assert len(outcomes) == 1
             return outcomes[0]
         page.goto(guide_base + 'public'); page.bring_to_front()
-        submitted = popup.evaluate("chrome.runtime.sendMessage({action:'submit'})")
+        before = stats()
+        submitted = send('submit')
         assert submitted['ok']
         assert run_once()
-        assert stats() == (3, 2)
+        collected = (before[0] + 1, before[1] + 1)
+        assert stats() == collected
         paused_url = guide_base + 'unattended-paused'
         page.goto(paused_url); page.bring_to_front()
-        assert popup.evaluate("chrome.runtime.sendMessage({action:'submit'})")['ok']
+        assert send('submit')['ok']
         stop_extension_worker()
         assert not run_once(), 'terminated permission responder must prevent browser start'
-        assert stats() == (3, 2), 'offline consent must not reserve a body slot'
-        popup.evaluate("chrome.runtime.sendMessage({action:'resume'})")
+        assert stats() == collected, 'offline consent must not reserve a body slot'
+        expect_state('resume', 'resumed')
         for index, case in enumerate(cases):
             page.goto(guide_base + 'minimal/' + str(index))
             page.bring_to_front()
             before = stats()
-            result = popup.evaluate("chrome.runtime.sendMessage({action:'clip'})")
-            jobs = popup.evaluate("chrome.storage.local.get('jobs').then(o=>o.jobs)")
-            job = next(j for j in jobs.values() if j['url'] == page.url)
-            assert result['ok'], case['name']
-            assert 'reservation' in job, ('extraction must follow reservation/begin', case['name'])
-            assert 'data' not in job, ('no retained raw or rejected body', case['name'])
             accepted = 'reason' not in case
-            assert job['state'] == ('acked' if accepted else 'uncertain'), case['name']
+            assert send('clip') == {'ok': True, 'state': 'acked' if accepted else 'uncertain'}, case['name']
+            reservation, = reservations_for(page.url)
+            if accepted:
+                assert reservation['clip_id'] not in queue(), case['name']
+            else:
+                job = queue()[reservation['clip_id']]
+                assert job['state'] == 'uncertain' and 'data' not in job, case['name']
+            assert all(j['state'] not in ('acked', 'expired') for j in queue().values())
             assert stats() == (before[0] + 1, before[1] + int(accepted)), case['name']
             store = Store(state, readonly=True)
             try:
                 saved = store.db.execute('SELECT data FROM observations WHERE reservation_id=?',
-                                         (job['reservation']['id'],)).fetchone()
-                reservation = store.db.execute('SELECT state FROM reservations WHERE id=?',
-                                               (job['reservation']['id'],)).fetchone()
-                assert reservation[0] == ('drained' if accepted else 'running'), case['name']
+                                         (reservation['id'],)).fetchone()
+                assert reservation['state'] == ('drained' if accepted else 'running'), case['name']
                 if accepted:
                     data = json.loads(saved[0])
                     assert data['title'] == case['title'], case['name']
@@ -179,7 +343,7 @@ def run(config_path, temp):
                 else:
                     assert saved is None, case['name']
                     record = json.loads(store.db.execute('SELECT data FROM records WHERE id=?',
-                                                        (job['reservation']['record_id'],)).fetchone()[0])
+                                                        (reservation['record_id'],)).fetchone()[0])
                     assert record['extracted_facts'] == record['evidence_locator'] == [], case['name']
                 assert store.db.execute('SELECT count(*) FROM archives').fetchone()[0] == 0
             finally:
@@ -187,7 +351,7 @@ def run(config_path, temp):
             # Extraction failures are ambiguous jobs until explicit resumption revokes
             # them. Drain before trying the next document on this same origin.
             if not accepted:
-                popup.evaluate("chrome.runtime.sendMessage({action:'resume'})")
+                expect_state('resume', 'resumed')
         print('shared real clipper fixtures after reservation/begin: acceptance, sanitized evidence and rejection OK')
         policy = next(p for p in cfg['policies'] if p['origin'] == source_origin)
         cfg['policies'].remove(policy)
@@ -197,7 +361,7 @@ def run(config_path, temp):
             popup.wait_for_timeout(100)
         assert popup.evaluate(grant_marker, grant_key) is None, 'worker did not acknowledge withdrawal'
         assert not popup.evaluate('pattern => chrome.permissions.contains({origins:[pattern]})', source_origin + '/*')
-        denied = popup.evaluate("chrome.runtime.sendMessage({action:'submit'})")
+        denied = send('submit')
         assert not denied['ok']
         store = Store(state, readonly=True)
         try:
@@ -212,7 +376,7 @@ def run(config_path, temp):
         assert stats() == before, 'withdrawn consent must not reserve a body slot or collect the queued URL'
         context.close()
         control['stop'] = True; thread.join(timeout=5)
-    print('real Chrome extension: offline, ACK loss, service-worker termination, begin loss, permission withdrawal OK')
+    print('real Chrome extension: offline, ACK replay, expiry, supersession, begin loss, permission withdrawal OK')
 
 
 if __name__ == '__main__': run(sys.argv[1], sys.argv[2])
