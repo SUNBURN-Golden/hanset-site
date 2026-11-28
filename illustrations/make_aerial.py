@@ -109,8 +109,7 @@ def haesurang():
     b += zone(680, 770, 330, 110, C["tan"], "Powder room", size=30)
     b += entrance(60, 905, 160, 70)
     b += arrow(230, 945, 300, 945) + T(395, 955, "lockers 4–5F", 28)
-    b += notes(70, 1040, ["Sauna  ₩15,000 (weekday) · ₩18,000 (weekend)", "+ jjimjil  ₩20,000 · + open-air (7F)  ₩25,000",
-                          "All three  ₩30,000 · 6 hrs", "Sauna 06:00–22:00 · open-air bath 10:00–21:00 (swimwear)"], 30)
+    b += notes(70, 1040, ["7F open-air bath"], 30)
     return b
 
 def heosimcheong():
@@ -132,16 +131,14 @@ def heosimcheong():
     for r in range(2): b += shower_row(110 + r*0, 800 + r*90, 12, 44)
     b += zone(680, 800, 340, 120, C["scrub"], "Scrub corner", size=30)
     b += entrance(70, 960, 250, 70, "IN (4F desk)")
-    b += notes(340, 1000, ["get key at 4F, pay when you leave"], 26, color=C["dark"])
-    b += notes(70, 1090, ["Weekday ₩15,000 · Sat/Sun/holiday ₩18,000", "Jjimjil (3F) +₩4,000 robe · 4 hrs (6 hrs with jjimjil)",
-                          "Hot spring 05:30–22:00 · open all year"], 30)
+    b += notes(70, 1090, ["Jjimjil (3F)"], 30)
     b += notes(70, 1230, ["checked 2026.10.18"], 24, color=C["dark"])
     return b
 
 def orakai():
     b = frame()
     b += title(110, 92, "Orakai Cheonggyesan, bird's-eye")
-    b += notes(70, 150, ["Seoul · hotel sauna · B1 (no room needed)"], 26, color=C["dark"])
+    b += notes(70, 150, ["Seoul · hotel sauna · B1"], 26, color=C["dark"])
     b += zone(60, 220, 280, 260, C["dry"], "Dry sauna", steam=True)
     b += zone(60, 500, 280, 230, C["wet"], "Wet sauna", steam=True)
     b += zone(400, 260, 330, 260, C["pool"], "Pool", tc="#fff", r=30)
@@ -152,8 +149,7 @@ def orakai():
     b += pillar(370, 560)
     b += entrance(60, 780, 170, 70)
     b += arrow(240, 815, 330, 815) + T(470, 825, "B2: EV charging", 28)
-    b += notes(70, 960, ["Adult ₩24,000 · hotel guest ₩18,000", "Child (8–13) ₩14,000 · under 8 not admitted",
-                         "07:00–21:00 (last entry 20:30)", "Men's and women's sides are separate"], 30)
+    b += notes(70, 960, ["Men's and women's sides are separate"], 30)
     b += notes(70, 1230, ["checked 2026.10.18"], 24, color=C["dark"])
     return b
 
@@ -198,7 +194,6 @@ def termeden():
     b += zone(700, 640, 270, 270, C["steam"], "Jjimjil spa", "cypress · salt · clay", 28)
     b += arrow(540, 640, 560, 520) + T(470, 590, "open-air bath", 26)
     b += entrance(440, 970, 200, 66, "IN / tickets")
-    b += notes(70, 1080, ["Day pass ₩49,000 (adult, Nov) · bathhouse only ₩18,000", "Jjimjil wear ₩5,000 · aqua shoes recommended"], 30)
     b += notes(70, 1230, ["checked 2026.10.23"], 24, color=C["dark"])
     return b
 
@@ -220,17 +215,16 @@ def supersapiens():
     b += zone(560, 960, 460, 110, "#ddd", "3F staff only", "", 30)
     b += entrance(60, 1090, 170, 66)
     b += notes(260, 1130, ["parking: front yard + church lot next door"], 26, color=C["dark"])
-    b += notes(70, 1200, ["Drop-in ₩30,000 · book by Instagram DM · first trial free", "Sat 09:00 · 10:30 · open gym Mon 12:00–17:00 · closed Sun"], 28)
     b += notes(780, 1310, ["checked 2026.10.16"], 22, color=C["dark"])
     return b
 
 SCENES = {
- "aerial-termeden": (termeden, "Termeden, bird's-eye", "Hand-drawn bird's-eye plan of Termeden in Icheon: outdoor infinity pool, forest bath, mountain pool and terme tubs; indoor pool and spa, hot-spring bathhouse with cold bath and saunas, and the jjimjil spa; day pass ₩49,000 (adult, November)."),
- "aerial-spa-haesurang": (haesurang, "Spa Haesurang, bird's-eye", "Hand-drawn bird's-eye plan of Spa Haesurang's sauna floor in Busan: dry and wet saunas, warm, hot and cold pools, event bath, rows of showers (about 80) and powder room; sauna ₩15,000 on weekdays."),
- "aerial-heosimcheong": (heosimcheong, "Hurshimchung, bird's-eye", "Hand-drawn bird's-eye plan of the 5th-floor hot-spring baths at Hurshimchung, Busan: longevity, event, celadon, cave, cold, half-body, salt and open-air baths, mini pool, steam and dry saunas, showers and scrub corner; ₩15,000 on weekdays."),
- "aerial-orakai-cheonggyesan": (orakai, "Orakai Cheonggyesan, bird's-eye", "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools, showers; adult ₩24,000."),
+ "aerial-termeden": (termeden, "Termeden, bird's-eye", "Hand-drawn bird's-eye plan of Termeden in Icheon: outdoor infinity pool, forest bath, mountain pool and terme tubs; indoor pool and spa, hot-spring bathhouse with cold bath and saunas, and the jjimjil spa."),
+ "aerial-spa-haesurang": (haesurang, "Spa Haesurang, bird's-eye", "Hand-drawn bird's-eye plan of Spa Haesurang's sauna floor in Busan: dry and wet saunas, warm, hot and cold pools, event bath, rows of showers (about 80), powder room and 7F open-air bath."),
+ "aerial-heosimcheong": (heosimcheong, "Hurshimchung, bird's-eye", "Hand-drawn bird's-eye plan of the 5th-floor hot-spring baths at Hurshimchung, Busan: longevity, event, celadon, cave, cold, half-body, salt and open-air baths, mini pool, steam and dry saunas, showers and scrub corner, with jjimjil on 3F."),
+ "aerial-orakai-cheonggyesan": (orakai, "Orakai Cheonggyesan, bird's-eye", "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools and showers."),
  "aerial-sisu-house": (sisu, "Sisu House, bird's-eye", "Hand-drawn bird's-eye plan of Sisu House in Seoul: a one-person private room with Finnish sauna, warm bath, 14°C cold shower, ice fountain and changing room, plus the touch-care room and check-in."),
- "aerial-crossfit-super-sapiens": (supersapiens, "CrossFit Super Sapiens, bird's-eye", "Hand-drawn bird's-eye plan of CrossFit Super Sapiens in Seoul: 1st-floor training floor with rig and barbells, 2nd-floor accessory area, showers and lockers, 3rd-floor tanning and staff room; drop-in ₩30,000."),
+ "aerial-crossfit-super-sapiens": (supersapiens, "CrossFit Super Sapiens, bird's-eye", "Hand-drawn bird's-eye plan of CrossFit Super Sapiens in Seoul: 1st-floor training floor with rig and barbells, 2nd-floor accessory area, showers and lockers, 3rd-floor tanning and staff room."),
 }
 
 if __name__ == "__main__":

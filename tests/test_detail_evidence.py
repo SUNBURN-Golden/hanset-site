@@ -1,10 +1,13 @@
 """Evidence boundaries: no venue-level status upgrade, invented facilities or badges."""
 from copy import deepcopy
 import datetime as dt
+from html import unescape
 import json
 from pathlib import Path
+import re
 from shutil import copyfile
 import sys
+import xml.etree.ElementTree as ET
 
 import pytest
 
@@ -354,8 +357,8 @@ def test_signiel_guest_price_has_its_own_provenance(venues):
 
 
 @pytest.fixture
-def load_price_case(tmp_path, monkeypatch, venues):
-    def load(slug, terms, today, *, field_evidence=None, **csv_fields):
+def stage_price_case(tmp_path, monkeypatch, venues):
+    def stage(slug, terms, *, field_evidence=None, **csv_fields):
         venue = venues[slug]
         content = tmp_path / 'content'
         content.mkdir()
@@ -369,6 +372,7 @@ def load_price_case(tmp_path, monkeypatch, venues):
         english[slug]['facts'][:len(terms)] = terms
         (content / 'venues_en.json').write_text(json.dumps(english), encoding='utf-8')
         original_read = B.read_csv
+        original_load = B.load
 
         def read_csv(filename):
             rows = original_read(filename)
@@ -377,12 +381,161 @@ def load_price_case(tmp_path, monkeypatch, venues):
                 row.update(csv_fields)
             return rows
 
-        with monkeypatch.context() as patch:
-            patch.setattr(B, 'ROOT', tmp_path)
-            patch.setattr(B, 'read_csv', read_csv)
-            return next(v for v in B.load(today)[0] if v['slug'] == slug)
+        def reload(today):
+            with monkeypatch.context() as patch:
+                patch.setattr(B, 'ROOT', tmp_path)
+                patch.setattr(B, 'read_csv', read_csv)
+                return original_load(today)
+
+        return reload
+
+    return stage
+
+
+@pytest.fixture
+def load_price_case(stage_price_case):
+    def load(slug, terms, today, **fields):
+        reload = stage_price_case(slug, terms, **fields)
+        return next(v for v in reload(today)[0] if v['slug'] == slug)
 
     return load
+
+
+REVIEWED_AERIALS = {
+    ('aerial-termeden', 'termeden-icheon'):
+        "Hand-drawn bird's-eye plan of Termeden in Icheon: outdoor infinity pool, forest bath, mountain pool and terme tubs; "
+        "indoor pool and spa, hot-spring bathhouse with cold bath and saunas, and the jjimjil spa.",
+    ('aerial-spa-haesurang', 'spa-haesurang-busan'):
+        "Hand-drawn bird's-eye plan of Spa Haesurang's sauna floor in Busan: dry and wet saunas, warm, hot and cold pools, "
+        "event bath, rows of showers (about 80), powder room and 7F open-air bath.",
+    ('aerial-heosimcheong', 'heosimcheong-busan'):
+        "Hand-drawn bird's-eye plan of the 5th-floor hot-spring baths at Hurshimchung, Busan: longevity, event, celadon, cave, "
+        "cold, half-body, salt and open-air baths, mini pool, steam and dry saunas, showers and scrub corner, with jjimjil on 3F.",
+    ('aerial-orakai-cheonggyesan', 'orakai-cheonggyesan'):
+        "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools and showers.",
+    ('aerial-sisu-house', 'sisu-house'):
+        "Hand-drawn bird's-eye plan of Sisu House in Seoul: a one-person private room with Finnish sauna, warm bath, 14°C cold shower, "
+        "ice fountain and changing room, plus the touch-care room and check-in.",
+    ('aerial-crossfit-super-sapiens', 'crossfit-super-sapiens'):
+        "Hand-drawn bird's-eye plan of CrossFit Super Sapiens in Seoul: 1st-floor training floor with rig and barbells, "
+        "2nd-floor accessory area, showers and lockers, 3rd-floor tanning and staff room.",
+}
+SVG_NS = {'svg': 'http://www.w3.org/2000/svg'}
+
+
+def test_aerial_assets_survive_withdrawal_of_price_and_trial(tmp_path, monkeypatch, stage_price_case):
+    today = dt.date(2026, 11, 3)
+    slug = 'crossfit-super-sapiens'
+    evidence = {
+        'Drop-in': dict(value='₩30,000', source_kind='official_page',
+                        source_url='https://example.org/drop-in', checked_on='2026-10-24'),
+        'Beginners': dict(value='First trial free (official)', source_kind='official_page',
+                          source_url='https://example.org/beginners', checked_on='2026-10-25'),
+    }
+    reload = stage_price_case(slug, [('Drop-in', '{price}')], field_evidence=evidence, drop_in_price_krw='30000')
+    monkeypatch.setattr(B, 'load', reload)
+
+    official, withdrawn = tmp_path / 'official', tmp_path / 'withdrawn'
+    monkeypatch.setattr(sys, 'argv', ['build_site.py', '--release', '--today', today.isoformat(), '--out', str(official)])
+    B.main()
+
+    content = tmp_path / 'content/venues.json'
+    korean = json.loads(content.read_text(encoding='utf-8'))
+    fixture = next(v for v in korean.values() if isinstance(v, dict) and v.get('slug') == slug)
+    for entry in fixture['price_hours_evidence'].values():
+        entry['source_kind'] = 'venue_reply'
+    content.write_text(json.dumps(korean), encoding='utf-8')
+    monkeypatch.setattr(sys, 'argv', ['build_site.py', '--release', '--today', today.isoformat(), '--out', str(withdrawn)])
+    B.main()
+
+    for dist, published in ((official, True), (withdrawn, False)):
+        page = (dist / f'finder/{slug}/index.html').read_text(encoding='utf-8')
+        finder = (dist / 'finder/index.html').read_text(encoding='utf-8')
+        card = next(part for part in finder.split('</article>') if f'data-slug="{slug}"' in part)
+        assert f'data-price="{int(published)}"' in card
+        prices = page.split('<h3>Price</h3>', 1)[1].split('<h3>', 1)[0]
+        programs = page.split('<h3>Programs</h3>', 1)[1].split('<h2>Source notes</h2>', 1)[0]
+        for label, glance in (('Drop-in', prices), ('Beginners', programs)):
+            entry = evidence[label]
+            cell = detail_cell(page, label)
+            if published:
+                for fragment in (glance, cell):
+                    assert entry['value'] in fragment
+                    assert f'href="{entry["source_url"]}"' in fragment
+                    assert f'Checked {entry["checked_on"].replace("-", ".")}' in fragment
+            else:
+                assert cell == '<td>Not confirmed yet</td>'
+                assert f'<strong>{label}:</strong> Not confirmed yet' in glance or (
+                    label == 'Drop-in' and 'Price: Not confirmed yet' in glance)
+                assert entry['value'] not in page and entry['source_url'] not in page
+
+        archive = (dist / 'archive/index.html').read_text(encoding='utf-8')
+        for (scene, venue), description in REVIEWED_AERIALS.items():
+            assets = dist / 'assets/img/aerial'
+            svg = ET.parse(assets / f'{scene}.svg')
+            assert svg.findtext('svg:desc', namespaces=SVG_NS) == description
+            detail = (dist / f'finder/{venue}/index.html').read_text(encoding='utf-8')
+            card = archive.split(f'id="aerial-{venue}"', 1)[1].split('</article>', 1)[0]
+            drawing = detail.split('<!--aerial-->', 1)[1].split('<!--/aerial-->', 1)[0]
+            assert f'href="/archive/#aerial-{venue}"' in drawing
+            assert f'href="/finder/{venue}/"' in card
+            assert f'href="/assets/img/aerial/{scene}.svg"' in card
+            assert f'srcset="/assets/img/aerial/{scene}-mid.webp"' in card
+            for fragment in (card, drawing):
+                assert f'src="/assets/img/aerial/{scene}-thumb.webp"' in fragment
+                alt = re.findall(r'<img [^>]*\balt="([^"]*)"', fragment)
+                assert [unescape(value) for value in alt] == [description]
+
+    filenames = {scene + suffix for scene, _ in REVIEWED_AERIALS for suffix in ('.svg', '-mid.webp', '-thumb.webp')}
+    repo_assets = B.ROOT / 'static/img/aerial'
+    official_assets = official / 'assets/img/aerial'
+    withdrawn_assets = withdrawn / 'assets/img/aerial'
+    for assets in (repo_assets, official_assets, withdrawn_assets):
+        assert {path.name for path in assets.iterdir()} == filenames
+    for name in sorted(filenames):
+        assert (official_assets / name).read_bytes() == (withdrawn_assets / name).read_bytes() == (repo_assets / name).read_bytes(), name
+
+
+def test_aerial_masters_outline_only_reviewed_facility_labels(monkeypatch):
+    pytest.importorskip('fontTools')
+    illustrations = B.DATA / 'illustrations'
+    monkeypatch.syspath_prepend(str(illustrations))
+    import make_aerial as aerial
+
+    labels = []
+    outline = aerial._text
+
+    def capture(x, y, label, *args, **kwargs):
+        labels.append(label)
+        path = outline(x, y, label, *args, **kwargs)
+        assert path.startswith('<path d="')
+        return path
+
+    monkeypatch.setattr(aerial, '_text', capture)
+    assert aerial.SCENES.keys() == {scene for scene, _ in REVIEWED_AERIALS}
+    preserved = {
+        'aerial-spa-haesurang': '7F open-air bath',
+        'aerial-heosimcheong': 'Jjimjil (3F)',
+        'aerial-sisu-house': '14°C',
+    }
+    for scene, (draw, title, description) in aerial.SCENES.items():
+        labels.clear()
+        aerial.rnd.seed(7)
+        aerial._cid[0] = 0
+        rendered = aerial.svgdoc(draw(), title, description).encode('utf-8')
+        assert labels, scene
+        for label in labels:
+            assert not B.PRICE_AMOUNT.search(label), (scene, label)
+            assert not B.OPERATING_TIME.search(label), (scene, label)
+            assert not B.DURATION.search(label), (scene, label)
+            assert not re.search(r'\b(?:free|complimentary|discounts?|rates?|fees?|day pass|last entry|walk-in)\b', label, re.I), (scene, label)
+        if scene in preserved:
+            assert preserved[scene] in labels
+        svg = ET.fromstring(rendered)
+        assert svg.get('viewBox') == '0 0 1080 1350'
+        assert svg.find('.//svg:text', SVG_NS) is None
+        for directory in (illustrations / 'svg', B.ROOT / 'static/img/aerial'):
+            assert rendered == (directory / f'{scene}.svg').read_bytes(), (scene, directory)
 
 
 def test_separate_closure_notices_use_their_own_evidence(load_price_case, monkeypatch):
