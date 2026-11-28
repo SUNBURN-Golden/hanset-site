@@ -1,5 +1,6 @@
 """python3 -m crawler --help"""
 import argparse
+from contextlib import closing
 import json
 from .config import Rejected, load, state_path, external_path
 from .store import Store
@@ -38,16 +39,24 @@ def main():
         if args.command == 'report' and args.queue:
             from .legacy import report as legacy_report
             result = legacy_report(args.queue)
-        elif args.command == 'report':
-            from .report import report as db_report
+        elif args.command in ('report', 'show'):
+            from .report import report as db_report, show as db_show
+            from .schema import STAGES
+
             path = external_path(args.state) if args.state else state_path() / 'collector.sqlite3'
-            if not __import__('pathlib').Path(path).exists():
+            if args.command == 'show':
+                try:
+                    path.stat()
+                except FileNotFoundError:
+                    raise Rejected('unknown_record') from None
+                with closing(Store(path, readonly=True)) as store:
+                    result = db_show(store, cfg, args.record_id)
+            elif not path.exists():
                 result = {'auto_publish_to_site': False, 'state': 'not_initialized',
-                          'stage_counts': {s: 0 for s in __import__('crawler.schema', fromlist=['STAGES']).STAGES}}
+                          'stage_counts': {s: 0 for s in STAGES}}
             else:
-                store = Store(path, readonly=True)
-                try: result = db_report(store, cfg)
-                finally: store.close()
+                with closing(Store(path, readonly=True)) as store:
+                    result = db_report(store, cfg)
         else:
             from .local_worker import Worker
             store = Store(args.state)
@@ -61,10 +70,6 @@ def main():
                     result = {'record_id': w.candidate(args.url, channel=args.channel)}
                 elif args.command == 'worker':
                     result = {'processed': w.once(), 'auto_publish_to_site': False}
-                elif args.command == 'show':
-                    row = store.db.execute('SELECT data FROM records WHERE id=?', (args.record_id,)).fetchone()
-                    if not row: raise Rejected('unknown_record')
-                    result = json.loads(row[0])
                 elif args.command == 'resolve-conflict':
                     w.resolve_conflict(args.conflict_id, args.evidence_id, args.reason_code)
                     result = {'resolved': args.conflict_id}
