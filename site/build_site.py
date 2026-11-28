@@ -884,6 +884,7 @@ def price_or_schedule(key, value):
     price_field = is_price_context(key) or key in ("full_price", "scrub_fee", "dropin", "price_caveat")
     return bool(is_hours_key(key, value) or key in ("closures", "last_entry")
                 or "{price}" in value or PRICE_AMOUNT.search(value) or OPERATING_TIME.search(value)
+                or (key == "Beginners" and re.search(r"\bfirst trial free\b", value, re.I))
                 or (price_field and re.search(r"\b(?:\d{4,}|\d{1,3},\d{3}|free|complimentary)\b", value, re.I))
                 or (DURATION.search(value) and re.search(
                     r"session|booking|time allowed|length|last entry|access|hours|price|class|arrive|check-in|cutoff",
@@ -2216,12 +2217,12 @@ ARCHIVE = [
 ARCHIVE_BY_VENUE = {a[1]: a for a in ARCHIVE}
 # 조감도 손그림 (위에서 내려다본 평면). illustrations/make_aerial.py
 AERIAL = [
-    ('aerial-termeden', 'termeden-icheon', "Hand-drawn bird's-eye plan of Termeden in Icheon: outdoor infinity pool, forest bath, mountain pool and terme tubs; indoor pool and spa, hot-spring bathhouse with cold bath and saunas, and the jjimjil spa; day pass ₩49,000 (adult, November)."),
-    ('aerial-spa-haesurang', 'spa-haesurang-busan', "Hand-drawn bird's-eye plan of Spa Haesurang's sauna floor in Busan: dry and wet saunas, warm, hot and cold pools, event bath, rows of showers (about 80) and powder room; sauna ₩15,000 on weekdays."),
-    ('aerial-heosimcheong', 'heosimcheong-busan', "Hand-drawn bird's-eye plan of the 5th-floor hot-spring baths at Hurshimchung, Busan: longevity, event, celadon, cave, cold, half-body, salt and open-air baths, mini pool, steam and dry saunas, showers and scrub corner; ₩15,000 on weekdays."),
-    ('aerial-orakai-cheonggyesan', 'orakai-cheonggyesan', "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools, showers; adult ₩24,000."),
+    ('aerial-termeden', 'termeden-icheon', "Hand-drawn bird's-eye plan of Termeden in Icheon: outdoor infinity pool, forest bath, mountain pool and terme tubs; indoor pool and spa, hot-spring bathhouse with cold bath and saunas, and the jjimjil spa."),
+    ('aerial-spa-haesurang', 'spa-haesurang-busan', "Hand-drawn bird's-eye plan of Spa Haesurang's sauna floor in Busan: dry and wet saunas, warm, hot and cold pools, event bath, rows of showers (about 80), powder room and 7F open-air bath."),
+    ('aerial-heosimcheong', 'heosimcheong-busan', "Hand-drawn bird's-eye plan of the 5th-floor hot-spring baths at Hurshimchung, Busan: longevity, event, celadon, cave, cold, half-body, salt and open-air baths, mini pool, steam and dry saunas, showers and scrub corner, with jjimjil on 3F."),
+    ('aerial-orakai-cheonggyesan', 'orakai-cheonggyesan', "Hand-drawn bird's-eye plan of the basement sauna at Orakai Cheonggyesan Hotel, Seoul: dry and wet saunas, several pools and showers."),
     ('aerial-sisu-house', 'sisu-house', "Hand-drawn bird's-eye plan of Sisu House in Seoul: a one-person private room with Finnish sauna, warm bath, 14°C cold shower, ice fountain and changing room, plus the touch-care room and check-in."),
-    ('aerial-crossfit-super-sapiens', 'crossfit-super-sapiens', "Hand-drawn bird's-eye plan of CrossFit Super Sapiens in Seoul: 1st-floor training floor with rig and barbells, 2nd-floor accessory area, showers and lockers, 3rd-floor tanning and staff room; drop-in ₩30,000."),
+    ('aerial-crossfit-super-sapiens', 'crossfit-super-sapiens', "Hand-drawn bird's-eye plan of CrossFit Super Sapiens in Seoul: 1st-floor training floor with rig and barbells, 2nd-floor accessory area, showers and lockers, 3rd-floor tanning and staff room."),
 ]
 AERIAL_BY_VENUE = {a[1]: a for a in AERIAL}
 
