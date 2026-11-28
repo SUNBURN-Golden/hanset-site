@@ -71,8 +71,8 @@ def ingest(worker, kind, raw, base, depth=0, cursor=None):
     if cursor_key and cursor_key in checkpoint['cursors']:
         raise Rejected('repeated_cursor')
     urls = discover(kind, raw, base)
-    # Optional operator filter on the seed's own approved policy: keeps broad feeds on-topic.
-    patterns = [re.compile(x) for x in policy_for(worker.cfg, base, required=False).get('url_include', [])]
+    policy = policy_for(worker.cfg, base, now=worker.clock(), required=True)
+    patterns = [re.compile(pattern) for pattern in policy.get('url_include', [])]
     if patterns:
         urls = [u for u in urls if any(r.search(u) for r in patterns)]
     complete = True
